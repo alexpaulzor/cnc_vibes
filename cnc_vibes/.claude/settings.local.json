@@ -9,7 +9,12 @@
       "WebFetch(domain:wiki.freecadweb.org)",
       "WebFetch(domain:blog.freecad.org)",
       "WebFetch(domain:forum.freecad.org)",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:drive.google.com)",
+      "WebFetch(domain:www.google.com)",
+      "WebFetch(domain:duckduckgo.com)",
+      "Bash(pip install *)",
+      "Bash(python3 -m pytest -q tests/)"
     ]
   }
 }

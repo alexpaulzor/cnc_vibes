@@ -1,0 +1,40 @@
+# Material profiles.
+#
+# chipload values are mm/tooth, keyed by tool id from tools.yaml.
+# doc_fraction is the recommended depth-of-cut per pass as a fraction of
+# tool diameter (e.g. 0.5 with a 6mm tool means 3mm per pass).
+#
+# Feed rate is derived as: feed = chipload * flutes * rpm
+# DOC is derived as:       doc  = doc_fraction * tool.diameter_mm
+#
+# These are starting points, not gospel. Measure chips, listen, adjust.
+
+- id: plywood_baltic_birch_6mm
+  family: wood
+  thickness_mm: 6.0
+  chipload:
+    flat_3.175mm_2flute: 0.04
+    flat_6mm_2flute: 0.08
+  doc_fraction: 0.5
+  doc_fraction_finish: 0.25
+
+- id: mdf_12mm
+  family: wood
+  thickness_mm: 12.0
+  chipload:
+    flat_3.175mm_2flute: 0.05
+    flat_6mm_2flute: 0.10
+  doc_fraction: 1.0
+
+- id: aluminum_6061_3mm
+  family: aluminum
+  thickness_mm: 3.0
+  chipload:
+    flat_3.175mm_2flute: 0.015
+    flat_6mm_2flute: 0.025
+  doc_fraction: 0.15
+  doc_fraction_finish: 0.05
+  notes: |
+    Conservative starting numbers. On a 500W spindle, aluminum is doable
+    but unforgiving — use sharp tools, climb mill, and consider trochoidal
+    clearing once you've graduated past the basics.

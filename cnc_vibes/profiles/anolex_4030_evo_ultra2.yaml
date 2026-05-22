@@ -1,0 +1,49 @@
+# Machine profile: Anolex 4030-Evo Ultra 2
+#
+# Replace this whole file with your own machine's profile to retarget the
+# repo. The validator in scripts/gcode_validate.py reads this; the rest of
+# the system (Makefile, FreeCAD post) is unaware of the machine specifics.
+#
+# Values marked TODO are best confirmed from your machine's manual or by
+# running `$$` in your sender and inspecting the output.
+
+name: Anolex 4030-Evo Ultra 2
+
+controller:
+  dialect: grbl-1.1+
+  # GRBL setting index that toggles laser mode ($32). 1 = laser, 0 = spindle.
+  # The validator uses this to enforce per-job head-mode correctness once
+  # the laser branch lands.
+  laser_mode_setting: 32
+
+envelope_mm:
+  x: 400
+  y: 300
+  z: 100  # TODO: confirm Z travel from manual
+
+max_feed_mm_per_min:
+  xy: 3000  # TODO: confirm — placeholder
+  z: 1000   # TODO: confirm — placeholder
+
+spindle:
+  rpm_min: 8000   # TODO: confirm
+  rpm_max: 24000  # TODO: confirm
+  control: pwm    # M3/M5 + S0-1000 via GRBL spindle PWM pin
+
+probe:
+  has_touch_plate: true
+  thickness_mm: 0.0  # TODO: measure your touch plate
+
+heads:
+  primary: spindle
+  secondary: laser    # deferred
+  # Hardware switch on rear of machine routes GRBL spindle-PWM pin to
+  # either the spindle controller or the laser TTL input. Flip the switch
+  # *and* update $32 (see controller.laser_mode_setting) before sending
+  # a job for the corresponding head.
+  switch: rear_hardware
+
+# Per-job safe Z, in mm above stock top. Used by the validator to flag
+# rapid (G0) moves that traverse below this height — those are almost
+# always a bug (the tool would crash through stock or clamps).
+default_safe_z_mm: 5.0

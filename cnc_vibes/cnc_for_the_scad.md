@@ -2,7 +2,7 @@
 
 A guide for software engineers who already know OpenSCAD + FDM 3D printing and want to make their CNC router cut holes in things — not print plastic in the shape of "thing-with-holes."
 
-> Status: **v1 — concepts and pipeline only.** Machine-specific commands, stack recommendation, and automation scaffolding land in later versions as we work through each decision together.
+> **Status: v2.** Spindle-only this iteration. Laser and FDM are deferred but the architecture accommodates them as additional pipeline branches (see §3 and §4). CAM tool is **FreeCAD Path**; geometry export + GCode validation are CLI; CAM setup itself is GUI.
 
 ---
 
@@ -41,11 +41,11 @@ These terms are universal across FreeCAD Path, Fusion, Mastercam, Kiri:Moto, pyc
 ### 2.3 The motion
 
 - **Feed rate (F).** Linear speed of the tool through the material, mm/min. Too slow burns/melts; too fast snaps the tool or stalls the spindle.
-- **Spindle speed (S).** RPM. With your 500W spindle, expect 8000–24000 RPM range — check the actual spec when we do machine research.
+- **Spindle speed (S).** RPM. Defined per-machine in your profile (§4).
 - **Chipload.** The bite-per-tooth, mm. The fundamental cutting parameter. Relationship: `feed = chipload × flutes × rpm`. Material+tool tables give you chipload; you derive feed.
 - **Depth of cut (DOC) / stepdown.** How deep each pass goes (Z). Usually expressed as fraction of tool diameter: ≤1×D for soft wood with a flat endmill, much less for hardwood/aluminum.
 - **Width of cut (WOC) / stepover.** How much of the tool's diameter is engaged sideways. ~40–50% for general roughing, smaller for finishing.
-- **Climb vs conventional milling.** Direction of tool rotation relative to feed direction. On a rigid machine with no backlash, climb cutting gives better surface finish; on a wobbly machine it can grab and pull. Your machine has ball screws (very low backlash), so climb is generally fine.
+- **Climb vs conventional milling.** Direction of tool rotation relative to feed direction. On a rigid machine with no backlash, climb cutting gives better surface finish; on a wobbly machine it can grab and pull. Ball-screw machines (yours) tolerate climb well.
 
 ### 2.4 Operations
 
@@ -66,113 +66,178 @@ Almost any 2.5D job is one or more of:
 - **Tool change.** Multiple operations may need different tools. GRBL does not implement automatic tool change (M6) — the convention is to pause (M0), let the user swap tools manually, re-probe Z, and resume.
 - **Post-processor.** CAM produces a generic internal toolpath; the post-processor formats it into the GCode dialect your controller speaks. GRBL has specific limits (e.g. arc precision, no canned cycles, "laser mode" interactions). Picking the right post is essential.
 
-### 2.6 Laser-specific
-
-Most of the above doesn't apply to the laser head. Lasers have:
-
-- **Power (S in laser mode).** Replaces both spindle speed and depth of cut.
-- **Feed rate.** How fast you traverse — slower = more heat = deeper cut / darker burn.
-- **Passes.** Number of times to repeat — depth comes from repetition, not from Z motion.
-- **M3 vs M4 in GRBL laser mode.** `$32=1` enables laser mode. `M4` makes laser power scale with feed rate, so corners (where the tool slows to change direction) don't over-burn. Use `M4` for engraving, `M3` for steady cuts.
-- **Focus.** The lens is at a fixed focal length from the material. Z-zeroing means setting that focal distance, not touching the surface like a spindle.
-- **Air assist.** Compressed air at the nozzle blows smoke/debris out of the cut. Optional but transformative for cut cleanliness on wood. Worth budgeting for.
-
 ---
 
-## 3. The pipeline, as a diagram
-
-This shows what happens from `.scad` source to a finished part, with the fork between additive (what you know) and the two subtractive modes you're learning. Stages are roughly the "files" or "tools" in a software pipeline; arrows are transformations.
+## 3. The pipeline
 
 ```mermaid
 flowchart TD
     SCAD[".scad source<br/>(parametric design)"]
-    SCAD -->|openscad CLI| GEOM{What output?}
+    SCAD -->|openscad CLI<br/>mode='dxf' or 'stl'| GEOM{geometry output}
+    GEOM -->|2D projection| DXF["DXF<br/>(flat profiles<br/>for 2.5D)"]
+    GEOM -->|3D mesh| STL["STL<br/>(for 3D contour)"]
 
-    GEOM -->|3D mesh| STL["STL / 3MF<br/>(triangle soup)"]
-    GEOM -->|2D projection| DXF["DXF / SVG<br/>(flat profiles)"]
-    GEOM -->|"alt: rewrite in<br/>CadQuery / Build123d"| STEP["STEP / BREP<br/>(true solids)"]
+    DXF --> CAM["FreeCAD Path<br/>(GUI, saved as .FCStd)<br/>• import DXF/STL<br/>• stock, tool, WCS<br/>• operations + feeds/speeds<br/>• tabs, safe-Z"]
+    STL --> CAM
 
-    STL --> FORK{Target?}
-    DXF --> FORK
-    STEP --> FORK
+    PROFILE["profiles/*.yaml<br/>machine + tools + materials"]
+    PROFILE -.parameters.-> CAM
 
-    FORK -->|"FDM<br/>(additive)"| SLICER["Slicer<br/>(Cura / PrusaSlicer)<br/>• tool = nozzle<br/>• mostly automatic"]
-    SLICER --> FDMGCODE["GCode<br/>(Marlin/Klipper dialect)"]
-    FDMGCODE --> PRINTER["3D printer<br/>(self-fixturing<br/>bed = origin)"]
-    PRINTER --> PART_ADD([printed part])
+    CAM -->|GRBL post-processor<br/>(FreeCAD CLI: FreeCADCmd)| GCODE["GCode<br/>(GRBL dialect)"]
+    GCODE --> VALIDATE["scripts/gcode_validate.py<br/>• bounds vs envelope<br/>• max feed / plunge<br/>• safe-Z compliance<br/>• spindle-on-before-cut"]
+    PROFILE -.parameters.-> VALIDATE
+    VALIDATE --> SETUP["Machine setup<br/>• mount stock + clamps<br/>• install tool<br/>• probe Z<br/>• set WCS"]
+    SETUP --> SENDER["Sender<br/>(gSender, your choice)"]
+    SENDER --> SPINDLE["CNC router<br/>(spindle head)"]
+    SPINDLE --> PART([finished part])
 
-    FORK -->|"Spindle<br/>(subtractive)"| CAM["CAM<br/>(FreeCAD Path / Kiri:Moto / …)<br/>• stock + WCS<br/>• tool + feeds/speeds<br/>• operations:<br/>&nbsp;&nbsp;profile / pocket / drill<br/>&nbsp;&nbsp;roughing → finishing<br/>• tabs, safe-Z"]
-    CAM -->|GRBL post-processor| CNCGCODE["GCode<br/>(GRBL dialect)"]
-    CNCGCODE --> VALIDATE["Validate / simulate<br/>(CAMotics / linters)<br/>• bounds vs machine limits<br/>• max feed/plunge<br/>• runtime estimate"]
-    VALIDATE --> SETUP_CNC["Machine setup<br/>• mount stock + clamps<br/>• install tool<br/>• probe Z (and XY)<br/>• set WCS"]
-    SETUP_CNC --> SENDER["Sender<br/>(gSender / Candle / UGS)"]
-    SENDER --> CNC["CNC router<br/>(spindle on, dust ext.)"]
-    CNC --> PART_CUT([machined part])
+    SWITCH{{"hardware switch<br/>(rear of machine)"}}
+    SWITCH -.routes PWM to.-> SPINDLE
 
-    FORK -->|"Laser<br/>(thermal-subtractive)"| LCAM["Laser CAM<br/>(LaserWeb / LightBurn-alt)<br/>• power + feed + passes<br/>• raster vs vector<br/>• M4 dynamic power"]
-    LCAM -->|GRBL laser-mode post| LGCODE["GCode<br/>($32=1, M3/M4 + S)"]
-    LGCODE --> LVALIDATE["Validate / preview<br/>• laser-mode flags<br/>• bounds"]
-    LVALIDATE --> SETUP_LASER["Machine setup<br/>• mount material<br/>• set laser-head Z offset<br/>• focus lens<br/>• air assist"]
-    SETUP_LASER --> SENDER
-    SENDER -.same controller.-> LASER["LaserTree 10W head<br/>(shares carriage)"]
-    LASER --> PART_BURN([engraved / cut part])
+    LASER["LaserTree 10W head<br/>(shares carriage,<br/>switch toggles output)"]
+    SWITCH -.deferred branch.-> LASER
 
-    classDef new fill:#fff3cd,stroke:#856404,color:#000
-    classDef known fill:#d4edda,stroke:#155724,color:#000
-    class SLICER,FDMGCODE,PRINTER,PART_ADD known
-    class CAM,CNCGCODE,VALIDATE,SETUP_CNC,SENDER,CNC,PART_CUT,LCAM,LGCODE,LVALIDATE,SETUP_LASER,LASER,PART_BURN,STEP new
+    FDM["FDM (printer)<br/>(deferred branch)"]
+
+    CAM -.future: laser CAM.-> LASER
+    SCAD -.future: STL→slicer.-> FDM
+
+    classDef live fill:#d4edda,stroke:#155724,color:#000
+    classDef deferred fill:#e2e3e5,stroke:#6c757d,color:#000,stroke-dasharray: 4 4
+    classDef config fill:#fff3cd,stroke:#856404,color:#000
+    class SCAD,GEOM,DXF,STL,CAM,GCODE,VALIDATE,SETUP,SENDER,SPINDLE,PART live
+    class LASER,FDM,SWITCH deferred
+    class PROFILE config
 ```
 
-(Green = familiar from FDM. Yellow = new territory.)
+Green = live in this iteration. Yellow = configuration parameters that feed multiple stages. Grey/dashed = designed-for but not yet implemented.
 
-The two key shape-changes from the FDM pipeline you know:
+Three things worth calling out:
 
-1. **The geometry export branches** because CAM tools want different inputs depending on what you're doing. For 2.5D ("cut a hole in a sheet"), 2D profiles via OpenSCAD's `projection()` → DXF is often cleaner than feeding a mesh through CAM. For 3D contouring, mesh (STL) is acceptable but B-rep (STEP) is preferable.
+1. **The geometry export branches** because CAM tools want different inputs for different jobs. For 2.5D ("cut a hole in a sheet"), `projection()` → DXF is cleaner than feeding a mesh through CAM. For 3D contouring, STL is acceptable.
 2. **There's a setup stage between GCode and machine** that has no analogue in FDM. The same GCode file produces totally different physical results depending on where you set the WCS, what tool is in the spindle, and what stock is on the bed. The GCode is necessary but not sufficient — the setup is data too.
-
-The **shared sender** node is worth noting: both spindle jobs and laser jobs go through the same controller and the same sender software. The spindle/laser difference lives in the GCode (M3/M4 + S commands behave differently when `$32=1` is set) and in the physical setup (which head is energized, what's on the bed, where Z=0 is).
-
----
-
-## 4. The "cut a hole in a sheet of something" common case
-
-To make this concrete, here's what the pipeline collapses to for your most common job:
-
-1. Write `.scad` with the 2D shape (or 3D shape whose top-down silhouette is the cut).
-2. Export DXF via `openscad -o part.dxf --export-format dxf part.scad` (using `projection(cut=true)` for a slice, or `projection()` for the silhouette).
-3. Load DXF into CAM. Define stock (sheet thickness, material). Pick endmill. Configure **one** operation: profile cut with tabs, total depth = sheet thickness + 0.2mm (overcut into the spoilboard for clean break-through).
-4. Post-process to GRBL GCode.
-5. Validate: bounds inside machine limits, max feed reasonable, plunge depth doesn't try to drive the tool into the spoilboard at G0.
-6. On machine: clamp sheet to spoilboard, install endmill, probe Z on top of stock, set X/Y to a corner of the stock.
-7. Send via gSender. Run dust collection. Cut.
-
-Almost every parameter in step 3 is a function of (material, tool, machine) — meaning it's templatable. That's where automation gives the most value, and where we'll focus first.
+3. **The hardware switch on the back of your machine** routes the GRBL spindle PWM signal to either the spindle controller or the laser TTL input. This is why laser support is a *branch* of the pipeline rather than a separate parallel pipeline: same controller, same sender, same GCode dialect, with a different post-processor and a physical switch flip. The future laser branch will hook in at the CAM stage and require a flag on the per-job config so the validator knows which head it's targeting.
 
 ---
 
-## 5. What we're deciding next
+## 4. The machine (and tools, and materials) as configuration
 
-Open questions, in order of impact on the rest of this document:
+A foundational principle of this repo: **nothing about your specific machine should be hardcoded.** The guide and the automation target *a GRBL 1.1+ class router described by a profile*. Replacing the machine means swapping a YAML file, not editing scripts.
 
-- **5.1** What controller / firmware does the Anolex 4030-Evo Ultra 2 actually ship with, and what sender does its community use? This determines the GCode dialect we target and the post-processor we pick.
-- **5.2** What CAM stack do we standardize on? Candidates to compare: FreeCAD Path (workbench, scriptable from Python), Kiri:Moto (browser, self-hostable, has a headless mode), pycam (Python, was unmaintained for years — need to verify status), CAMotics (primarily a simulator, generator-light). Comparison criteria: open-source license, CLI/headless story, GRBL post quality, 2.5D and 3D coverage, laser support, active maintenance in 2026.
-- **5.3** SCAD-to-CAM bridge: confirm OpenSCAD's current STEP/BREP export status; evaluate whether `projection() → DXF` covers the common case well enough that CadQuery is only needed for 3D parts; spot-check CadQuery and Build123d for code-first sanity.
-- **5.4** Automation depth: based on the chosen stack, recommend the lightest layer of scripts + tests that catches real classes of bugs (machine-limit overshoots, missing tabs, wrong WCS, laser-mode flag missing from spindle jobs, etc).
+The profile lives at `profiles/anolex_4030_evo_ultra2.yaml` and follows this shape (placeholder values flagged with `# TODO` — fill in from your machine's documentation, gSender's status screen, or by running `$$` in your sender):
 
-Each of these gets researched in turn and folded into this document. Sections 5.1–5.4 become real sections; this list goes away.
+```yaml
+name: Anolex 4030-Evo Ultra 2
+controller:
+  dialect: grbl-1.1+
+  laser_mode_setting: 32     # $32 — set to 1 for laser, 0 for spindle
+envelope_mm:
+  x: 400
+  y: 300
+  z: 100                     # TODO: confirm from manual
+max_feed_mm_per_min:
+  xy: 3000                   # TODO: confirm
+  z:  1000                   # TODO: confirm
+spindle:
+  rpm_min: 8000              # TODO: confirm
+  rpm_max: 24000             # TODO: confirm
+  control: pwm               # M3/M5 + S0-1000 via GRBL
+probe:
+  has_touch_plate: true
+  thickness_mm: 0.0          # TODO: measure your plate
+heads:
+  primary: spindle
+  secondary: laser           # deferred from this iteration
+  switch: rear_hardware      # physical toggle on machine rear
+```
+
+**Tools** (`profiles/tools.yaml`) and **materials** (`profiles/materials.yaml`) follow the same principle. Tools define geometry + max RPM + max plunge rate. Materials define recommended chipload per tool diameter and recommended DOC fractions. The validator (§5) cross-references all three.
+
+This is what "parameterize the machine" buys you: when you upgrade the spindle, or move to a different router, or someone forks this repo for *their* GRBL machine, the only file that changes is the profile.
 
 ---
 
-## 6. Repo layout (planned)
+## 5. CAM tool: FreeCAD Path
+
+Of the open-source CAM options, **FreeCAD Path workbench** is the right pick for this workflow because:
+
+- It's open source (LGPL), self-hosted, no online dependency.
+- It handles 2.5D (profiles, pockets, drilling, engraving), 3D contouring with roughing+finishing, and tool tables.
+- It ships with a GRBL post-processor; you don't need to write your own GCode formatter.
+- It has a Python API: while you set up jobs in the GUI, you can post-process them from the command line via `FreeCADCmd`, which means GCode generation is a Make target — re-runnable, deterministic, CI-friendly.
+- It saves the entire job (stock, tools, operations, parameters) in a single `.FCStd` file that you check into the repo alongside the `.scad` source. The setup is version-controlled.
+
+The split is:
+
+| Step | Tool | Reason |
+|---|---|---|
+| Geometry export | OpenSCAD CLI | Deterministic, scriptable, no GUI needed |
+| CAM setup (once per part) | FreeCAD Path GUI | Inherently visual — defining stock, picking edges, configuring ops |
+| GCode generation (every time inputs change) | FreeCAD CLI (`FreeCADCmd`) | Deterministic re-post from the saved `.FCStd` |
+| Validation | Python script | Mechanical checks against the machine profile |
+| Sending to machine | gSender (or your sender of choice) | GUI is fine here — you're watching the machine anyway |
+
+The CAM setup is the *only* step that requires clicking. Everything else is `make`.
+
+---
+
+## 6. The "cut a hole in a sheet" worked example
+
+This is in `examples/hole_in_sheet/`. The flow:
+
+1. **Design.** Edit `hole_in_sheet.scad`. It's parametric on sheet size, sheet thickness, and hole grid.
+2. **Export geometry.** `make examples/hole_in_sheet/build/hole_in_sheet.dxf` runs OpenSCAD with `-D 'mode="dxf"'`, which triggers a `projection()` in the SCAD source.
+3. **First time only — CAM setup in FreeCAD.** Open FreeCAD, import the DXF, create a Path Job, define stock from the sheet dimensions, pick a tool (from your tool table), add a Profile operation with tabs, configure feeds/speeds/DOC referencing your material spec. Save as `hole_in_sheet.FCStd` in the example directory. *This is the one step the guide can't automate — it's data entry that benefits from visual feedback.*
+4. **Iterate.** When you change `hole_in_sheet.scad` (different hole size, more holes, etc), re-run the make target. The DXF regenerates; FreeCAD picks up the new geometry on next open; you re-post to GCode.
+5. **Validate.** `make validate` runs `scripts/gcode_validate.py` against the GCode using your machine profile and tool table. Catches bounds violations, feed overruns, missing safe-Z compliance.
+6. **Cut.** Clamp the sheet, install the endmill, probe Z (the touch plate compensates for tool length), set X/Y origin to the corner of the stock that matches your CAM WCS, run dust collection, send via gSender.
+
+Almost every parameter you set in step 3 is a function of (material, tool, machine) — meaning it's templatable. Future iterations can lean on FreeCAD's Python API to generate jobs from templates so even step 3 collapses for repeat patterns.
+
+---
+
+## 7. Repo layout
 
 ```
 cnc_vibes/
-├── cnc_for_the_scad.md   ← this file
-├── examples/             ← .scad sources for templates (hole-in-sheet, pocket, sign)
-├── profiles/             ← machine + material + tool parameter sets (yaml)
-├── scripts/              ← scad→dxf/stl, dxf→gcode, validators
-├── tests/                ← interface tests (bounds, feeds, dialect checks)
-└── Makefile              ← reproducible per-job builds
+├── cnc_for_the_scad.md             ← this guide
+├── Makefile                         ← per-job build targets
+├── requirements.txt                 ← pyyaml, pytest
+├── profiles/
+│   ├── anolex_4030_evo_ultra2.yaml ← machine
+│   ├── tools.yaml                   ← endmills + bits
+│   └── materials.yaml               ← chipload tables, DOC fractions
+├── examples/
+│   └── hole_in_sheet/
+│       ├── hole_in_sheet.scad       ← parametric source
+│       ├── hole_in_sheet.FCStd      ← (you create in FreeCAD — not committed yet)
+│       └── build/                   ← generated artifacts (gitignored when applicable)
+├── scripts/
+│   └── gcode_validate.py            ← machine-profile-aware GCode checks
+└── tests/
+    ├── test_profiles.py             ← profile YAML schema sanity
+    └── test_gcode_validate.py       ← validator unit tests
 ```
 
-Nothing is built yet. The shape will firm up once §5.2 and §5.4 are decided.
+Setup once: `pip install -r requirements.txt` and ensure `openscad` is on your PATH (FreeCAD only when you reach step 3).
+
+Run tests: `make test` (or `pytest -q tests/`).
+
+---
+
+## 8. Status & what's next
+
+**Done in this iteration:**
+- Concepts and vocabulary you need to read any CAM tool's UI.
+- Spindle pipeline, end-to-end.
+- Machine-as-profile principle, with an Anolex profile sketched (TODOs marked for you to fill in).
+- GCode validator with real interface-boundary tests.
+- Worked example: `examples/hole_in_sheet/`.
+
+**Deferred (designed-for, not built):**
+- Laser branch. Pipeline shape in §3 anticipates it; will add a laser post-processor target and a `head: laser` flag in per-job config so the validator can swap rules (require `$32=1`, require M4 dynamic-power mode, no plunge-rate check, etc).
+- FDM branch. Trivially additive to the diagram (STL → slicer → GCode), kept out of code scope to avoid distraction.
+- Templated CAM setup (replacing step 3 of §6 with a script that generates a `.FCStd` from a YAML job spec) — possible via FreeCAD's Python API, but not worth building until you've done a few jobs by hand and know which knobs you actually reuse.
+- Real-world tuning: filling in the `# TODO` values in the machine profile from your actual machine; building out the tools and materials catalogs as you accumulate experience.
+
+**The next thing to do** is run the example: install requirements, regenerate the DXF, do a CAM setup pass in FreeCAD, post to GCode, run the validator. The first job will surface what's missing or wrong in the profile and validator — that feedback drives v3.

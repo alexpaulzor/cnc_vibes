@@ -1,0 +1,39 @@
+# Tool table.
+#
+# Each tool has a stable id (referenced from materials.yaml chipload entries
+# and from FreeCAD Path tool controllers) and physical/operational limits.
+# The validator enforces max_rpm and max_plunge_mm_per_min if a job declares
+# which tool it uses.
+
+- id: flat_3.175mm_2flute
+  type: flat_endmill
+  diameter_mm: 3.175  # 1/8"
+  flutes: 2
+  flute_length_mm: 17
+  shank_mm: 3.175
+  max_rpm: 24000
+  max_plunge_mm_per_min: 300
+
+- id: flat_6mm_2flute
+  type: flat_endmill
+  diameter_mm: 6.0
+  flutes: 2
+  flute_length_mm: 22
+  shank_mm: 6.0
+  max_rpm: 24000
+  max_plunge_mm_per_min: 500
+
+- id: ball_3mm_2flute
+  type: ball_endmill
+  diameter_mm: 3.0
+  flutes: 2
+  max_rpm: 24000
+  max_plunge_mm_per_min: 300
+
+- id: vbit_60deg_6mm
+  type: v_bit
+  diameter_mm: 6.0
+  angle_deg: 60
+  flutes: 2
+  max_rpm: 24000
+  max_plunge_mm_per_min: 200
