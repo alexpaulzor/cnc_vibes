@@ -72,38 +72,38 @@ Almost any 2.5D job is one or more of:
 
 ```mermaid
 flowchart TD
-    SCAD[".scad source<br/>(parametric design)"]
-    SCAD -->|openscad CLI<br/>mode='dxf' or 'stl'| GEOM{geometry output}
-    GEOM -->|2D projection| DXF["DXF<br/>(flat profiles<br/>for 2.5D)"]
-    GEOM -->|3D mesh| STL["STL<br/>(for 3D contour)"]
+    SCAD[".scad source<br/>parametric design"]
+    SCAD -->|"openscad CLI"| GEOM{"geometry output"}
+    GEOM -->|"2D projection"| DXF["DXF<br/>flat profiles for 2.5D"]
+    GEOM -->|"3D mesh"| STL["STL<br/>for 3D contour"]
 
-    DXF --> CAM["FreeCAD Path<br/>(GUI, saved as .FCStd)<br/>• import DXF/STL<br/>• stock, tool, WCS<br/>• operations + feeds/speeds<br/>• tabs, safe-Z"]
+    DXF --> CAM["FreeCAD Path<br/>GUI, saved as .FCStd<br/>stock + tool + WCS<br/>ops + feeds and speeds<br/>tabs + safe-Z"]
     STL --> CAM
 
     PROFILE["profiles/*.yaml<br/>machine + tools + materials"]
-    PROFILE -.parameters.-> CAM
+    PROFILE -. parameters .-> CAM
 
-    CAM -->|GRBL post-processor<br/>(FreeCAD CLI: FreeCADCmd)| GCODE["GCode<br/>(GRBL dialect)"]
-    GCODE --> VALIDATE["scripts/gcode_validate.py<br/>• bounds vs envelope<br/>• max feed / plunge<br/>• safe-Z compliance<br/>• spindle-on-before-cut"]
-    PROFILE -.parameters.-> VALIDATE
-    VALIDATE --> SETUP["Machine setup<br/>• mount stock + clamps<br/>• install tool<br/>• probe Z<br/>• set WCS"]
-    SETUP --> SENDER["Sender<br/>(gSender, your choice)"]
-    SENDER --> SPINDLE["CNC router<br/>(spindle head)"]
-    SPINDLE --> PART([finished part])
+    CAM -->|"GRBL post via FreeCADCmd"| GCODE["GCode<br/>GRBL dialect"]
+    GCODE --> VALIDATE["scripts/gcode_validate.py<br/>bounds vs envelope<br/>max feed and plunge<br/>safe-Z compliance<br/>spindle-on before cut"]
+    PROFILE -. parameters .-> VALIDATE
+    VALIDATE --> SETUP["Machine setup<br/>mount stock + clamps<br/>install tool<br/>probe Z<br/>set WCS"]
+    SETUP --> SENDER["Sender<br/>gSender or your choice"]
+    SENDER --> SPINDLE["CNC router<br/>spindle head"]
+    SPINDLE --> PART(["finished part"])
 
-    SWITCH{{"hardware switch<br/>(rear of machine)"}}
-    SWITCH -.routes PWM to.-> SPINDLE
+    SWITCH["hardware switch<br/>rear of machine"]
+    SWITCH -. routes PWM .-> SPINDLE
 
-    LASER["LaserTree 10W head<br/>(shares carriage,<br/>switch toggles output)"]
-    SWITCH -.deferred branch.-> LASER
+    LASER["LaserTree 10W head<br/>shares carriage<br/>switch toggles output"]
+    SWITCH -. deferred branch .-> LASER
 
-    FDM["FDM (printer)<br/>(deferred branch)"]
+    FDM["FDM printer<br/>deferred branch"]
 
-    CAM -.future: laser CAM.-> LASER
-    SCAD -.future: STL→slicer.-> FDM
+    CAM -. future laser CAM .-> LASER
+    SCAD -. future STL to slicer .-> FDM
 
     classDef live fill:#d4edda,stroke:#155724,color:#000
-    classDef deferred fill:#e2e3e5,stroke:#6c757d,color:#000,stroke-dasharray: 4 4
+    classDef deferred fill:#e2e3e5,stroke:#6c757d,color:#000
     classDef config fill:#fff3cd,stroke:#856404,color:#000
     class SCAD,GEOM,DXF,STL,CAM,GCODE,VALIDATE,SETUP,SENDER,SPINDLE,PART live
     class LASER,FDM,SWITCH deferred
