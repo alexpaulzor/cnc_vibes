@@ -187,12 +187,140 @@ This is in `examples/hole_in_sheet/`. The flow:
 
 1. **Design.** Edit `hole_in_sheet.scad`. It's parametric on sheet size, sheet thickness, and hole grid.
 2. **Export geometry.** `make examples/hole_in_sheet/build/hole_in_sheet.dxf` runs OpenSCAD with `-D 'mode="dxf"'`, which triggers a `projection()` in the SCAD source.
-3. **First time only — CAM setup in FreeCAD.** Open FreeCAD, import the DXF, create a Path Job, define stock from the sheet dimensions, pick a tool (from your tool table), add a Profile operation with tabs, configure feeds/speeds/DOC referencing your material spec. Save as `hole_in_sheet.FCStd` in the example directory. *This is the one step the guide can't automate — it's data entry that benefits from visual feedback.*
+3. **First time only — CAM setup in FreeCAD.** Open FreeCAD, import the DXF, create a Path Job, define stock from the sheet dimensions, pick a tool (from your tool table), add a Profile operation with tabs, configure feeds/speeds/DOC referencing your material spec. Save as `hole_in_sheet.FCStd` in the example directory. *This is the one step the guide can't automate — it's data entry that benefits from visual feedback.* See the **[click-through detail](#click-through-hole_in_sheet-cam-setup-in-freecad)** below for the exact clicks.
 4. **Iterate.** When you change `hole_in_sheet.scad` (different hole size, more holes, etc), re-run the make target. The DXF regenerates; FreeCAD picks up the new geometry on next open; you re-post to GCode.
 5. **Validate.** `make validate` runs `scripts/gcode_validate.py` against the GCode using your machine profile and tool table. Catches bounds violations, feed overruns, missing safe-Z compliance.
 6. **Cut.** Clamp the sheet, install the endmill, probe Z (the touch plate compensates for tool length), set X/Y origin to the corner of the stock that matches your CAM WCS, run dust collection, send via gSender.
 
 Almost every parameter you set in step 3 is a function of (material, tool, machine) — meaning it's templatable. Future iterations can lean on FreeCAD's Python API to generate jobs from templates so even step 3 collapses for repeat patterns.
+
+<details>
+<summary><b>Click-through: hole_in_sheet CAM setup in FreeCAD</b> (one-time, ~10–15 min)</summary>
+
+Tested mental-model against FreeCAD 1.0+ where the workbench was renamed from **Path** to **CAM**. Older versions and docs still say "Path"; the menu names and dialog labels match closely. The FreeCAD wiki has screenshots of every dialog mentioned here: <https://wiki.freecad.org/CAM_Workbench>.
+
+Assumes you've already run `make examples/hole_in_sheet/build/hole_in_sheet.dxf` and have the DXF on disk. The example's defaults: part is 200 × 100 × 6 mm; stock is 220 × 120 × 6 mm (10 mm extra on each X/Y side, same thickness as the part).
+
+**Coordinate convention used below** (pick this once for the whole repo so every job lines up the same way):
+
+- **WCS X=0, Y=0** = front-left corner of the **stock** — i.e. the corner of the physical sheet you'll clamp. The part sits 10 mm in +X and 10 mm in +Y from this corner.
+- **WCS Z=0** = top of stock. Cuts go negative.
+
+You'll match this on the machine by touching off X/Y on the front-left corner of the sheet and probing Z on the top.
+
+---
+
+##### 1. Open and import
+
+1. Launch FreeCAD.
+2. **File → New** to create an empty document.
+3. **File → Save As…** → save as `examples/hole_in_sheet/hole_in_sheet.FCStd` in this repo.
+4. **File → Import** → select `examples/hole_in_sheet/build/hole_in_sheet.dxf`.
+   - Accept the import defaults (Draft shapes).
+   - Result: a set of Draft wires on the XY plane at Z=0 — one closed rectangle (the sheet outline) and eight closed circles (the holes).
+5. Press `0` to fit view, then `2` for top view.
+
+##### 2. Create the Job
+
+1. Switch to the **CAM** workbench (workbench selector, top-left). On older FreeCAD this is **Path**.
+2. **CAM → Job** opens the Job creation dialog.
+3. In the dialog:
+   - **Base objects:** select all the imported Draft shapes (the rectangle and circles).
+   - **Template:** leave empty (or pick one of your saved templates once you have them).
+   - Click **OK**.
+
+A `Job` object appears in the tree with sub-folders `Model`, `Stock`, `Operations`, `Tools`. The Job-Edit panel opens automatically; if not, double-click the Job.
+
+##### 3. Configure Stock
+
+1. In Job-Edit, **Stock** tab → **Stock type:** *Create Box from base bounding box*.
+2. **Extra dimensions:**
+   - `Neg. X` = **10**, `Pos. X` = **10**
+   - `Neg. Y` = **10**, `Pos. Y` = **10**
+   - `Neg. Z` = **6**, `Pos. Z` = **0**
+   - The DXF wires are flat at Z=0; we tell the Stock to extend 6 mm downward so it represents the 6 mm sheet sitting at Z = −6..0.
+3. Confirm the displayed stock dimensions read **220 × 120 × 6 mm**.
+
+##### 4. Set the WCS origin
+
+1. Job-Edit → **Setup** tab → **Set Origin** (or "Set Stock Origin" depending on version).
+2. Pick the **front-left-top** corner of the stock box in the 3D view. The XYZ tripod glyph should jump to that corner with Z pointing up.
+
+##### 5. Define the tool
+
+1. Job-Edit → **Tools** tab → **Add Tool Controller** → **Create Tool**:
+   - **Type:** `EndMill`
+   - **Diameter:** `3.175 mm`
+   - **Flutes:** `2`
+   - **Length / Flute length:** `17 mm`
+   - **Name:** `flat_3.175mm_2flute` (matches the id in `profiles/tools.yaml`)
+2. The Tool Controller appears under the Job. Double-click it and set:
+   - **Spindle speed:** `18000` rpm
+   - **Horizontal feed:** `1440` mm/min — from `chipload × flutes × rpm = 0.04 × 2 × 18000` (chipload from `profiles/materials.yaml` for `plywood_baltic_birch_6mm` + this tool)
+   - **Vertical feed (plunge):** `300` mm/min — matches `max_plunge_mm_per_min` in `profiles/tools.yaml`
+   - **Spindle direction:** Forward (M3)
+3. Click **OK** to close Job-Edit.
+
+##### 6. Add the Profile operation
+
+1. With the Job selected, **CAM → Profile** (or the Profile toolbar button).
+2. The Profile dialog opens. **Base Geometry** panel:
+   - Click **Add** and pick the eight circle edges in the 3D view — these are the holes (cut **inside**, scrap is the disc).
+   - Click **Add** again and pick the four edges of the outer rectangle — the part perimeter (cut **outside**).
+3. **Depths** tab:
+   - **Start depth:** `0`
+   - **Final depth:** `-6.2` (cuts 0.2 mm into the spoilboard for clean break-through)
+   - **Step down:** `2.0` (three passes: −2, −4, −6.2)
+   - **Safe height:** `5`
+   - **Clearance height:** `10`
+4. **Operation** tab:
+   - **Cut side:** Inside for circles, Outside for the rectangle (Profile applies its `Side` per base geometry — pick when adding each, or use two Profile ops if your version doesn't allow mixing).
+   - **Direction:** Climb.
+5. Click **OK**.
+
+Toolpaths render: spirals inside each hole, a perimeter cut around the rectangle, blue rapid traverses at Z=5.
+
+##### 7. Add tabs to the outer perimeter
+
+The hole discs fall through harmlessly. The outer rectangle would release the entire part — tabs hold it.
+
+1. Right-click the Profile operation in the tree → **Tabs Dressup** (or **Dress-up → Tabs**).
+2. Tabs dialog:
+   - **Width:** `5` mm
+   - **Height:** `1.5` mm
+   - **Count:** `4` (FreeCAD distributes around the perimeter)
+3. Click **OK**. The outer cut's toolpaths now jog up at four locations.
+
+##### 8. Post-process to GCode
+
+1. Job-Edit (double-click the Job) → **Output** tab:
+   - **Post Processor:** `grbl`
+   - **Output File:** `examples/hole_in_sheet/build/hole_in_sheet.gcode`
+2. Click **OK**.
+3. Right-click the Job → **Post Process**. Confirm the save path.
+
+Then validate from a shell:
+
+```bash
+make validate JOB=examples/hole_in_sheet/build/hole_in_sheet.gcode
+```
+
+##### 9. Save and commit
+
+`File → Save` writes the `.FCStd`. Commit it next to the `.scad`. From now on, a SCAD parameter change is: `make` regenerates the DXF → reopen the `.FCStd` (geometry picks up automatically because Stock was "From Base shape") → right-click Job → Post Process → validate.
+
+---
+
+**Common first-time validator failures and their cause in this workflow:**
+
+| Validator says | Likely cause |
+|---|---|
+| `max_plunge` | Step 5 vertical feed was set higher than the tool's `max_plunge_mm_per_min` |
+| `bounds` | Step 4 WCS ended up somewhere other than stock front-left-top |
+| `spindle_on` | The grbl post-processor has "Output spindle commands" disabled — toggle it in the Output tab |
+| `safe_z_rapid` | Safe height in step 6 was below the default 5 mm in `profiles/anolex_4030_evo_ultra2.yaml`; raise one or change the other to match |
+
+</details>
 
 ---
 
@@ -241,3 +369,31 @@ Run tests: `make test` (or `pytest -q tests/`).
 - Real-world tuning: filling in the `# TODO` values in the machine profile from your actual machine; building out the tools and materials catalogs as you accumulate experience.
 
 **The next thing to do** is run the example: install requirements, regenerate the DXF, do a CAM setup pass in FreeCAD, post to GCode, run the validator. The first job will surface what's missing or wrong in the profile and validator — that feedback drives v3.
+
+
+## Notes
+
+what is the CAM convention for length/width/height vs X/Y/Z? height = Z, length = X?
+
+Yes, that's the convention — though it's worth being precise about what each one means in CNC context, because it doesn't quite match how you'd talk about a finished part on a shelf.
+
+Machine axes (universal on 3-axis routers, including yours):
+- X — left/right as you stand at the front of the machine
+- Y — front/back (away from you / toward you)
+- Z — up/down (the spindle moves along Z)
+
+Mapping to part dimensions:
+- Length (X) — the longer horizontal dimension, usually aligned with the machine's longest travel. On your 4030, that's the 400mm axis.
+- Width (Y) — the shorter horizontal dimension. On your 4030, the 300mm axis.
+- Height / thickness / depth (Z) — vertical. For sheet stock this is the thickness of the material. The word people use varies: "thickness" for sheet goods, "height" for tall parts, "depth" when talking about how far into the stock you're cutting.
+
+Two terminology traps worth knowing:
+
+1. "Depth of cut" (DOC) vs "depth" — DOC is how much Z the tool removes per pass, not the total Z dimension of the part or the pocket. A 6mm-thick part might be cut with a DOC of 2mm over 3 passes.
+2. "Length" in tool specs ≠ part length — when a tool is described as "length 38mm, flute length 17mm," that's the tool's own Z dimension and its cutting region. Has nothing to do with the part's X dimension.
+
+For the hole_in_sheet example specifically, in the OpenSCAD source [sheet_x, sheet_y, sheet_z] is [length, width, thickness] = [200, 100, 6]. When you set up stock in FreeCAD Path, the stock dimensions would be [220, 120, 6] (adding 10mm margin on each side of X and
+ Y, but the same thickness — you wouldn't add margin to Z because the stock thickness is 6mm).
+
+One convention reminder for the CAM setup: in WCS, Z=0 is typically the top of the stock, and cuts go into negative Z. So a 6mm-thick sheet has its top face at Z=0 and its bottom at Z=−6. A through-cut targets Z=−6.2 (the extra 0.2mm overcuts into the spoilboard to
+ensure clean breakthrough).
