@@ -1,0 +1,4 @@
+material: plywood_baltic_birch_3mm
+tool: flat_3.175mm_2flute
+spindle_rpm: 18000
+gcode: examples/hole_in_sheet/build/hole_in_sheet.gcode

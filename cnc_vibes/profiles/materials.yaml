@@ -9,6 +9,15 @@
 #
 # These are starting points, not gospel. Measure chips, listen, adjust.
 
+- id: plywood_baltic_birch_3mm
+  family: wood
+  thickness_mm: 3.0
+  chipload:
+    flat_3.175mm_2flute: 0.04
+    flat_6mm_2flute: 0.08
+  doc_fraction: 0.5
+  doc_fraction_finish: 0.25
+
 - id: plywood_baltic_birch_6mm
   family: wood
   thickness_mm: 6.0

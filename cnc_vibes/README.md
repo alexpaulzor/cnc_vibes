@@ -1,0 +1,165 @@
+# cnc_vibes
+
+A code-first toolchain for taking OpenSCAD designs to CNC GCode on a GRBL-class router. Primary platform is **Windows 11**; macOS works as a development convenience.
+
+The conceptual guide — what CAM is, why CNC is harder than 3D printing, the FreeCAD object model, the worked example with full click-through — lives in **[cnc_for_the_scad.md](cnc_for_the_scad.md)**. Read that first. This README is the day-to-day reference once you've internalized the pipeline.
+
+---
+
+## Install
+
+### Windows 11
+
+```
+winget install Python.Python.3.12
+winget install OpenSCAD.OpenSCAD
+winget install FreeCAD.FreeCAD
+```
+
+Close and reopen PowerShell, then from the repo root:
+
+```
+python -m pip install -r requirements.txt
+python cnc.py doctor
+```
+
+`doctor` prints the toolchain it resolved. If anything shows `MISSING`, either reinstall via winget or set the path explicitly:
+
+```
+$env:OPENSCAD = "C:\Program Files\OpenSCAD\openscad.exe"
+$env:FREECAD_CMD = "C:\Program Files\FreeCAD 1.0\bin\FreeCADCmd.exe"
+```
+
+Add those lines to your PowerShell profile (`notepad $PROFILE`) to persist them.
+
+### macOS (bonus)
+
+```
+brew install python openscad
+brew install --cask freecad
+python3 -m pip install -r requirements.txt
+python3 cnc.py doctor
+```
+
+Use `python3` instead of `python` on macOS (or alias it).
+
+---
+
+## Commands
+
+All driven through `python cnc.py <subcommand>`. Identical on Windows and macOS.
+
+| Command | What it does |
+|---|---|
+| `cnc.py doctor` | Print the resolved toolchain (Python, OpenSCAD, FreeCADCmd, deps). Run this first. |
+| `cnc.py build <example>` | OpenSCAD → DXF + STL into `examples/<example>/build/`. |
+| `cnc.py params <example>` | Print the lookup tables (machine, material, tool) and the derived feed/DOC/depth numbers for the job, with safety checks. |
+| `cnc.py preflight <example>` | Print params, then walk an interactive pre-cut safety checklist. Aborts with a non-zero exit if anything is unconfirmed. |
+| `cnc.py preflight <example> --print-only` | Same checklist, non-interactive. Useful for review or printing. |
+| `cnc.py validate <gcode>` | Run the machine-aware GCode validator (bounds, max feed, plunge, safe-Z, spindle-on). |
+| `cnc.py test` | Run the pytest suite. |
+| `cnc.py clean` | Delete all `examples/*/build/` directories. |
+| `cnc.py post <fcstd> <gcode>` | (Not yet implemented — for now, post-process from inside the FreeCAD GUI.) |
+
+Run `python cnc.py --help` or `python cnc.py <subcommand> --help` for full usage.
+
+---
+
+## Per-job workflow
+
+Each example under `examples/` represents one part you can cut. The end-to-end flow for an existing example:
+
+1. **Edit the design.** Open `examples/<name>/<name>.scad` in OpenSCAD (or any text editor) and tune parameters.
+2. **Regenerate geometry.** `python cnc.py build <name>` runs OpenSCAD twice — once with `mode="dxf"` for the 2D `projection()` and once for the STL.
+3. **CAM in FreeCAD** *(first time only)*. Open `examples/<name>/<name>.FCStd` in FreeCAD's CAM workbench. The detailed click-through for the `hole_in_sheet` example is in `cnc_for_the_scad.md` §6 — same shape for any 2.5D job: import the DXF, create a Job with stock derived from the part bounding box plus margin, attach a Tool Controller matching `profiles/tools.yaml`, add Profile operations (Inside for holes, Outside for the perimeter), drop a Tabs Dressup on the perimeter, configure the grbl post-processor, save the `.FCStd`.
+4. **Post to GCode.** Right-click the Job in FreeCAD → Post Process. Save into `examples/<name>/build/<name>.gcode`.
+5. **Validate.** `python cnc.py validate examples/<name>/build/<name>.gcode`. Aborts on any rule violation (bounds, max feed, missing spindle-on, unsafe rapid, etc.).
+6. **Preflight.** `python cnc.py preflight <name>`. Prints the params (so you can sanity-check what's about to happen against the GCode that's about to run), then walks the safety checklist interactively. You must answer `y` to every item; anything else triggers an abort.
+7. **Cut.** With preflight passed and your sender loaded with the GCode, run the job. Stay near the e-stop.
+
+After a parameter tweak to the `.scad` (different hole size, different sheet dimensions, etc.), the loop shortens to: `cnc.py build` → reopen the FCStd (geometry refreshes automatically because Stock was "From Base shape") → right-click Job → Post Process → `cnc.py validate` → `cnc.py preflight` → cut.
+
+---
+
+## Per-job configuration: `job.yaml`
+
+`params` and `preflight` read a `job.yaml` next to the `.scad` to know which material, tool, and spindle speed the job is targeting. Example (`examples/hole_in_sheet/job.yaml`):
+
+```yaml
+material: plywood_baltic_birch_3mm    # id from profiles/materials.yaml
+tool: flat_3.175mm_2flute             # id from profiles/tools.yaml
+spindle_rpm: 18000                    # within machine + tool RPM range
+gcode: examples/hole_in_sheet/build/hole_in_sheet.gcode
+```
+
+Changing `spindle_rpm` here changes the derived feed rate (chipload × flutes × rpm). Changing `material` swaps to a different chipload table. The CAM project file (`.FCStd`) is the source of truth for what FreeCAD actually emits — `job.yaml` is what cnc.py uses to tell you what the GCode *should* match.
+
+If `params` says your derived feed is 1440 mm/min and the GCode coming out of FreeCAD shows F900, that's a discrepancy worth investigating (probably stale CAM project after a `job.yaml` change).
+
+---
+
+## Repo layout
+
+```
+cnc_vibes/
+├── README.md                          ← this file
+├── cnc_for_the_scad.md                ← conceptual guide (read first)
+├── cnc.py                             ← task runner (cross-platform)
+├── requirements.txt                   ← pyyaml, pytest
+├── profiles/
+│   ├── anolex_4030_evo_ultra2.yaml   ← machine envelope + feeds + spindle range
+│   ├── tools.yaml                     ← endmills, ball-ends, V-bits with limits
+│   └── materials.yaml                 ← chipload tables, DOC fractions
+├── examples/
+│   └── hole_in_sheet/
+│       ├── hole_in_sheet.scad         ← parametric source (DXF or STL output)
+│       ├── job.yaml                   ← material + tool + spindle_rpm for this job
+│       ├── hole_in_sheet.FCStd        ← FreeCAD CAM project (you create in step 3)
+│       └── build/                     ← generated DXF / STL / GCode (gitignored)
+├── scripts/
+│   ├── gcode_validate.py              ← per-line GCode rules
+│   └── job_params.py                  ← loaders + derived-param math (importable)
+└── tests/
+    ├── test_profiles.py               ← profile YAML schema sanity
+    ├── test_gcode_validate.py         ← validator rules
+    └── test_job_params.py             ← math + safety checks + load_job error paths
+```
+
+---
+
+## Adding a new example
+
+```
+mkdir examples/my_new_part
+cp examples/hole_in_sheet/hole_in_sheet.scad examples/my_new_part/my_new_part.scad
+cp examples/hole_in_sheet/job.yaml examples/my_new_part/job.yaml
+```
+
+Edit the `.scad` for the geometry you want. Update `job.yaml` to match the material thickness and tool you'll use. Then `python cnc.py build my_new_part` to verify the geometry exports cleanly. Open `my_new_part.FCStd` (you'll create it on first run) in FreeCAD to set up the CAM job.
+
+---
+
+## Customizing for a different machine
+
+The repo is designed so that swapping to a different GRBL router means editing one file. Copy `profiles/anolex_4030_evo_ultra2.yaml` to `profiles/<your_machine>.yaml`, update the envelope, feeds, and spindle range, then either:
+
+- Edit `cnc.py` and `scripts/gcode_validate.py` to point at the new file (one constant in each), or
+- Set the `PROFILE` env var: `$env:PROFILE = "profiles/<your_machine>.yaml"`.
+
+The principle (machine as configuration, not hardcoded) is discussed in `cnc_for_the_scad.md` §4.
+
+---
+
+## When something goes wrong
+
+| Symptom | Likely cause | Where to look |
+|---|---|---|
+| `cnc.py doctor` shows `openscad: MISSING` | OpenSCAD not installed, or in a non-standard directory | `winget install OpenSCAD.OpenSCAD`, or set `$env:OPENSCAD` |
+| `cnc.py params` says "no chipload entry" | The job's material doesn't have a chipload value for the job's tool | Add the pair to `profiles/materials.yaml` |
+| `cnc.py params` exits with a failed safety check | Spindle RPM or feed exceeds machine/tool limits | Lower `spindle_rpm` in `job.yaml`, or use a different tool |
+| `cnc.py validate` flags `bounds` | The GCode would drive the spindle outside the machine envelope | Check the WCS origin in the FreeCAD Job — it usually means stock placement is off |
+| `cnc.py validate` flags `spindle_on` | The grbl post-processor isn't emitting M3 commands | In FreeCAD, Job-Edit → Output tab → enable spindle output |
+| `cnc.py validate` flags `safe_z_rapid` | A rapid (G0) traverses XY below the configured safe Z | Raise "Safe Height" in the Profile op, or lower `default_safe_z_mm` in the machine profile |
+| Preflight refuses to start | Safety check failed before the checklist | Fix the params issue first, then re-run preflight |
+
+For everything else, the conceptual guide (`cnc_for_the_scad.md`) explains the why behind each tool and decision.

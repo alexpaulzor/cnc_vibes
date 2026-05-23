@@ -23,6 +23,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 EXAMPLES = ROOT / "examples"
+PROFILES = ROOT / "profiles"
+
+sys.path.insert(0, str(ROOT / "scripts"))
+from job_params import (  # noqa: E402
+    PREFLIGHT_CHECKLIST,
+    compute_derived,
+    find_by_id,
+    format_report,
+    load_job,
+    load_yaml,
+)
 
 
 def _find_executable(name: str, env_var: str, fallbacks: list[str]) -> str | None:
@@ -157,6 +168,82 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("pytest:      MISSING — run `python -m pip install -r requirements.txt`")
 
 
+def _load_job_context(name: str):
+    """Load job spec + machine + tool + material for a given example name."""
+    job_dir = EXAMPLES / name
+    job = load_job(job_dir)
+    machine = load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    tools = load_yaml(PROFILES / "tools.yaml")
+    materials = load_yaml(PROFILES / "materials.yaml")
+    tool = find_by_id(tools, job.tool, "tool")
+    material = find_by_id(materials, job.material, "material")
+    derived = compute_derived(machine, material, tool, job.spindle_rpm)
+    return job, machine, material, tool, derived
+
+
+def cmd_params(args: argparse.Namespace) -> None:
+    job, machine, material, tool, derived = _load_job_context(args.name)
+    print(format_report(job, machine, material, tool, derived))
+    # Non-zero exit if any safety check failed, so this fits in CI/scripts.
+    if any(not c["ok"] for c in derived["checks"]):
+        sys.exit(1)
+
+
+def cmd_preflight(args: argparse.Namespace) -> None:
+    job, machine, material, tool, derived = _load_job_context(args.name)
+    print(format_report(job, machine, material, tool, derived))
+
+    if any(not c["ok"] for c in derived["checks"]):
+        sys.exit(
+            "\nABORT: one or more safety checks failed above. "
+            "Adjust the material, tool, or spindle_rpm in job.yaml and re-run."
+        )
+
+    print()
+    print("=" * 60)
+    print("Pre-cut checklist — confirm each item before starting the spindle.")
+    print("=" * 60)
+    print()
+
+    if args.print_only:
+        for _, prompt_tpl in PREFLIGHT_CHECKLIST:
+            prompt = prompt_tpl.format(
+                tool_id=tool["id"],
+                tool_diameter=tool["diameter_mm"],
+                gcode=job.gcode,
+            )
+            print(f"  [ ] {prompt}")
+        print("\n(--print-only: not interactive. Tick boxes mentally.)")
+        return
+
+    failed = []
+    for key, prompt_tpl in PREFLIGHT_CHECKLIST:
+        prompt = prompt_tpl.format(
+            tool_id=tool["id"],
+            tool_diameter=tool["diameter_mm"],
+            gcode=job.gcode,
+        )
+        try:
+            ans = input(f"  {prompt}  [y/n/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\nABORT: preflight interrupted.")
+        if ans == "q":
+            sys.exit("\nABORT: preflight quit by user.")
+        if ans not in ("y", "yes"):
+            failed.append(key)
+            print(f"      -> NOT CONFIRMED")
+        else:
+            print(f"      -> ok")
+
+    print()
+    if failed:
+        sys.exit(
+            f"ABORT: {len(failed)} item(s) not confirmed: {', '.join(failed)}.\n"
+            "Resolve each one and re-run `cnc.py preflight {0}`.".format(args.name)
+        )
+    print("All preflight items confirmed. Cleared to start the cut.")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="cnc", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="cmd", required=True)
@@ -183,6 +270,25 @@ def main() -> None:
 
     d = subs.add_parser("doctor", help="print resolved toolchain for diagnostics")
     d.set_defaults(func=cmd_doctor)
+
+    pa = subs.add_parser(
+        "params",
+        help="print lookup tables + derived params for a job (reads job.yaml)",
+    )
+    pa.add_argument("name", help="example name, e.g. hole_in_sheet")
+    pa.set_defaults(func=cmd_params)
+
+    pf = subs.add_parser(
+        "preflight",
+        help="print params + walk the interactive pre-cut safety checklist",
+    )
+    pf.add_argument("name", help="example name, e.g. hole_in_sheet")
+    pf.add_argument(
+        "--print-only",
+        action="store_true",
+        help="print the checklist without prompting (for review/printing)",
+    )
+    pf.set_defaults(func=cmd_preflight)
 
     args = p.parse_args()
     args.func(args)
