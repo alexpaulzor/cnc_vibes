@@ -34,6 +34,7 @@ from job_params import (  # noqa: E402
     load_job,
     load_yaml,
 )
+from help_topics import render_index, render_topic, search  # noqa: E402
 
 
 def _find_executable(name: str, env_var: str, fallbacks: list[str]) -> str | None:
@@ -244,6 +245,26 @@ def cmd_preflight(args: argparse.Namespace) -> None:
     print("All preflight items confirmed. Cleared to start the cut.")
 
 
+def cmd_help(args: argparse.Namespace) -> None:
+    if args.search:
+        matches = search(args.search)
+        if not matches:
+            sys.exit(f"no topics matching '{args.search}'")
+        print(f"Topics matching '{args.search}':")
+        for name in matches:
+            print(f"  {name}")
+        return
+
+    if not args.topic:
+        print(render_index())
+        return
+
+    try:
+        print(render_topic(args.topic))
+    except KeyError:
+        sys.exit(f"unknown topic '{args.topic}'. Run `cnc.py help` for the topic list.")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="cnc", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="cmd", required=True)
@@ -289,6 +310,22 @@ def main() -> None:
         help="print the checklist without prompting (for review/printing)",
     )
     pf.set_defaults(func=cmd_preflight)
+
+    h = subs.add_parser(
+        "help",
+        help="browse the toolchain reference (manpage-style)",
+    )
+    h.add_argument(
+        "topic",
+        nargs="?",
+        help="topic name (omit for the topic index)",
+    )
+    h.add_argument(
+        "--search",
+        metavar="KEYWORD",
+        help="list topics whose title or body contains KEYWORD",
+    )
+    h.set_defaults(func=cmd_help)
 
     args = p.parse_args()
     args.func(args)

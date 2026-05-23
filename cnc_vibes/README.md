@@ -51,6 +51,7 @@ All driven through `python cnc.py <subcommand>`. Identical on Windows and macOS.
 
 | Command | What it does |
 |---|---|
+| `cnc.py help` | Browse the toolchain reference manpage-style. `cnc.py help <topic>` for detail; `cnc.py help --search KEYWORD` to find topics. Start here when you forget a flag or want to know what's available. |
 | `cnc.py doctor` | Print the resolved toolchain (Python, OpenSCAD, FreeCADCmd, deps). Run this first. |
 | `cnc.py build <example>` | OpenSCAD → DXF + STL into `examples/<example>/build/`. |
 | `cnc.py params <example>` | Print the lookup tables (machine, material, tool) and the derived feed/DOC/depth numbers for the job, with safety checks. |
