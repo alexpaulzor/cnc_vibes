@@ -10,7 +10,7 @@ Each lesson directory has its own README with goal, prerequisites, the actual wo
 |---|---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](laser/01_spacer/) | ✅ implemented | Fully automated. Pure Python → GCode. |
 | 3b | [Laser calibration pattern (power × passes × speed)](laser/02_calibration/) | ✅ implemented | Fully automated. Pure Python → GCode with engraved labels. |
-| 3c | Photo-engraved wooden jigsaw with name-preserving cuts | far future | Multi-stage. Aspirational. |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](laser/03_jigsaw/) | spec only (aspirational) | Multi-stage. Raster engrave + tessellation + name-preserving cut algorithm. |
 
 ## Mill
 
