@@ -33,15 +33,7 @@ Standalone Python tools (no LLM dependency) that talk to the machine or watch it
 
 ## Plasma (future)
 
-The ArcFony Cut53M Pro plasma cutter has CNC control ports on the rear but needs serious mechanical and electrical integration before the Anolex can drive it. **Not for this iteration.**
-
-Outline of what plasma will require, captured here so it's not lost:
-
-- **5a — Plasma torch outrigger + wiring.** Mount the torch on an arm that puts the cut zone off the machine bed (over a water table or sacrificial surface). Adapt the GRBL spindle PWM / coolant pins to drive the plasma's torch-on relay. Read back the arc-OK signal so motion only starts after the arc establishes.
-- **5b — Plasma sheet-metal cutout** (parametric bracket or similar). Pierce delay handling (0.5–2 s before motion). Conservative feeds (plasma cuts very fast — 1000–3000 mm/min for thin steel, but the bottleneck is acceleration). Torch-height-control is open: either fixed Z (simple, OK for flat sheet) or floating-head probe (better cut quality, more mechanism).
-- **Safety:** plasma is the most hazardous head — UV, sparks, hot metal, EMI noise that can corrupt USB serial. Galvanic isolation between the plasma controller and the GRBL controller is mandatory.
-
-The plasma section will get its own SPEC and lessons when we're ready to tackle it.
+See [lessons/plasma/](plasma/) — the ArcFony Cut53M Pro plasma cutter as a third tool head. **Not for this iteration; requires mechanical fabrication.** The SPEC captures the workstream design (outrigger mount, opto-isolated electrical interface, software integration phases) so it survives the months between now and when you tackle it.
 
 ## How to read this section
 
