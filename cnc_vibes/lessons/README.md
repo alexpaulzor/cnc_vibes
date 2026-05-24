@@ -21,6 +21,16 @@ Each lesson directory has its own README with goal, prerequisites, the actual wo
 | 4c | Steel center-punch divets — precisely-located marks for follow-up drilling. Engraver tip, single-point Z plunge per location, no cutting. ~1/8" mild steel. | not yet | Fully automatable. Pure Python → GCode given a list of (x, y) points. |
 | 4d | Aluminum milling — small parts, very conservative feeds/DOC, trochoidal/adaptive clearing to keep tool engagement low. Lubrication (WD-40 / kerosene) and chip evacuation are first-class concerns. | not yet | Semi-automated via FreeCAD CAM with hand-tuned ops. |
 
+## Integration (machine state + camera)
+
+Standalone Python tools (no LLM dependency) that talk to the machine or watch it. See [integration/README.md](integration/) for the workstream overview.
+
+| # | Tool | Status | Purpose |
+|---|---|---|---|
+| Int-01 | [`inspect`](integration/01_inspect/SPEC.md) | spec only | Read GRBL state via serial; verify `$32`, WCS offsets, alarms before cut. |
+| Int-02 | [`snapshot`](integration/02_snapshot/SPEC.md) | spec only (future) | One-shot webcam stills for before/after-cut setup verification. |
+| Int-03 | [`probe-corner`](integration/03_probe_corner/SPEC.md) | spec only | Automated WCS-finding routine via touch plate. Saves 2-3 min per job. |
+
 ## Plasma (future)
 
 The ArcFony Cut53M Pro plasma cutter has CNC control ports on the rear but needs serious mechanical and electrical integration before the Anolex can drive it. **Not for this iteration.**
@@ -42,8 +52,11 @@ The lessons aren't independent — they build on each other. Suggested order:
 4. **4c (steel center-punch)** — natural extension of 4a's "spindle does a parametric thing" — just an array of dots instead of profile cuts. Confirms the spindle path works on metal (even if only superficially).
 5. **4d (aluminum milling)** — the hardest 3-axis lesson. Don't attempt before 4a is solid.
 6. **4b (PCB engraving)** — combines parts of all prior lessons plus the FreeCAD CAM workflow.
-7. **3c (jigsaw)** — aspirational; will need its own sub-roadmap.
-8. **5 (plasma)** — separate workstream, requires mechanical fabrication before any code.
+7. **Int-01 (inspect)** — first machine-talking tool; small scope, big preflight win. Builds the serial pattern Int-03 depends on.
+8. **Int-03 (probe-corner)** — automates the per-job WCS ritual. Depends on Int-01.
+9. **3c (jigsaw)** — aspirational; will need its own sub-roadmap.
+10. **Int-02 (snapshot)** — useful but lower priority; defer until a camera bracket physically exists.
+11. **5 (plasma)** — separate workstream, requires mechanical fabrication before any code.
 
 ## Adding a new lesson
 
