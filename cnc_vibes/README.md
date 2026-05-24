@@ -135,9 +135,29 @@ cnc_vibes/
 
 ## Lessons
 
-Progressive tutorials, each demonstrating a technique you can reuse. See [lessons/README.md](lessons/README.md) for the index and the suggested order.
+Progressive tutorials, each demonstrating a technique you can reuse. See [lessons/README.md](lessons/README.md) for the full index and the suggested reading order.
 
-The first implemented lesson is **[3a — parametric laser-cut PCB spacer](lessons/laser/01_spacer/)**, which establishes the fully-automated Python-to-GCode pattern (no CAM project, no GUI in the loop except the sender).
+**Implemented lessons** (have working code + tests):
+
+- **3a** — [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) (fully automated, Python → GCode)
+- **3b** — [Laser calibration pattern](lessons/laser/02_calibration/) (power × passes × speed matrix)
+- **4a** — [Parametric router-cut spacer](lessons/mill/01_spacer/) (hybrid: cylindrical fully automated, frustum via FreeCAD)
+- **4b** — [PCB Excellon-to-GCode drill converter](lessons/mill/04_pcb/) (delegates isolation routing to FlatCAM)
+- **4c** — [Steel center-punch divets](lessons/mill/02_steel_center_punch/) (precision marking for follow-up drilling)
+- **4d** — [Aluminum trochoidal slot](lessons/mill/03_aluminum/) (low-engagement clearing for the 500W spindle)
+
+**Integration tools** (talk to the machine + watch it):
+
+- **Int-01** — [`inspect`](lessons/integration/01_inspect/) — read GRBL state via serial
+- **Int-02** — [`snapshot`](lessons/integration/02_snapshot/) — webcam stills for setup verification
+- **Int-03** — [`probe-corner`](lessons/integration/03_probe_corner/) — automated WCS-finding via touch plate
+
+**Specced for future work**:
+
+- **3c** — [Photo-engraved jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) (aspirational)
+- **5** — [Plasma cutting](lessons/plasma/) (requires mechanical fabrication first)
+
+The session journal at [lessons/JOURNAL.md](lessons/JOURNAL.md) captures the decisions and progress history.
 
 ---
 
