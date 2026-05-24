@@ -135,7 +135,7 @@ cnc_vibes/
 
 ## Lessons
 
-Progressive tutorials, each demonstrating a technique you can reuse. See [lessons/README.md](lessons/README.md) for the full index and the suggested reading order.
+Progressive tutorials, each demonstrating a technique you can reuse. See [lessons/README.md](lessons/README.md) for the full index and the suggested reading order; [ROADMAP.md](ROADMAP.md) is the at-a-glance status view.
 
 **Implemented lessons** (have working code + tests):
 
