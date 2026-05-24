@@ -19,7 +19,7 @@ Each lesson directory has its own README with goal, prerequisites, the actual wo
 | 4a | [Parametric router-cut spacer](mill/01_spacer/) | ✅ implemented | Hybrid: cylindrical case fully automated; frustum case via FreeCAD CAM. |
 | 4b | Perfboard-style PCB engraving on copper-clad blanks (no chemicals) | not yet | KiCAD → Gerber → FlatCAM/pcb2gcode → cnc.py validate. |
 | 4c | [Steel center-punch divets](mill/02_steel_center_punch/) — precisely-located marks for follow-up drilling. Engraver tip, single-point Z plunge per location, no cutting. ~1/8" mild steel. | ✅ implemented | Fully automated. Pure Python → GCode. CSV/YAML/grid input. |
-| 4d | Aluminum milling — small parts, very conservative feeds/DOC, trochoidal/adaptive clearing to keep tool engagement low. Lubrication (WD-40 / kerosene) and chip evacuation are first-class concerns. | not yet | Semi-automated via FreeCAD CAM with hand-tuned ops. |
+| 4d | [Aluminum milling](mill/03_aluminum/) — small parts, very conservative feeds/DOC, trochoidal clearing to keep tool engagement low. Lubrication (WD-40 / kerosene) and chip evacuation are first-class concerns. | ✅ implemented | Mix: 4a handles spacers; trochoidal_slot.py demonstrates low-engagement slotting. |
 
 ## Integration (machine state + camera)
 

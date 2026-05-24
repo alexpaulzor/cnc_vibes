@@ -591,6 +591,50 @@ Validation gates in the script:
 See also: tools, machine-profile, validate, preflight, checklist
 """,
     ),
+    "lesson-aluminum-slot": (
+        "lesson 4d — aluminum trochoidal slot",
+        """
+Location: lessons/mill/03_aluminum/
+
+Generates GCode for a single straight slot in aluminum using trochoidal
+(low-engagement) motion. The tool moves in tight circles while
+advancing along the slot, keeping cutting forces low enough for the
+500W spindle to handle.
+
+For plain cylindrical aluminum spacers, use lesson 4a directly with
+--material aluminum_6061_3mm; the material profile gives safe feeds.
+
+Usage:
+  python lessons/mill/03_aluminum/trochoidal_slot.py \\
+      --x0 10 --y0 10 \\
+      --length 30 --width 6 \\
+      --depth 3
+
+Flags:
+  --x0, --y0          slot start (required)
+  --length, --width   slot dimensions (required; width > tool diameter)
+  --depth             negative-Z reached (required)
+  --tool              default flat_3.175mm_2flute
+  --material          default aluminum_6061_3mm
+  --spindle-rpm       default 18000
+  --trochoidal-radius-frac  default 0.4 (loop r as fraction of tool dia)
+  --trochoidal-step-frac    default 0.15 (per-loop X advance as fraction)
+
+Validation:
+  * width > tool_diameter (else use a profile cut)
+  * length > tool_dia + 2 * loop_radius (else slot too short)
+  * spindle_rpm <= tool max_rpm
+  * dimensions all > 0
+
+Critical operator responsibility:
+  * Apply WD-40 / kerosene every 30-60 seconds during the cut.
+    Aluminum chips fuse to the tool without lubrication.
+  * Watch for chatter; hit e-stop if you hear high-pitched squealing.
+
+See also: tools, materials, machine-profile, validate, preflight,
+          lesson-mill-spacer
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -704,6 +748,7 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-calibration",
         "lesson-mill-spacer",
         "lesson-center-punch",
+        "lesson-aluminum-slot",
     ],
 }
 
