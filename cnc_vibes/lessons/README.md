@@ -27,9 +27,9 @@ Standalone Python tools (no LLM dependency) that talk to the machine or watch it
 
 | # | Tool | Status | Purpose |
 |---|---|---|---|
-| Int-01 | [`inspect`](integration/01_inspect/SPEC.md) | spec only | Read GRBL state via serial; verify `$32`, WCS offsets, alarms before cut. |
+| Int-01 | [`inspect`](integration/01_inspect/) | ✅ implemented | Read GRBL state via serial; verify `$32`, WCS offsets, alarms before cut. |
 | Int-02 | [`snapshot`](integration/02_snapshot/SPEC.md) | spec only (future) | One-shot webcam stills for before/after-cut setup verification. |
-| Int-03 | [`probe-corner`](integration/03_probe_corner/SPEC.md) | spec only | Automated WCS-finding routine via touch plate. Saves 2-3 min per job. |
+| Int-03 | [`probe-corner`](integration/03_probe_corner/) | ✅ implemented | Automated WCS-finding routine via touch plate. Saves 2-3 min per job. |
 
 ## Plasma (future)
 

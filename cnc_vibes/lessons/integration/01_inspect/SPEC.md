@@ -129,9 +129,11 @@ Single addition. Pure Python, no native compilation. Installs cleanly on Windows
 lessons/integration/01_inspect/
   SPEC.md           ← this file
   README.md         ← user-facing once implemented
-  inspect.py        ← the script (argparse + pyserial)
+  grbl_inspect.py   ← the script (argparse + pyserial)
+                      (named grbl_inspect.py, not inspect.py,
+                       to avoid colliding with stdlib `inspect`)
   tests/
-    test_parsing.py ← unit tests on response parsers (synthetic GRBL output)
+    test_inspect.py ← unit tests on response parsers (synthetic GRBL output)
 ```
 
 Note: tests cover the response *parsers* (which take a string and return structured data) without needing a real machine. Integration testing requires a connected controller and is manual.
