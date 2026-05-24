@@ -635,6 +635,48 @@ See also: tools, materials, machine-profile, validate, preflight,
           lesson-mill-spacer
 """,
     ),
+    "lesson-pcb-drill": (
+        "lesson 4b — PCB Excellon-to-GCode drill converter",
+        """
+Location: lessons/mill/04_pcb/
+
+Converts a KiCAD-style Excellon drill file (.drl) into peck-drill
+GCode for the cnc_vibes pipeline. Half of the no-chemical PCB
+workflow; the other half (isolation routing of copper traces) is
+delegated to FlatCAM, which is a mature standalone tool.
+
+Usage:
+  python lessons/mill/04_pcb/excellon_to_gcode.py my_board.drl \\
+      --copper-thickness 1.6 --spindle-rpm 12000
+
+Flags:
+  drill_file              positional, path to .drl
+  --copper-thickness      default 1.6 mm (standard FR4)
+  --spindle-rpm           default 12000
+  --plunge-feed           default 80 mm/min (slow for FR4)
+  --peck-depth            default 0.5 mm
+
+What it does:
+  * Parses METRIC/INCH Excellon header, T<n>C<dia> tool defs.
+  * Groups holes by tool diameter, sorts smallest-first.
+  * Emits header + spindle on + per-tool blocks + M0 pause between
+    tools for bit swap + peck drill at each hole.
+
+What it does NOT do:
+  * Isolation routing of copper traces — use FlatCAM.
+  * Auto-leveling for board flatness — use FlatCAM.
+  * Gerber parsing — use FlatCAM.
+  * Double-sided board support.
+
+Full workflow:
+  KiCAD design -> Plot Gerber + Excellon
+  Gerber  -> FlatCAM isolation routing -> isolation.gcode
+  .drl    -> excellon_to_gcode.py     -> drill.gcode
+  Both    -> cnc.py validate + preflight + gSender run
+
+See also: machine-profile, validate, preflight, checklist
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -749,6 +791,7 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-mill-spacer",
         "lesson-center-punch",
         "lesson-aluminum-slot",
+        "lesson-pcb-drill",
     ],
 }
 
