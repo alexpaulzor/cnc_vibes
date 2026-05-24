@@ -465,7 +465,51 @@ Notes:
   * Validate with `cnc.py validate <gcode>` and walk
     `cnc.py preflight <gcode>` (auto-detects head=laser).
 
-See also: laser-materials, laser-checklist, validate, preflight
+See also: laser-materials, laser-checklist, validate, preflight,
+          lesson-calibration
+""",
+    ),
+    "lesson-calibration": (
+        "lesson 3b — laser calibration pattern",
+        """
+Location: lessons/laser/02_calibration/
+
+Generates a labeled matrix of small cut-through test squares at varying
+(power, passes, feed) combinations. After burning, you inspect which
+cells cut through cleanly and write the calibrated numbers back into
+profiles/laser_materials.yaml.
+
+Usage:
+  python lessons/laser/02_calibration/calibration.py \\
+      --material plywood_baltic_birch_3mm \\
+      --max-passes 5 \\
+      --powers 100,75,50,25 \\
+      --speeds 200,400,600
+
+Defaults:
+  --max-passes          5
+  --powers              100,75,50,25
+  --speeds              (empty - use material's default feed)
+  --cell-pitch          18.0 mm (cut square is 8mm centered)
+  --label-digit-height  5.0 mm
+
+Layout:
+  One panel per speed, stacked vertically.
+  Each panel: row labels = power %, col labels = pass count.
+  Each cell: 8mm square cut N times at the configured power and feed.
+  Panel headers show the feed rate.
+
+Notes:
+  * Default (1 speed) fits comfortably on a 300 mm Y bed. Practical
+    limit is ~3 speeds before stacking exceeds the envelope; the
+    validator's bounds rule catches overflow.
+  * Glyphs supported: digits 0-9 only (no letters needed - context
+    tells you which axis is which).
+  * Uses M4 dynamic power. Absolute power numbers are upper bounds;
+    cell-to-cell relative comparison is honest.
+
+See also: laser-materials, laser-checklist, validate, preflight,
+          lesson-spacer
 """,
     ),
     "validator-rules": (
@@ -576,7 +620,7 @@ CATEGORIES: dict[str, list[str]] = {
     ],
     "Concepts": ["concepts", "pipeline", "freecad", "workflow"],
     "Reference": ["checklist", "laser-checklist", "validator-rules", "failures"],
-    "Lessons": ["lesson-spacer"],
+    "Lessons": ["lesson-spacer", "lesson-calibration"],
 }
 
 
