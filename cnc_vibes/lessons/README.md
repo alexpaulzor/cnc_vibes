@@ -30,6 +30,7 @@ Standalone Python tools (no LLM dependency) that talk to the machine or watch it
 | Int-01 | [`inspect`](integration/01_inspect/) | ✅ implemented | Read GRBL state via serial; verify `$32`, WCS offsets, alarms before cut. |
 | Int-02 | [`snapshot`](integration/02_snapshot/) | ✅ implemented | One-shot webcam stills for before/after-cut setup verification. |
 | Int-03 | [`probe-corner`](integration/03_probe_corner/) | ✅ implemented | Automated WCS-finding routine via touch plate. Saves 2-3 min per job. |
+| Int-04 | [interactive laser cal](integration/04_interactive_laser_cal/) | ✅ implemented | Drives the laser to cut one test circle at a time; operator evaluates and adjusts params per iteration. Dial in Z focus + power + feed + passes by feel. |
 
 ## Plasma (future)
 
