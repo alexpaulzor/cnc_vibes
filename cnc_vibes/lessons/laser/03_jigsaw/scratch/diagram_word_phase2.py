@@ -303,76 +303,47 @@ def render_letter_polygons(
 
 
 def _trace_mask_polygons(mask: Image.Image, sample_step: int = 2):
-    """Build approximate shapely polygons from a binary mask.
+    """Trace letter outlines from a binary mask using cv2.findContours.
 
-    Uses a coarse approach: find pixel-edge points (boundary pixels) and
-    wrap them into polygons via convex+greedy-ordered traversal. This is
-    approximate but good enough for the diagram.
-
-    Better approaches (skimage's find_contours, opencv's findContours)
-    aren't included to keep deps light.
+    Uses RETR_CCOMP so we get a two-level hierarchy: outer contours
+    (the letter strokes) + inner contours (the holes in O, A, R bowl,
+    etc.). Each letter becomes one shapely Polygon with optional holes.
+    Returns the union of all letters.
     """
-    # Simpler fallback: just use the bounding boxes of each connected
-    # component as a rough Polygon. NOT accurate for letter shapes.
-    # For a real letter outline, we need contour tracing.
-    #
-    # Pragmatic: use PIL to find the BBOX of the letter and use that
-    # as the "letter region" — coarse but tells us "which sub-pieces
-    # overlap the letter area at all."
-    #
-    # Actually for the algorithm we need ACTUAL letter boundary, not bbox.
-    # Use a tracing approach via Pillow's getbbox in tiles.
+    import cv2
+    import numpy as np
 
-    # Use PIL's getbbox + a more careful per-component approach
-    # via flood fill: find each connected white region, trace its boundary
-    # by walking the mask.
+    arr = np.array(mask)
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if not contours or hierarchy is None:
+        return None
 
+    h = hierarchy[0]  # shape (n_contours, 4): [next, prev, first_child, parent]
     polygons = []
-    w, h = mask.size
-    visited = bytearray(w * h)
-    mb = mask.tobytes()
-    for sidx in range(w * h):
-        if visited[sidx] or mb[sidx] < 128:
+    for i, contour in enumerate(contours):
+        if h[i][3] != -1:
+            # has a parent → this is a hole; handled when we process its parent
             continue
-        # Flood-fill to find this component
-        sx, sy = sidx % w, sidx // w
-        comp = []
-        queue = deque([(sx, sy)])
-        visited[sidx] = 1
-        while queue:
-            x, y = queue.popleft()
-            comp.append((x, y))
-            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if 0 <= nx < w and 0 <= ny < h:
-                    nidx = ny * w + nx
-                    if not visited[nidx] and mb[nidx] >= 128:
-                        visited[nidx] = 1
-                        queue.append((nx, ny))
-        if len(comp) < 100:
+        outer = [(int(p[0][0]), int(p[0][1])) for p in contour]
+        if len(outer) < 3:
             continue
-        # Build a polygon from this component's boundary via a per-row scan
-        # (gather leftmost and rightmost x per y, then walk).
-        rows: dict[int, tuple[int, int]] = {}
-        for x, y in comp:
-            if y in rows:
-                a, b = rows[y]
-                rows[y] = (min(a, x), max(b, x))
-            else:
-                rows[y] = (x, x)
-        ys = sorted(rows.keys())
-        # Walk down the left edge, then up the right edge
-        pts = []
-        for y in ys:
-            pts.append((rows[y][0], y))
-        for y in reversed(ys):
-            pts.append((rows[y][1], y))
-        if len(pts) >= 3:
-            try:
-                poly = Polygon(pts)
-                if poly.is_valid and poly.area > 100:
-                    polygons.append(poly)
-            except Exception:
-                continue
+        # Collect holes (children of this outer contour)
+        holes = []
+        child_idx = h[i][2]
+        while child_idx != -1:
+            child = contours[child_idx]
+            hole_pts = [(int(p[0][0]), int(p[0][1])) for p in child]
+            if len(hole_pts) >= 3:
+                holes.append(hole_pts)
+            child_idx = h[child_idx][0]  # next sibling
+        try:
+            poly = Polygon(outer, holes=holes)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if hasattr(poly, "area") and poly.area > 100:
+                polygons.append(poly)
+        except Exception:
+            continue
 
     if not polygons:
         return None
@@ -442,7 +413,16 @@ def count_tabs_per_subpiece(subpieces, tabs):
     for sp in subpieces:
         count = 0
         relevant_tab_ids = []
-        boundary = sp["polygon"].boundary
+        poly = sp["polygon"]
+        if poly is None or poly.is_empty:
+            sp["tab_count"] = 0
+            sp["tab_ids"] = []
+            continue
+        boundary = poly.boundary
+        if boundary is None or boundary.is_empty:
+            sp["tab_count"] = 0
+            sp["tab_ids"] = []
+            continue
         for tab in tabs:
             tab_pt = Point(*tab["midpoint"])
             if boundary.distance(tab_pt) < TAB_PROXIMITY_PX:
@@ -451,6 +431,7 @@ def count_tabs_per_subpiece(subpieces, tabs):
                     count += 1
                     relevant_tab_ids.append(tab["id"])
         sp["tab_count"] = count
+        sp["tab_ids"] = relevant_tab_ids
         sp["tab_ids"] = relevant_tab_ids
 
 
