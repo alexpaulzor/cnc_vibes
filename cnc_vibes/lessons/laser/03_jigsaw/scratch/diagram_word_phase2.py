@@ -54,8 +54,9 @@ ROWS = PANEL_MM // PIECE_MM
 CELL_W = PIECE_MM * PX_PER_MM
 CELL_H = PIECE_MM * PX_PER_MM
 
-TAB_LEN = int(0.40 * CELL_W)
-TAB_HEIGHT = int(0.18 * CELL_W)
+TAB_CIRCLE_R = 22  # px; lollipop bulb radius (~4.4 mm at 5 px/mm)
+TAB_HEIGHT = 3 * TAB_CIRCLE_R  # total depth: stem (1 R) + circle (2 R)
+TAB_LEN = max(int(0.40 * CELL_W), 5 * TAB_CIRCLE_R)  # edge segment owned by tab
 MARGIN = 120
 LEGEND_H = 240
 SEED = 7
@@ -107,14 +108,40 @@ def bezier_pt(p0, p1, p2, p3, t):
 
 
 def tab_outline(direction, n=24):
-    pts = [(0.0, 0.0), (0.25, 0.0)]
-    d = direction
-    p0, p1, p2, p3 = (0.25, 0.0), (0.38, 0.15 * d), (0.10, 1.05 * d), (0.50, 1.05 * d)
+    """Lollipop tab: short stem (width = R, length ~ R) rising from the
+    edge into a circle of radius R. Stem walls extend tangentially into
+    the circle so the join is smooth. Returns (u, v) with u in [0, 1]
+    across TAB_LEN and v in [0, 1] across TAB_HEIGHT (= 3R).
+    """
+    R = TAB_CIRCLE_R
+    H = TAB_HEIGHT  # 3 * R
+    L = TAB_LEN
+    # Where the (vertical) stem walls tangent the circle (circle center at v = 2R):
+    v_tangent_px = 2 * R - R * math.sqrt(3) / 2  # ~1.134 * R
+    v_tangent = v_tangent_px / H
+    stem_half_u = (R / 2) / L
+    u_stem_left = 0.5 - stem_half_u
+    u_stem_right = 0.5 + stem_half_u
+
+    pts = [(0.0, 0.0), (u_stem_left, 0.0)]
+    pts.append((u_stem_left, v_tangent * direction))
+
+    # Arc from left tangent (theta = 4pi/3) over the top to right tangent
+    # (theta = -pi/3), sweeping 5pi/3 clockwise around circle center.
+    cx_norm = 0.5
+    cy_norm = (2 * R) / H  # 2/3
+    r_u = R / L
+    r_v = R / H  # 1/3
+    theta_start = 4 * math.pi / 3
+    theta_sweep = -5 * math.pi / 3
     for i in range(1, n + 1):
-        pts.append(bezier_pt(p0, p1, p2, p3, i / n))
-    p0, p1, p2, p3 = (0.50, 1.05 * d), (0.90, 1.05 * d), (0.62, 0.15 * d), (0.75, 0.0)
-    for i in range(1, n + 1):
-        pts.append(bezier_pt(p0, p1, p2, p3, i / n))
+        t = i / n
+        theta = theta_start + t * theta_sweep
+        u = cx_norm + r_u * math.cos(theta)
+        v = (cy_norm + r_v * math.sin(theta)) * direction
+        pts.append((u, v))
+
+    pts.append((u_stem_right, 0.0))
     pts.append((1.0, 0.0))
     return pts
 
