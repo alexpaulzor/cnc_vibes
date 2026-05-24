@@ -23,25 +23,31 @@ TOPICS: dict[str, tuple[str, str]] = {
     ),
     # ---- Subcommands ----
     "build": (
-        "cnc.py build — OpenSCAD → DXF + STL",
+        "cnc.py build — OpenSCAD → CSG (or STL)",
         """
-Usage:  cnc.py build <example> [--format dxf|stl]
+Usage:  cnc.py build <example> [--format csg|stl]
 
-Regenerates 2D and 3D geometry from an example's .scad source.
+Regenerates geometry from an example's .scad source.
 
 Inputs:
   examples/<name>/<name>.scad
 
-Outputs:
-  examples/<name>/build/<name>.dxf   (2D top-down projection)
-  examples/<name>/build/<name>.stl   (3D solid)
+Outputs (default: csg only):
+  examples/<name>/build/<name>.csg   (OpenSCAD CSG tree, the CAM-feeding
+                                      artifact — FreeCAD's OpenSCAD
+                                      workbench imports this as a real
+                                      B-rep Solid with selectable faces
+                                      and edges)
+  examples/<name>/build/<name>.stl   (optional, with --format stl —
+                                      handy for slicer preview or 3D
+                                      printing the part)
 
-The .scad file branches on a `mode` variable so the same source
-produces both outputs. See examples/hole_in_sheet/hole_in_sheet.scad
-for the pattern.
+CSG is preferred over DXF/STL because the same import works for both
+2.5D (pick top-face edges) and 3D contour (use the solid as the model),
+eliminating the historical 2D-vs-3D export fork.
 
 Options:
-  --format dxf    only produce the DXF
+  --format csg    only produce the CSG (default behavior anyway)
   --format stl    only produce the STL
 
 Environment:
@@ -49,7 +55,7 @@ Environment:
 
 Examples:
   cnc.py build hole_in_sheet
-  cnc.py build hole_in_sheet --format dxf
+  cnc.py build hole_in_sheet --format stl
 
 See also: doctor, workflow, pipeline
 """,
@@ -177,7 +183,7 @@ Examples:
         """
 Usage:  cnc.py clean
 
-Deletes every examples/*/build/ directory. These hold generated DXF /
+Deletes every examples/*/build/ directory. These hold generated CSG /
 STL / GCode and are gitignored; this command just clears local cache
 when you want a fully fresh build.
 
@@ -341,7 +347,8 @@ See also: pipeline, freecad, workflow
 The high-level pipeline (full mermaid diagram in cnc_for_the_scad.md §3):
 
   .scad source
-    -> openscad CLI               -> DXF (2.5D) or STL (3D)
+    -> openscad CLI               -> CSG (text CSG tree)
+    -> FreeCAD OpenSCAD workbench -> imports as real B-rep Solid
     -> FreeCAD CAM (GUI)          -> .FCStd CAM project
     -> FreeCAD post-processor     -> .gcode (GRBL dialect)
     -> cnc.py validate            (machine + tool safety)

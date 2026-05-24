@@ -53,7 +53,7 @@ All driven through `python cnc.py <subcommand>`. Identical on Windows and macOS.
 |---|---|
 | `cnc.py help` | Browse the toolchain reference manpage-style. `cnc.py help <topic>` for detail; `cnc.py help --search KEYWORD` to find topics. Start here when you forget a flag or want to know what's available. |
 | `cnc.py doctor` | Print the resolved toolchain (Python, OpenSCAD, FreeCADCmd, deps). Run this first. |
-| `cnc.py build <example>` | OpenSCAD → DXF + STL into `examples/<example>/build/`. |
+| `cnc.py build <example>` | OpenSCAD → CSG (default) into `examples/<example>/build/`. Add `--format stl` for an STL sidecar (slicer preview / 3D print). |
 | `cnc.py params <example>` | Print the lookup tables (machine, material, tool) and the derived feed/DOC/depth numbers for the job, with safety checks. |
 | `cnc.py preflight <example>` | Print params, then walk an interactive pre-cut safety checklist. Aborts with a non-zero exit if anything is unconfirmed. |
 | `cnc.py preflight <example> --print-only` | Same checklist, non-interactive. Useful for review or printing. |
@@ -71,8 +71,8 @@ Run `python cnc.py --help` or `python cnc.py <subcommand> --help` for full usage
 Each example under `examples/` represents one part you can cut. The end-to-end flow for an existing example:
 
 1. **Edit the design.** Open `examples/<name>/<name>.scad` in OpenSCAD (or any text editor) and tune parameters.
-2. **Regenerate geometry.** `python cnc.py build <name>` runs OpenSCAD twice — once with `mode="dxf"` for the 2D `projection()` and once for the STL.
-3. **CAM in FreeCAD** *(first time only)*. Open `examples/<name>/<name>.FCStd` in FreeCAD's CAM workbench. The detailed click-through for the `hole_in_sheet` example is in `cnc_for_the_scad.md` §6 — same shape for any 2.5D job: import the DXF, create a Job with stock derived from the part bounding box plus margin, attach a Tool Controller matching `profiles/tools.yaml`, add Profile operations (Inside for holes, Outside for the perimeter), drop a Tabs Dressup on the perimeter, configure the grbl post-processor, save the `.FCStd`.
+2. **Regenerate geometry.** `python cnc.py build <name>` runs OpenSCAD with `--export-format csg` and writes `examples/<name>/build/<name>.csg`. The CSG file is text describing OpenSCAD's evaluated CSG tree; FreeCAD's OpenSCAD workbench parses it and rebuilds the geometry as real B-rep solids with selectable faces and edges.
+3. **CAM in FreeCAD** *(first time only)*. Open `examples/<name>/<name>.FCStd` in FreeCAD. Switch to the **OpenSCAD** workbench, import the `.csg` (gives you a Part Solid). Switch to **CAM**, create a Job with the imported Solid as the Model, configure Stock (Box from base bounding box + 10 mm extra X/Y), set the WCS origin at stock front-left-top, attach a Tool Controller matching `profiles/tools.yaml`, add Profile operations (Inside for holes, Outside for the perimeter — `Side` is per-op, not per-edge), drop a Tabs Dressup on the perimeter Profile, configure the grbl post-processor, save the `.FCStd`. Detailed click-through in `cnc_for_the_scad.md` §6.
 4. **Post to GCode.** Right-click the Job in FreeCAD → Post Process. Save into `examples/<name>/build/<name>.gcode`.
 5. **Validate.** `python cnc.py validate examples/<name>/build/<name>.gcode`. Aborts on any rule violation (bounds, max feed, missing spindle-on, unsafe rapid, etc.).
 6. **Preflight.** `python cnc.py preflight <name>`. Prints the params (so you can sanity-check what's about to happen against the GCode that's about to run), then walks the safety checklist interactively. You must answer `y` to every item; anything else triggers an abort.
@@ -113,10 +113,10 @@ cnc_vibes/
 │   └── materials.yaml                 ← chipload tables, DOC fractions
 ├── examples/
 │   └── hole_in_sheet/
-│       ├── hole_in_sheet.scad         ← parametric source (DXF or STL output)
+│       ├── hole_in_sheet.scad         ← parametric source (CSG output)
 │       ├── job.yaml                   ← material + tool + spindle_rpm for this job
 │       ├── hole_in_sheet.FCStd        ← FreeCAD CAM project (you create in step 3)
-│       └── build/                     ← generated DXF / STL / GCode (gitignored)
+│       └── build/                     ← generated CSG / STL / GCode (gitignored)
 ├── scripts/
 │   ├── gcode_validate.py              ← per-line GCode rules
 │   └── job_params.py                  ← loaders + derived-param math (importable)

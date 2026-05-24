@@ -90,11 +90,19 @@ def cmd_build(args: argparse.Namespace) -> None:
     build_dir = example_dir / "build"
     build_dir.mkdir(exist_ok=True)
 
-    formats = [args.format] if args.format else ["dxf", "stl"]
+    # CSG is the primary intermediate: it preserves the OpenSCAD CSG tree,
+    # which FreeCAD's OpenSCAD workbench re-builds into a real B-rep solid
+    # (faces and edges selectable by name). STL stays available for visual
+    # QC / slicer preview but is no longer the CAM-feeding artifact.
+    formats = [args.format] if args.format else ["csg"]
     for fmt in formats:
         out = build_dir / f"{name}.{fmt}"
-        cmd = [scad, "-o", str(out), "-D", f'mode="{fmt}"', str(src)]
-        print("→", " ".join(cmd))
+        # Pass absolute paths to dodge OpenSCAD's relative-path quirks
+        # on macOS. The mode=-D variable is only meaningful for legacy
+        # .scad files that branch on it; CSG/STL exports of the default
+        # branch both produce the 3D solid.
+        cmd = [scad, "-o", str(out.resolve()), str(src.resolve())]
+        print("->", " ".join(cmd))
         subprocess.run(cmd, check=True)
 
 
@@ -269,9 +277,13 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="cnc", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="cmd", required=True)
 
-    b = subs.add_parser("build", help="OpenSCAD → DXF + STL for an example")
+    b = subs.add_parser("build", help="OpenSCAD -> CSG (or STL) for an example")
     b.add_argument("name", help="example name, e.g. hole_in_sheet")
-    b.add_argument("--format", choices=["dxf", "stl"], help="generate only one format")
+    b.add_argument(
+        "--format",
+        choices=["csg", "stl"],
+        help="generate only one format (default: csg)",
+    )
     b.set_defaults(func=cmd_build)
 
     v = subs.add_parser("validate", help="run gcode_validate on a GCode file")

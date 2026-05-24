@@ -73,12 +73,10 @@ Almost any 2.5D job is one or more of:
 ```mermaid
 flowchart TD
     SCAD[".scad source<br/>parametric design"]
-    SCAD -->|"openscad CLI"| GEOM{"geometry output"}
-    GEOM -->|"2D projection"| DXF["DXF<br/>flat profiles for 2.5D"]
-    GEOM -->|"3D mesh"| STL["STL<br/>for 3D contour"]
+    SCAD -->|"openscad CLI<br/>--export-format csg"| CSG["CSG<br/>OpenSCAD CSG tree<br/>(text format)"]
+    SCAD -.optional QC.-> STL["STL<br/>for slicer preview<br/>or mesh inspection"]
 
-    DXF --> CAM["FreeCAD CAM<br/>GUI, saved as .FCStd<br/>stock + tool + WCS<br/>ops + feeds and speeds<br/>tabs + safe-Z"]
-    STL --> CAM
+    CSG --> CAM["FreeCAD CAM<br/>GUI, saved as .FCStd<br/>imports CSG via OpenSCAD workbench<br/>--> real B-rep Solid<br/>stock + tool + WCS<br/>ops + feeds and speeds<br/>tabs + safe-Z"]
 
     PROFILE["profiles/*.yaml<br/>machine + tools + materials"]
     PROFILE -. parameters .-> CAM
@@ -100,21 +98,23 @@ flowchart TD
     FDM["FDM printer<br/>deferred branch"]
 
     CAM -. future laser CAM .-> LASER
-    SCAD -. future STL to slicer .-> FDM
+    STL -. future slicer .-> FDM
 
     classDef live fill:#d4edda,stroke:#155724,color:#000
     classDef deferred fill:#e2e3e5,stroke:#6c757d,color:#000
     classDef config fill:#fff3cd,stroke:#856404,color:#000
-    class SCAD,GEOM,DXF,STL,CAM,GCODE,VALIDATE,SETUP,SENDER,SPINDLE,PART live
+    classDef optional fill:#f5f5f5,stroke:#888,color:#000
+    class SCAD,CSG,CAM,GCODE,VALIDATE,SETUP,SENDER,SPINDLE,PART live
     class LASER,FDM,SWITCH deferred
     class PROFILE config
+    class STL optional
 ```
 
-Green = live in this iteration. Yellow = configuration parameters that feed multiple stages. Grey/dashed = designed-for but not yet implemented.
+Green = live in this iteration. Yellow = configuration parameters that feed multiple stages. Grey/dashed = designed-for but not yet implemented. Light grey = optional sidecar artifacts.
 
 Three things worth calling out:
 
-1. **The geometry export branches** because CAM tools want different inputs for different jobs. For 2.5D ("cut a hole in a sheet"), `projection()` → DXF is cleaner than feeding a mesh through CAM. For 3D contouring, STL is acceptable.
+1. **One intermediate format, not two.** OpenSCAD's CSG export (`--export-format csg`) writes the evaluated CSG tree as text — every `cube()`, `cylinder()`, `difference()`, `minkowski()`, etc. with their final parameters. FreeCAD's **OpenSCAD workbench** parses this and re-builds the geometry as native FreeCAD **Part objects** — real B-rep solids whose faces and edges are individually selectable by the CAM Profile op. This makes the same import usable for both 2.5D (pick top-face edges) and 3D contour (use the whole solid as the model), so there's no DXF-vs-STL fork. STL stays available as an optional sidecar for slicer preview or 3D-printing the part, but isn't on the CAM path.
 2. **There's a setup stage between GCode and machine** that has no analogue in FDM. The same GCode file produces totally different physical results depending on where you set the WCS, what tool is in the spindle, and what stock is on the bed. The GCode is necessary but not sufficient — the setup is data too.
 3. **The hardware switch on the back of your machine** routes the GRBL spindle PWM signal to either the spindle controller or the laser TTL input. This is why laser support is a *branch* of the pipeline rather than a separate parallel pipeline: same controller, same sender, same GCode dialect, with a different post-processor and a physical switch flip. The future laser branch will hook in at the CAM stage and require a flag on the per-job config so the validator knows which head it's targeting.
 
@@ -191,20 +191,22 @@ classDiagram
         path: .FCStd
     }
 
-    %% ---- Geometry sources (what enters the document) ----
-    class DraftShape {
-        from DXF import
-        Lines, Wires, Circles
+    %% ---- Geometry source (our path) ----
+    class CSGFile {
+        .csg file on disk
+        OpenSCAD CSG tree text
     }
-    class Sketch {
-        parametric, constrained
-        drawn inside FreeCAD
+    class OpenSCADImporter {
+        from FreeCAD OpenSCAD workbench
+        parses CSG, rebuilds as Part objects
     }
-    class Mesh {
-        from STL import
-        triangles only
-        not usable by 2.5D ops
+    class PartFeature {
+        FreeCAD Part Feature
+        wraps a Shape, has placement
     }
+
+    CSGFile ..> OpenSCADImporter : read by
+    OpenSCADImporter ..> PartFeature : produces
 
     %% ---- B-rep hierarchy (OpenCascade topology) ----
     class Shape {
@@ -226,8 +228,7 @@ classDiagram
     Wire *-- Edge
     Edge *-- Vertex
 
-    DraftShape ..> Shape : produces
-    Sketch ..> Shape : produces
+    PartFeature *-- Shape
 
     %% ---- CAM job tree ----
     class Job {
@@ -276,15 +277,13 @@ classDiagram
     Dressup <|-- TabsDressup
 
     %% ---- Composition ----
-    Document "1" *-- "0..*" DraftShape
-    Document "1" *-- "0..*" Sketch
-    Document "1" *-- "0..*" Mesh
+    Document "1" *-- "0..*" PartFeature
     Document "1" *-- "0..1" Job
 
     Job "1" *-- "1" Stock
     Job "1" *-- "1..*" ToolController
     Job "1" *-- "1..*" Operation
-    Job ..> Shape : Model references
+    Job ..> PartFeature : Model references
 
     Stock --|> Shape
     ToolController "1" *-- "1" ToolBit
@@ -299,13 +298,13 @@ classDiagram
 **How to read it, mapped to the click-through:**
 
 - **Document** is the `.FCStd` file you save in step 1. Everything else lives inside it.
-- **DraftShape** is what `File → Import` produces from your DXF — a flat set of wires, lines, and circles on the XY plane. **Sketch** is the alternative: a parametric 2D sketch you'd draw inside FreeCAD, used when you don't have external geometry. **Mesh** is what an STL import produces; it can feed 3D Surface operations but not the 2.5D Profile op we use here, which is why our pipeline exports DXF for 2.5D and STL only for 3D contour work.
-- The **B-rep hierarchy** (Shape ← Solid/Face/Wire/Edge/Vertex) is OpenCascade's geometry model. Every visible object in FreeCAD ultimately decomposes into this tree. The reason it matters for CAM: when step 6 says "pick the eight circle edges," you're literally selecting `Edge` objects out of the DraftShape's wire tree, and the Profile op stores references to those Edges as its **Base Geometry**.
+- **CSGFile → OpenSCADImporter → PartFeature** is our geometry pipeline. The `.csg` file produced by `cnc.py build` is text describing OpenSCAD's evaluated CSG tree. FreeCAD's **OpenSCAD workbench** parses it and constructs equivalent FreeCAD Part objects, each wrapping a real B-rep **Shape**. The result in the tree is a `PartFeature` (often named `group` or `difference` after the top-level CSG node) — a real solid with selectable faces and edges, not a mesh. (FreeCAD also has DraftShape, Sketch, and Mesh as alternative geometry sources for hand-drawn 2D sketches, DXF imports, and STL imports respectively — but our pipeline doesn't use them.)
+- The **B-rep hierarchy** (Shape ← Solid/Face/Wire/Edge/Vertex) is OpenCascade's geometry model. Every visible solid in FreeCAD decomposes into this tree. The reason it matters for CAM: when step 6 says "pick the hole-circle edges on the top face," you're literally selecting `Edge` objects out of the Solid's Face tree, and the Profile op stores references to those Edges as its **Base Geometry**.
 - **Job** (step 2) is the CAM root. It owns one **Stock** (step 3), one or more **ToolController**s (step 5, each wrapping a **ToolBit** with feeds and speeds), and one or more **Operation**s (step 6). It also holds the Post Processor name and output file path (step 8).
 - **Operation** is abstract — the concrete subclasses you'll see in the tree are `Profile`, `Pocket`, `Drilling`. Each Operation references a single ToolController (so changing a feed rate updates every op that uses that tool) and an arbitrary number of Base Geometry edges/faces. The hole_in_sheet example uses two `Profile` instances because `Side` is an Operation-level property, not per-edge.
 - **Dressup** is FreeCAD's "decorator pattern": a wrapper that sits on top of an Operation and modifies the toolpath it emits. `TabsDressup` (step 7) is the one you'll use most; others exist (Boundary Compensation, Lead In/Out) but aren't needed for the example.
 
-When you re-open the saved `.FCStd` after a SCAD change, FreeCAD walks this tree to regenerate toolpaths. The Job → Stock → Operation references follow the geometry that was updated by the DXF reimport, so most parameter changes don't require any clicks beyond `Post Process`.
+When you re-open the saved `.FCStd` after a SCAD change, FreeCAD walks this tree to regenerate toolpaths. The Job → Stock → Operation references follow the geometry that was updated by the CSG reimport, so most parameter changes don't require any clicks beyond `Post Process`.
 
 ---
 
@@ -314,9 +313,9 @@ When you re-open the saved `.FCStd` after a SCAD change, FreeCAD walks this tree
 This is in `examples/hole_in_sheet/`. The flow:
 
 1. **Design.** Edit `hole_in_sheet.scad`. It's parametric on sheet size, sheet thickness, and hole grid.
-2. **Export geometry.** `python cnc.py build hole_in_sheet` runs OpenSCAD twice — once with `-D 'mode="dxf"'` to produce the 2D `projection()`, once for the STL — and writes both into `examples/hole_in_sheet/build/`.
-3. **First time only — CAM setup in FreeCAD.** Open FreeCAD, import the DXF, create a Path Job, define stock from the sheet dimensions, pick a tool (from your tool table), add a Profile operation with tabs, configure feeds/speeds/DOC referencing your material spec. Save as `hole_in_sheet.FCStd` in the example directory. *This is the one step the guide can't automate — it's data entry that benefits from visual feedback.* See the **[click-through detail](#click-through-hole_in_sheet-cam-setup-in-freecad)** below for the exact clicks.
-4. **Iterate.** When you change `hole_in_sheet.scad` (different hole size, more holes, etc), re-run `python cnc.py build hole_in_sheet`. The DXF regenerates; FreeCAD picks up the new geometry on next open; you re-post to GCode.
+2. **Export geometry.** `python cnc.py build hole_in_sheet` runs OpenSCAD once with `--export-format csg` and writes `examples/hole_in_sheet/build/hole_in_sheet.csg` — a text representation of the evaluated CSG tree. (`--format stl` is also available if you want an STL for slicer preview, but it's not on the CAM path.)
+3. **First time only — CAM setup in FreeCAD.** Open FreeCAD, import the CSG via the OpenSCAD workbench (which rebuilds it as a real B-rep solid), switch to CAM, create a Job, define stock from the sheet dimensions, pick a tool (from your tool table), add Profile operations with tabs, configure feeds/speeds/DOC referencing your material spec. Save as `hole_in_sheet.FCStd` in the example directory. *This is the one step the guide can't automate — it's data entry that benefits from visual feedback.* See the **[click-through detail](#click-through-hole_in_sheet-cam-setup-in-freecad)** below for the exact clicks.
+4. **Iterate.** When you change `hole_in_sheet.scad` (different hole size, more holes, etc), re-run `python cnc.py build hole_in_sheet`. The CSG regenerates; reopen the FCStd and the imported geometry refreshes; re-post to GCode.
 5. **Validate.** `python cnc.py validate examples/hole_in_sheet/build/hole_in_sheet.gcode` runs `scripts/gcode_validate.py` using your machine profile and tool table. Catches bounds violations, feed overruns, missing safe-Z compliance.
 6. **Cut.** Clamp the sheet, install the endmill, probe Z (the touch plate compensates for tool length), set X/Y origin to the corner of the stock that matches your CAM WCS, run dust collection, send via gSender.
 
@@ -325,9 +324,9 @@ Almost every parameter you set in step 3 is a function of (material, tool, machi
 <details>
 <summary><b>Click-through: hole_in_sheet CAM setup in FreeCAD</b> (one-time, ~10–15 min)</summary>
 
-Written against current FreeCAD (CAM workbench). The FreeCAD wiki has screenshots of every dialog mentioned here: <https://wiki.freecad.org/CAM_Workbench>.
+Written against current FreeCAD (CAM workbench + OpenSCAD workbench, both shipped with the standard install). The FreeCAD wiki has screenshots of every dialog mentioned here: <https://wiki.freecad.org/CAM_Workbench>.
 
-Assumes you've already run `python cnc.py build hole_in_sheet` and have the DXF on disk. The example's defaults: part is 200 × 100 × 6 mm; stock is 220 × 120 × 6 mm (10 mm extra on each X/Y side, same thickness as the part).
+Assumes you've already run `python cnc.py build hole_in_sheet` and have the `.csg` on disk. The example's parameters (sheet_x, sheet_y, sheet_z in `hole_in_sheet.scad`) drive the part size; the stock dimensions used below assume the current defaults (60 × 45 × 3 mm) with a 10 mm margin on each X/Y side. Adjust if you've changed the SCAD parameters.
 
 **Coordinate convention used below** (pick this once for the whole repo so every job lines up the same way):
 
@@ -338,22 +337,23 @@ You'll match this on the machine by touching off X/Y on the front-left corner of
 
 ---
 
-##### 1. Open and import
+##### 1. Open and import the CSG
 
 1. Launch FreeCAD.
 2. **File → New** to create an empty document.
 3. **File → Save As…** → save as `examples/hole_in_sheet/hole_in_sheet.FCStd` in this repo.
-4. **File → Import** → select `examples/hole_in_sheet/build/hole_in_sheet.dxf`.
-   - Accept the import defaults (Draft shapes).
-   - Result: a set of Draft wires on the XY plane at Z=0 — one closed rectangle (the sheet outline) and eight closed circles (the holes).
-5. Press `0` to fit view, then `2` for top view.
+4. Switch to the **OpenSCAD** workbench (workbench selector, top-left). This is the workbench that knows how to parse `.csg` files.
+5. **File → Import** → select `examples/hole_in_sheet/build/hole_in_sheet.csg`.
+   - Accept the import defaults.
+   - Result: a single Part object (named something like `group` or `difference` after the top-level CSG node) appears in the tree. It is a real B-rep **Solid** — not a mesh, not a flat 2D set of wires. Faces and edges are individually selectable.
+6. Press `0` to fit view, then `2` for top view. You should see the sheet outline with the hole circles visible on the top face.
 
 ##### 2. Create the Job
 
 1. Switch to the **CAM** workbench (workbench selector, top-left).
 2. **CAM → Job** opens the Job creation dialog.
 3. In the dialog:
-   - **Base objects:** select all the imported Draft shapes (the rectangle and circles).
+   - **Base objects:** select the imported Part object (the single Solid from step 1).
    - **Template:** leave empty (or pick one of your saved templates once you have them).
    - Click **OK**.
 
@@ -361,13 +361,14 @@ A `Job` object appears in the tree with sub-folders `Model`, `Stock`, `Operation
 
 ##### 3. Configure Stock
 
+The imported Solid already has the part's real Z thickness, so Stock can wrap it directly.
+
 1. In Job-Edit, **Stock** tab → **Stock type:** *Create Box from base bounding box*.
 2. **Extra dimensions:**
    - `Neg. X` = **10**, `Pos. X` = **10**
    - `Neg. Y` = **10**, `Pos. Y` = **10**
-   - `Neg. Z` = **6**, `Pos. Z` = **0**
-   - The DXF wires are flat at Z=0; we tell the Stock to extend 6 mm downward so it represents the 6 mm sheet sitting at Z = −6..0.
-3. Confirm the displayed stock dimensions read **220 × 120 × 6 mm**.
+   - `Neg. Z` = **0**, `Pos. Z` = **0** (the imported solid already has the part's full thickness)
+3. For the default `.scad` (60 × 45 × 3), the displayed stock dimensions should read **80 × 65 × 3 mm**. If your `.scad` parameters differ, the stock will scale automatically — that's the win from importing a real solid.
 
 ##### 4. Set the WCS origin
 
@@ -384,27 +385,29 @@ A `Job` object appears in the tree with sub-folders `Model`, `Stock`, `Operation
    - **Name:** `flat_3.175mm_2flute` (matches the id in `profiles/tools.yaml`)
 2. The Tool Controller appears under the Job. Double-click it and set:
    - **Spindle speed:** `18000` rpm
-   - **Horizontal feed:** `1440` mm/min — from `chipload × flutes × rpm = 0.04 × 2 × 18000` (chipload from `profiles/materials.yaml` for `plywood_baltic_birch_6mm` + this tool)
+   - **Horizontal feed:** `1440` mm/min — from `chipload × flutes × rpm = 0.04 × 2 × 18000` (chipload from `profiles/materials.yaml` for `plywood_baltic_birch_3mm` + this tool)
    - **Vertical feed (plunge):** `300` mm/min — matches `max_plunge_mm_per_min` in `profiles/tools.yaml`
    - **Spindle direction:** Forward (M3)
 3. Click **OK** to close Job-Edit.
 
+(`python cnc.py params hole_in_sheet` prints all of these numbers along with their derivation — useful for sanity-checking before you start clicking.)
+
 ##### 6. Add the Profile operations
 
-The Profile op's `Side` (Inside/Outside) is per-operation, not per-edge. So we make **two** Profile operations sharing the same depths and tool: one for the hole interiors, one for the outer perimeter.
+The Profile op's `Side` (Inside/Outside) is per-operation, not per-edge. So we make **two** Profile operations sharing the same depths and tool: one for the hole interiors, one for the outer perimeter. With a real Solid imported, the edges you'll pick are on the **top face** of the solid (visible from the top view, at Z = sheet thickness).
 
 **Shared depths and heights for both ops** (set in each Profile's Depths tab):
 
 - **Start depth:** `0`
-- **Final depth:** `-6.2` (cuts 0.2 mm into the spoilboard for clean break-through)
-- **Step down:** `2.0` (three passes: −2, −4, −6.2)
+- **Final depth:** `-3.2` (cuts 0.2 mm into the spoilboard for clean break-through; for a different `sheet_z`, this is `-sheet_z - 0.2`)
+- **Step down:** `1.5` (two passes for the 3 mm sheet: −1.5, −3.2)
 - **Safe height:** `5`
 - **Clearance height:** `10`
 
 **6a. Profile for hole interiors:**
 
 1. With the Job selected, **CAM → Profile**.
-2. **Base Geometry:** Add → pick the eight circle edges in the 3D view.
+2. **Base Geometry:** Add → pick the circular edges of each hole on the top face of the Solid in the 3D view (rotate the view if needed; they're the round edges where the hole walls meet the top face).
 3. **Depths** tab: set the shared values above.
 4. **Operation** tab: **Cut side:** *Inside*. **Direction:** *Climb*.
 5. Click **OK**.
@@ -412,7 +415,7 @@ The Profile op's `Side` (Inside/Outside) is per-operation, not per-edge. So we m
 **6b. Profile for outer perimeter:**
 
 1. **CAM → Profile** again.
-2. **Base Geometry:** Add → pick the four edges of the outer rectangle.
+2. **Base Geometry:** Add → pick the perimeter edges of the top face. With the rounded corners from `minkowski()` in the current `.scad`, this is a mix of four straight edges and four arc edges — pick them all. (If your `.scad` doesn't round the corners, it's just four straight edges.)
 3. **Depths** tab: same shared values.
 4. **Operation** tab: **Cut side:** *Outside*. **Direction:** *Climb*.
 5. Click **OK**.
@@ -426,7 +429,7 @@ The hole discs fall through harmlessly. The outer rectangle would release the en
 1. Right-click **Profile001** (the perimeter op from 6b) in the tree → **Dress-up → Tabs**.
 2. Tabs dialog:
    - **Width:** `5` mm
-   - **Height:** `1.5` mm
+   - **Height:** `1.5` mm (half the sheet thickness — for a 3 mm sheet, this leaves 1.5 mm of material at each tab)
    - **Count:** `4` (FreeCAD distributes around the perimeter)
 3. Click **OK**. The outer cut's toolpaths now jog up at four locations.
 
@@ -446,7 +449,7 @@ python cnc.py validate examples/hole_in_sheet/build/hole_in_sheet.gcode
 
 ##### 9. Save and commit
 
-`File → Save` writes the `.FCStd`. Commit it next to the `.scad`. From now on, a SCAD parameter change is: `python cnc.py build hole_in_sheet` regenerates the DXF → reopen the `.FCStd` (geometry picks up automatically because Stock was "From Base shape") → right-click Job → Post Process → validate.
+`File → Save` writes the `.FCStd`. Commit it next to the `.scad`. From now on, a SCAD parameter change is: `python cnc.py build hole_in_sheet` regenerates the CSG → reopen the `.FCStd` (the imported Solid refreshes because FreeCAD re-reads the linked `.csg`) → right-click Job → Post Process → validate.
 
 ---
 
@@ -528,7 +531,7 @@ Use `python3` instead of `python` on macOS unless you've aliased it.
 ### 7.3 Running things
 
 ```
-python cnc.py build hole_in_sheet                  # SCAD → DXF + STL
+python cnc.py build hole_in_sheet                  # SCAD → CSG (--format stl for STL)
 python cnc.py validate path/to/file.gcode          # GCode checks
 python cnc.py test                                 # run the pytest suite
 python cnc.py clean                                # nuke examples/*/build
@@ -555,7 +558,7 @@ All commands work identically on Windows 11 and macOS — `cnc.py` uses `pathlib
 - Templated CAM setup (replacing step 3 of §6 with a script that generates a `.FCStd` from a YAML job spec) — possible via FreeCAD's Python API, but not worth building until you've done a few jobs by hand and know which knobs you actually reuse.
 - Real-world tuning: filling in the `# TODO` values in the machine profile from your actual machine; building out the tools and materials catalogs as you accumulate experience.
 
-**The next thing to do** is run the example: install requirements, regenerate the DXF, do a CAM setup pass in FreeCAD, post to GCode, run the validator. The first job will surface what's missing or wrong in the profile and validator — that feedback drives v3.
+**The next thing to do** is run the example: install requirements, regenerate the CSG, do a CAM setup pass in FreeCAD, post to GCode, run the validator. The first job will surface what's missing or wrong in the profile and validator — that feedback drives v3.
 
 
 ## Notes
