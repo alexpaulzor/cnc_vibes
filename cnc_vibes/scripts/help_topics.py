@@ -512,6 +512,50 @@ See also: laser-materials, laser-checklist, validate, preflight,
           lesson-spacer
 """,
     ),
+    "lesson-mill-spacer": (
+        "lesson 4a — parametric router-cut spacer",
+        """
+Location: lessons/mill/01_spacer/
+
+First spindle-side lesson. Hybrid toolchain: if the geometry is a
+plain cylindrical washer (all four diameters equal) the script emits
+GCode directly. If any face has different OD/ID than the opposite
+face (frustum), it generates the .scad/.csg and hands off to FreeCAD
+CAM.
+
+Usage:
+  # Cylindrical (fully automated)
+  python lessons/mill/01_spacer/mill_spacer.py \\
+      --height 6 --od 8 --id 3.2
+
+  # Frustum (FreeCAD CAM handoff)
+  python lessons/mill/01_spacer/mill_spacer.py \\
+      --height 12 --top-od 10 --bottom-od 14 \\
+      --top-id 3.2 --bottom-id 3.2
+
+Defaults:
+  --height       6.0 mm
+  --od           8.0 mm (sets top + bottom unless overridden)
+  --id           3.2 mm (M3 clearance; sets top + bottom)
+  --material     plywood_baltic_birch_6mm
+  --tool         flat_3.175mm_2flute
+  --spindle-rpm  18000
+
+Hole strategy is auto-picked:
+  * helical bore when id > 2.5 x tool_diameter
+  * peck drill otherwise
+  * errors out if id < tool_diameter (pick a smaller tool)
+
+Known limitations:
+  * Tabs not yet implemented - part releases on the final pass.
+    Hand-add M0 pause or clamp from below.
+  * Tool change not handled - run twice for different hole + perimeter
+    tools and combine manually.
+
+See also: machine-profile, tools, materials, validate, preflight,
+          checklist, lesson-spacer
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -620,7 +664,7 @@ CATEGORIES: dict[str, list[str]] = {
     ],
     "Concepts": ["concepts", "pipeline", "freecad", "workflow"],
     "Reference": ["checklist", "laser-checklist", "validator-rules", "failures"],
-    "Lessons": ["lesson-spacer", "lesson-calibration"],
+    "Lessons": ["lesson-spacer", "lesson-calibration", "lesson-mill-spacer"],
 }
 
 
