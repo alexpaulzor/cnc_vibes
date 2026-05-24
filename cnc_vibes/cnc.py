@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,10 @@ EXAMPLES = ROOT / "examples"
 PROFILES = ROOT / "profiles"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+from gcode_validate import detect_head  # noqa: E402
+from help_topics import render_index, render_topic, search  # noqa: E402
 from job_params import (  # noqa: E402
+    LASER_PREFLIGHT_CHECKLIST,
     PREFLIGHT_CHECKLIST,
     compute_derived,
     find_by_id,
@@ -34,7 +38,6 @@ from job_params import (  # noqa: E402
     load_job,
     load_yaml,
 )
-from help_topics import render_index, render_topic, search  # noqa: E402
 
 
 def _find_executable(name: str, env_var: str, fallbacks: list[str]) -> str | None:
@@ -131,7 +134,14 @@ def cmd_validate(args: argparse.Namespace) -> None:
 
 def cmd_test(args: argparse.Namespace) -> None:
     rc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", str(ROOT / "tests")]
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            str(ROOT / "tests"),
+            str(ROOT / "lessons"),
+        ]
     ).returncode
     sys.exit(rc)
 
@@ -198,8 +208,67 @@ def cmd_params(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _walk_checklist(
+    checklist: list[tuple[str, str]],
+    bindings: dict,
+    print_only: bool,
+    arg_for_rerun: str,
+) -> None:
+    """Walk a checklist either interactively or in print-only mode.
+
+    `bindings` is the dict passed to .format() for each prompt template.
+    Exits non-zero if any item is unconfirmed during an interactive walk.
+    """
+    if print_only:
+        for _, prompt_tpl in checklist:
+            print(f"  [ ] {prompt_tpl.format(**bindings)}")
+        print("\n(--print-only: not interactive. Tick boxes mentally.)")
+        return
+
+    failed = []
+    for key, prompt_tpl in checklist:
+        prompt = prompt_tpl.format(**bindings)
+        try:
+            ans = input(f"  {prompt}  [y/n/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\nABORT: preflight interrupted.")
+        if ans == "q":
+            sys.exit("\nABORT: preflight quit by user.")
+        if ans not in ("y", "yes"):
+            failed.append(key)
+            print("      -> NOT CONFIRMED")
+        else:
+            print("      -> ok")
+
+    print()
+    if failed:
+        sys.exit(
+            f"ABORT: {len(failed)} item(s) not confirmed: {', '.join(failed)}.\n"
+            f"Resolve each one and re-run `cnc.py preflight {arg_for_rerun}`."
+        )
+    print("All preflight items confirmed. Cleared to start the cut.")
+
+
+def _looks_like_gcode_path(s: str) -> bool:
+    """Heuristic: if it ends in .gcode/.nc/.cnc OR is an existing file path."""
+    if s.endswith((".gcode", ".nc", ".cnc", ".tap")):
+        return True
+    return Path(s).exists() and Path(s).is_file()
+
+
 def cmd_preflight(args: argparse.Namespace) -> None:
-    job, machine, material, tool, derived = _load_job_context(args.name)
+    # Two modes: example-name (spindle, job.yaml-driven) or raw gcode path
+    # (head detected from the file's ;HEAD: marker; laser uses the laser
+    # checklist).
+    if _looks_like_gcode_path(args.name):
+        _preflight_from_gcode(Path(args.name), args.print_only)
+    else:
+        _preflight_from_example(args.name, args.print_only)
+
+
+def _preflight_from_example(name: str, print_only: bool) -> None:
+    """Spindle preflight: load job.yaml + machine + tool, show params, walk."""
+    job, machine, material, tool, derived = _load_job_context(name)
     print(format_report(job, machine, material, tool, derived))
 
     if any(not c["ok"] for c in derived["checks"]):
@@ -214,43 +283,69 @@ def cmd_preflight(args: argparse.Namespace) -> None:
     print("=" * 60)
     print()
 
-    if args.print_only:
-        for _, prompt_tpl in PREFLIGHT_CHECKLIST:
-            prompt = prompt_tpl.format(
-                tool_id=tool["id"],
-                tool_diameter=tool["diameter_mm"],
-                gcode=job.gcode,
-            )
-            print(f"  [ ] {prompt}")
-        print("\n(--print-only: not interactive. Tick boxes mentally.)")
-        return
+    _walk_checklist(
+        PREFLIGHT_CHECKLIST,
+        {
+            "tool_id": tool["id"],
+            "tool_diameter": tool["diameter_mm"],
+            "gcode": job.gcode,
+        },
+        print_only=print_only,
+        arg_for_rerun=name,
+    )
 
-    failed = []
-    for key, prompt_tpl in PREFLIGHT_CHECKLIST:
-        prompt = prompt_tpl.format(
-            tool_id=tool["id"],
-            tool_diameter=tool["diameter_mm"],
-            gcode=job.gcode,
-        )
-        try:
-            ans = input(f"  {prompt}  [y/n/q]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            sys.exit("\nABORT: preflight interrupted.")
-        if ans == "q":
-            sys.exit("\nABORT: preflight quit by user.")
-        if ans not in ("y", "yes"):
-            failed.append(key)
-            print(f"      -> NOT CONFIRMED")
-        else:
-            print(f"      -> ok")
 
+def _preflight_from_gcode(gcode_path: Path, print_only: bool) -> None:
+    """Detect head from the GCode file, then walk the matching checklist."""
+    if not gcode_path.exists():
+        sys.exit(f"error: gcode file not found: {gcode_path}")
+
+    text = gcode_path.read_text()
+    head = detect_head(text)
+    material = _extract_material_comment(text) or "(unspecified)"
+
+    print(f"File:     {gcode_path}")
+    print(f"Head:     {head}")
+    print(f"Material: {material}")
     print()
-    if failed:
-        sys.exit(
-            f"ABORT: {len(failed)} item(s) not confirmed: {', '.join(failed)}.\n"
-            "Resolve each one and re-run `cnc.py preflight {0}`.".format(args.name)
-        )
-    print("All preflight items confirmed. Cleared to start the cut.")
+    print("Reminder: run `cnc.py validate` on this file first if you haven't.")
+    print()
+
+    if head == "laser":
+        checklist = LASER_PREFLIGHT_CHECKLIST
+        banner = "Pre-burn checklist — confirm each item before firing the laser."
+    else:
+        # Spindle-style preflight from a raw gcode path: we don't have a
+        # job.yaml so the params report is skipped. Walk the spindle
+        # checklist with placeholder bindings.
+        checklist = PREFLIGHT_CHECKLIST
+        banner = "Pre-cut checklist — confirm each item before starting the spindle."
+
+    print("=" * 60)
+    print(banner)
+    print("=" * 60)
+    print()
+
+    _walk_checklist(
+        checklist,
+        {
+            "tool_id": "(see gcode header)",
+            "tool_diameter": "(see gcode header)",
+            "material": material,
+            "gcode": str(gcode_path),
+        },
+        print_only=print_only,
+        arg_for_rerun=str(gcode_path),
+    )
+
+
+def _extract_material_comment(gcode_text: str) -> str | None:
+    """Extract ;MATERIAL: <id> from the GCode header, if present."""
+    for line in gcode_text.splitlines()[:30]:
+        m = re.search(r";\s*MATERIAL:\s*(\S+)", line)
+        if m:
+            return m.group(1)
+    return None
 
 
 def cmd_help(args: argparse.Namespace) -> None:

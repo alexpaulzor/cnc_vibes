@@ -10,7 +10,7 @@ from their source modules so they don't drift from the actual behavior.
 
 from __future__ import annotations
 
-from job_params import PREFLIGHT_CHECKLIST
+from job_params import LASER_PREFLIGHT_CHECKLIST, PREFLIGHT_CHECKLIST
 
 
 # Topic name (stable, kebab-case) -> (one-line title, body)
@@ -404,6 +404,70 @@ See also: pipeline, build, validate, preflight
         "checklist — full preflight safety checklist",
         "",  # rendered dynamically from PREFLIGHT_CHECKLIST
     ),
+    "laser-checklist": (
+        "laser-checklist — full pre-burn safety checklist",
+        "",  # rendered dynamically from LASER_PREFLIGHT_CHECKLIST
+    ),
+    "laser-materials": (
+        "profiles/laser_materials.yaml — per-material laser params",
+        """
+Per-material laser settings for diode-laser cutting/engraving. Read by
+the lesson scripts (e.g. lessons/laser/01_spacer/spacer.py) to translate
+material id into power/feed/passes.
+
+Per-material fields:
+  id                  stable string id
+  family              "wood" | "acrylic" | "paper" | ...
+  thickness_mm        sheet thickness
+  laser:
+    power_percent     S value as percent of 1000
+    feed_mm_per_min   cut feedrate (M4 dynamic mode scales power with speed)
+    passes            cut-through passes
+    notes             optional free-form safety/quality notes
+
+Values are STARTING POINTS for a 10W diode laser. Lesson 3b
+(calibration) refines them empirically per machine.
+
+NEVER laser-cut: PVC, polycarbonate, ABS, vinyl, anything chlorinated,
+galvanized metal. The file's tail comment lists these.
+
+See also: lesson-spacer, laser-checklist
+""",
+    ),
+    "lesson-spacer": (
+        "lesson 3a — parametric laser-cut PCB spacer",
+        """
+Location: lessons/laser/01_spacer/
+
+First fully-automated toolchain in the repo. No FreeCAD, no CAM project.
+Pure Python: parameters in -> GRBL laser-mode GCode out -> validator
+passes -> cut. Demonstrates the CAM-as-code pattern for simple
+parametric parts.
+
+Usage:
+  python lessons/laser/01_spacer/spacer.py \\
+      --od 6.0 --id 3.2 \\
+      --material plywood_baltic_birch_3mm \\
+      --out lessons/laser/01_spacer/build/spacer.gcode
+
+Defaults:
+  --od         6.0 mm (small PCB-standoff footprint)
+  --id         3.2 mm (M3 screw clearance)
+  --material   plywood_baltic_birch_3mm
+  --out        build/spacer_<od>_<id>.gcode under the lesson dir
+
+Notes:
+  * Toolpath dimensions are NOT kerf-compensated. Finished hole is
+    ~kerf-width larger than --id; finished OD is ~kerf-width smaller
+    than --od. Add the kerf to --id and subtract from --od if a precise
+    fit matters.
+  * Output GCode uses M4 dynamic power and $32=1 laser mode.
+  * Validate with `cnc.py validate <gcode>` and walk
+    `cnc.py preflight <gcode>` (auto-detects head=laser).
+
+See also: laser-materials, laser-checklist, validate, preflight
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -503,28 +567,35 @@ CATEGORIES: dict[str, list[str]] = {
         "post",
         "help",
     ],
-    "Configuration": ["machine-profile", "tools", "materials", "job"],
+    "Configuration": [
+        "machine-profile",
+        "tools",
+        "materials",
+        "laser-materials",
+        "job",
+    ],
     "Concepts": ["concepts", "pipeline", "freecad", "workflow"],
-    "Reference": ["checklist", "validator-rules", "failures"],
+    "Reference": ["checklist", "laser-checklist", "validator-rules", "failures"],
+    "Lessons": ["lesson-spacer"],
 }
 
 
-def _render_checklist_body() -> str:
-    lines = [
-        "The interactive preflight (`cnc.py preflight <example>`) walks",
-        "these items in order. Each requires y/yes to confirm.",
-        "",
-    ]
-    for i, (key, prompt) in enumerate(PREFLIGHT_CHECKLIST, start=1):
+def _render_checklist_body(
+    checklist: list[tuple[str, str]],
+    intro: str,
+    placeholders_note: str,
+    see_also: str = "preflight",
+) -> str:
+    lines = [intro, ""]
+    for i, (key, prompt) in enumerate(checklist, start=1):
         # Strip the format placeholders for the static help view; show the
         # template literally so the user knows what to expect.
         lines.append(f"  {i:2d}. [{key}] {prompt}")
     lines += [
         "",
-        "Placeholders like {tool_id} and {gcode} are filled in at runtime",
-        "from the job's tool and gcode path.",
+        placeholders_note,
         "",
-        "See also: preflight",
+        f"See also: {see_also}",
     ]
     return "\n".join(lines)
 
@@ -554,7 +625,27 @@ def render_topic(name: str) -> str:
         return _render_index()
     if name == "checklist":
         title, _ = TOPICS["checklist"]
-        return f"{title}\n{'=' * len(title)}\n\n{_render_checklist_body()}"
+        body = _render_checklist_body(
+            PREFLIGHT_CHECKLIST,
+            "The interactive `cnc.py preflight <example>` walks these items"
+            " in order. Each requires y/yes to confirm.",
+            "Placeholders like {tool_id} and {gcode} are filled in at runtime"
+            " from the job's tool and gcode path.",
+            see_also="preflight, laser-checklist",
+        )
+        return f"{title}\n{'=' * len(title)}\n\n{body}"
+    if name == "laser-checklist":
+        title, _ = TOPICS["laser-checklist"]
+        body = _render_checklist_body(
+            LASER_PREFLIGHT_CHECKLIST,
+            "The interactive `cnc.py preflight <gcode>` walks these items"
+            " when the GCode contains `;HEAD: laser`. Each requires y/yes"
+            " to confirm.",
+            "Placeholders like {material} and {gcode} are filled in at runtime"
+            " from the GCode file's header comments.",
+            see_also="preflight, checklist, laser-materials",
+        )
+        return f"{title}\n{'=' * len(title)}\n\n{body}"
     if name not in TOPICS:
         raise KeyError(name)
     title, body = TOPICS[name]
@@ -574,7 +665,13 @@ def search(keyword: str) -> list[str]:
         haystack = (title + " " + body).lower()
         if needle in haystack or needle in name.lower():
             hits.append(name)
-    # Special-case the dynamic checklist content
-    if needle in _render_checklist_body().lower() and "checklist" not in hits:
-        hits.append("checklist")
+    # Special-case the dynamically-rendered checklist topics so search
+    # can find content that only exists at render time.
+    for topic_name, checklist in (
+        ("checklist", PREFLIGHT_CHECKLIST),
+        ("laser-checklist", LASER_PREFLIGHT_CHECKLIST),
+    ):
+        rendered = " ".join(prompt for _, prompt in checklist).lower()
+        if needle in rendered and topic_name not in hits:
+            hits.append(topic_name)
     return sorted(hits)

@@ -153,6 +153,70 @@ PREFLIGHT_CHECKLIST: list[tuple[str, str]] = [
 ]
 
 
+# Pre-burn safety checklist for laser jobs. Different concerns from the
+# spindle list: no probe, no spindle motor, focus instead of Z probing,
+# fire safety, material toxicity. Templates may reference {material} and
+# {gcode}.
+LASER_PREFLIGHT_CHECKLIST: list[tuple[str, str]] = [
+    (
+        "hardware_switch",
+        "Hardware switch on machine rear set to LASER (not spindle)?",
+    ),
+    (
+        "spindle_off",
+        "Spindle motor unpowered and physically stopped?",
+    ),
+    (
+        "laser_mode_grbl",
+        "GRBL laser mode active ($32=1) — confirm in sender's settings screen?",
+    ),
+    (
+        "focus_set",
+        "Laser focus set — lens at correct distance from material surface?",
+    ),
+    (
+        "material_flat",
+        "Material lies flat against the bed — no warping, no gaps?",
+    ),
+    (
+        "material_safe",
+        "Material is laser-safe: {material} — NOT PVC, polycarbonate, ABS, vinyl, or anything chlorinated/galvanized?",
+    ),
+    (
+        "air_assist",
+        "Air assist on — compressor running, nozzle aimed at the cut point?",
+    ),
+    (
+        "bed_support",
+        "Bed support in place (honeycomb / T-slot / pin bed); no back-reflective metal directly under cut?",
+    ),
+    (
+        "wcs_origin",
+        "X/Y origin set to match the GCode's origin (typically front-left of material)?",
+    ),
+    (
+        "laser_glasses",
+        "Laser-safety glasses ON, rated for diode laser wavelength (~455nm blue)?",
+    ),
+    (
+        "fire_ready",
+        "Fire extinguisher or wet cloth within arm's reach? Ventilation adequate?",
+    ),
+    (
+        "area_clear",
+        "Area clear of flammables (paper, dust, scraps)? No one walking through the beam path?",
+    ),
+    (
+        "gcode_validated",
+        "`cnc.py validate {gcode}` ran with no violations?",
+    ),
+    (
+        "first_run_dry",
+        "If first run of this job: motion-test pass with laser power=0 to verify path stays within material?",
+    ),
+]
+
+
 def format_report(
     job: JobSpec,
     machine: dict,

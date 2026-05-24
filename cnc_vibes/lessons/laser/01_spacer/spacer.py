@@ -48,10 +48,10 @@ def load_material(material_id: str) -> dict:
 
 def generate_gcode(od_mm: float, id_mm: float, material: dict) -> str:
     """Render the .gcode text for one spacer ring."""
-    if id_mm >= od_mm:
-        sys.exit(f"error: --id ({id_mm}) must be smaller than --od ({od_mm})")
     if id_mm <= 0 or od_mm <= 0:
         sys.exit("error: dimensions must be positive")
+    if id_mm >= od_mm:
+        sys.exit(f"error: --id ({id_mm}) must be smaller than --od ({od_mm})")
 
     laser = material["laser"]
     power_s = int(round(laser["power_percent"] * 10))  # percent -> S0..1000

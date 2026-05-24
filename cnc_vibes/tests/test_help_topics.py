@@ -17,7 +17,7 @@ from help_topics import (  # noqa: E402
     render_topic,
     search,
 )
-from job_params import PREFLIGHT_CHECKLIST  # noqa: E402
+from job_params import LASER_PREFLIGHT_CHECKLIST, PREFLIGHT_CHECKLIST  # noqa: E402
 
 
 @pytest.mark.parametrize("name", sorted(TOPICS.keys()))
@@ -79,6 +79,33 @@ def test_checklist_topic_renders_every_preflight_item():
         assert f"[{key}]" in out, (
             f"checklist topic doesn't render preflight item '{key}'"
         )
+
+
+def test_laser_checklist_topic_renders_every_laser_preflight_item():
+    out = render_topic("laser-checklist")
+    for key, _ in LASER_PREFLIGHT_CHECKLIST:
+        assert f"[{key}]" in out, (
+            f"laser-checklist topic doesn't render laser preflight item '{key}'"
+        )
+
+
+def test_laser_materials_topic_warns_about_dangerous_materials():
+    out = render_topic("laser-materials")
+    # The topic must call out at least the most common toxic-when-lasered items.
+    for forbidden in ("PVC", "polycarbonate"):
+        assert forbidden in out
+
+
+def test_lesson_spacer_topic_names_the_script():
+    out = render_topic("lesson-spacer")
+    assert "spacer.py" in out
+    assert "lessons/laser/01_spacer" in out
+
+
+def test_search_finds_laser_checklist_by_dynamic_content():
+    # 'hardware switch' is in the laser checklist text but in no static topic.
+    hits = search("hardware switch")
+    assert "laser-checklist" in hits
 
 
 def test_validator_rules_topic_names_every_rule():

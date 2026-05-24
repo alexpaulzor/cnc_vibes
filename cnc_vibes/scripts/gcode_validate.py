@@ -3,9 +3,14 @@
 
 Reads YAML profiles (machine envelope, max feeds, tool plunge limits) and
 walks the GCode as a small state machine, accumulating violations. Designed
-to run in CI or as `make validate JOB=...`.
+to run in CI or as `cnc.py validate <file>`.
 
-Checks performed:
+The validator detects the target head from a comment in the first 20 lines:
+
+    ;HEAD: laser     -> apply laser-mode rules
+    (no marker)      -> apply spindle rules (default)
+
+Spindle rules (default):
   * bounds         — every coordinate is inside the machine envelope
   * max_feed       — every F value is <= machine max feed (XY or Z plunge)
   * max_plunge     — pure-Z-down moves <= tool.max_plunge_mm_per_min (if a
@@ -14,6 +19,13 @@ Checks performed:
                      XY is changing (would mean rapiding through stock)
   * spindle_on     — first feed (G1/G2/G3) move below safe_z is preceded by
                      an M3 with S > 0
+
+Laser rules:
+  * bounds         — same as spindle
+  * max_feed       — same as spindle (XY cap; laser jobs have no Z motion)
+  * laser_mode     — $32=1 must appear somewhere in the file
+  * laser_m4_required — M3 (static) is rejected; laser jobs use M4 (dynamic)
+  * laser_power_range — every S value is in [0, 1000] (GRBL convention)
 
 A GCode file can declare the tool it uses by including a comment like
     ;TOOL: flat_3.175mm_2flute
@@ -76,6 +88,15 @@ def _extract_tool_decl(line: str) -> str | None:
     return m.group(1) if m else None
 
 
+def detect_head(gcode_text: str, scan_lines: int = 20) -> str:
+    """Return 'laser' if ;HEAD: laser appears in the first N lines, else 'spindle'."""
+    for line in gcode_text.splitlines()[:scan_lines]:
+        m = re.search(r";\s*HEAD:\s*(\w+)", line)
+        if m and m.group(1).lower() == "laser":
+            return "laser"
+    return "spindle"
+
+
 def _load_yaml(path: Path):
     with path.open() as f:
         return yaml.safe_load(f)
@@ -86,6 +107,7 @@ def _tool_by_id(tools: list[dict], tool_id: str) -> dict | None:
 
 
 def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violation]:
+    head = detect_head(gcode_text)
     envelope = profile["envelope_mm"]
     max_feed_xy = profile["max_feed_mm_per_min"]["xy"]
     max_feed_z = profile["max_feed_mm_per_min"]["z"]
@@ -93,6 +115,18 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
 
     state = State()
     violations: list[Violation] = []
+
+    # Laser-mode file-level precondition: $32=1 (GRBL laser-mode setting)
+    # must appear somewhere in the GCode so the controller switches into
+    # dynamic-power mode before any cuts.
+    if head == "laser" and not re.search(
+        r"^\s*\$32\s*=\s*1\b", gcode_text, re.MULTILINE
+    ):
+        violations.append(
+            Violation(
+                0, "laser_mode", "laser job is missing $32=1 (GRBL laser-mode setting)"
+            )
+        )
 
     for line_no, raw in enumerate(gcode_text.splitlines(), start=1):
         if tool_id := _extract_tool_decl(raw):
@@ -164,7 +198,33 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
                     )
                 )
 
-            # Plunge check vs declared tool, if any.
+        # ---- Laser-specific per-line checks (run only for laser jobs) ----
+        if head == "laser":
+            for letter, value in words:
+                if letter == "M" and value == 3:
+                    violations.append(
+                        Violation(
+                            line_no,
+                            "laser_m4_required",
+                            "M3 (static power) used; laser jobs must use M4 (dynamic)",
+                        )
+                    )
+                elif letter == "S" and not (0 <= value <= 1000):
+                    violations.append(
+                        Violation(
+                            line_no,
+                            "laser_power_range",
+                            f"S={value} outside GRBL range 0..1000",
+                        )
+                    )
+
+        # ---- Spindle-only per-line checks (skip for laser jobs) ----
+        if head != "spindle":
+            continue
+
+        # Plunge check vs declared tool, if any.
+        if motion in (1, 2, 3) and state.f is not None:
+            is_pure_z = "Z" in params and "X" not in params and "Y" not in params
             if is_pure_z and state.z < prev_z and state.declared_tool_id:
                 tool = _tool_by_id(tools, state.declared_tool_id)
                 if tool and (tplunge := tool.get("max_plunge_mm_per_min")):

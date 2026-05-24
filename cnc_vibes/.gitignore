@@ -1,5 +1,6 @@
 # Generated artifacts
 examples/*/build/
+lessons/**/build/
 
 # Python
 __pycache__/

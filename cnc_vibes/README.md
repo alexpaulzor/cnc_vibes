@@ -110,21 +110,34 @@ cnc_vibes/
 ├── profiles/
 │   ├── anolex_4030_evo_ultra2.yaml   ← machine envelope + feeds + spindle range
 │   ├── tools.yaml                     ← endmills, ball-ends, V-bits with limits
-│   └── materials.yaml                 ← chipload tables, DOC fractions
+│   ├── materials.yaml                 ← spindle chipload tables, DOC fractions
+│   └── laser_materials.yaml           ← per-material laser power/feed/passes
 ├── examples/
 │   └── hole_in_sheet/
 │       ├── hole_in_sheet.scad         ← parametric source (CSG output)
 │       ├── job.yaml                   ← material + tool + spindle_rpm for this job
 │       ├── hole_in_sheet.FCStd        ← FreeCAD CAM project (you create in step 3)
 │       └── build/                     ← generated CSG / STL / GCode (gitignored)
+├── lessons/                           ← progressive tutorials (see lessons/README.md)
+│   └── laser/01_spacer/               ← 3a: fully-automated laser-cut spacer
 ├── scripts/
-│   ├── gcode_validate.py              ← per-line GCode rules
-│   └── job_params.py                  ← loaders + derived-param math (importable)
+│   ├── gcode_validate.py              ← per-line GCode rules (spindle + laser)
+│   ├── job_params.py                  ← loaders, derived math, preflight checklists
+│   └── help_topics.py                 ← `cnc.py help` reference content
 └── tests/
     ├── test_profiles.py               ← profile YAML schema sanity
-    ├── test_gcode_validate.py         ← validator rules
-    └── test_job_params.py             ← math + safety checks + load_job error paths
+    ├── test_gcode_validate.py         ← validator rules (spindle + laser)
+    ├── test_job_params.py             ← math + safety checks + load_job error paths
+    └── test_help_topics.py            ← help structure + dynamic content sync
 ```
+
+---
+
+## Lessons
+
+Progressive tutorials, each demonstrating a technique you can reuse. See [lessons/README.md](lessons/README.md) for the index and the suggested order.
+
+The first implemented lesson is **[3a — parametric laser-cut PCB spacer](lessons/laser/01_spacer/)**, which establishes the fully-automated Python-to-GCode pattern (no CAM project, no GUI in the loop except the sender).
 
 ---
 

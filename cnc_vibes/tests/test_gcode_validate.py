@@ -116,3 +116,68 @@ def test_comments_and_parens_are_ignored():
         M5
     """
     assert validate(gcode, PROFILE, TOOLS) == []
+
+
+# ---------------------------------------------------------------------------
+# Laser-mode rules (gated by ;HEAD: laser comment in the first 20 lines)
+# ---------------------------------------------------------------------------
+
+LASER_HEADER = ";HEAD: laser\n$32=1\nG21\nG90\nM5\n"
+
+
+def test_laser_job_with_m4_and_in_range_s_is_clean():
+    gcode = LASER_HEADER + (
+        "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\nG0 X0 Y0\n"
+    )
+    assert validate(gcode, PROFILE, TOOLS) == []
+
+
+def test_laser_job_missing_dollar_32_flagged():
+    gcode = ";HEAD: laser\nG21\nG90\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+    assert "laser_mode" in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_job_using_m3_flagged():
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+    assert "laser_m4_required" in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_s_value_above_1000_flagged():
+    gcode = LASER_HEADER + "G0 X10 Y10\nM4 S2000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+    assert "laser_power_range" in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_job_skips_spindle_on_rule():
+    # No M3 ever — but the spindle_on rule must NOT fire for laser jobs.
+    gcode = LASER_HEADER + ("G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n")
+    assert "spindle_on" not in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_job_skips_safe_z_rapid_rule():
+    # Laser jobs keep Z at 0 throughout. State.z=0 < safe_z=5, but the
+    # safe_z_rapid rule should not fire for laser-tagged GCode.
+    gcode = LASER_HEADER + (
+        "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\nG0 X20 Y20\n"
+    )
+    assert "safe_z_rapid" not in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_job_still_enforces_bounds():
+    # X=500 exceeds envelope.x=400 even for laser jobs.
+    gcode = LASER_HEADER + "G0 X500 Y10\nM4 S1000\nF400\nG3 X500 Y10 I-3 J0\nM5\n"
+    assert "bounds" in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_laser_job_still_enforces_max_feed():
+    gcode = LASER_HEADER + "G0 X10 Y10\nM4 S1000\nF9000\nG3 X10 Y10 I-3 J0\nM5\n"
+    assert "max_feed" in _rules(validate(gcode, PROFILE, TOOLS))
+
+
+def test_spindle_default_when_no_head_marker():
+    # No ;HEAD: comment -> spindle rules apply (existing behavior).
+    gcode = "G90\nG0 Z5\nG0 X10 Y10\nG1 Z-2 F200\n"
+    rules = _rules(validate(gcode, PROFILE, TOOLS))
+    assert "spindle_on" in rules
+    # And no laser rules should fire.
+    assert "laser_mode" not in rules
+    assert "laser_m4_required" not in rules
