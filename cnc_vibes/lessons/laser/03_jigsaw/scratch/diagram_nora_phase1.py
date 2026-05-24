@@ -43,7 +43,7 @@ CUT_WIDTH = 3
 LETTER_OUTLINE_WIDTH = 4
 
 # ---- text ----
-TEXT = "NORA"
+TEXT = "NORA"  # default; overridable via --word CLI arg
 
 # ---- colors ----
 BG = (255, 255, 255)
@@ -77,12 +77,24 @@ def bezier_pt(p0, p1, p2, p3, t):
 
 
 def tab_outline(direction: int, n: int = 24) -> list[tuple[float, float]]:
-    pts: list[tuple[float, float]] = [(0.0, 0.0), (0.30, 0.0)]
+    """Rounded jigsaw tab.
+
+    Designed for toddler durability in plywood:
+      - Initial tangent at the edge transition is ~45° upward instead of
+        ~105° (the old sharper version). Reduces stress concentration at
+        the cut's entry/exit points where wood is most prone to crack.
+      - Bezier control points still create a wider-than-base bulb so the
+        tab has some locking, just gentler than a classic neck-bulb.
+      - Two Beziers joined at the top with continuous (G1) tangent.
+    """
+    pts: list[tuple[float, float]] = [(0.0, 0.0), (0.25, 0.0)]
     d = direction
-    p0, p1, p2, p3 = (0.30, 0.0), (0.16, 0.50 * d), (0.16, 1.10 * d), (0.50, 1.10 * d)
+    # B1: edge to top of bulb. Initial tangent ~45° upward-rightward.
+    p0, p1, p2, p3 = (0.25, 0.0), (0.38, 0.15 * d), (0.10, 1.05 * d), (0.50, 1.05 * d)
     for i in range(1, n + 1):
         pts.append(bezier_pt(p0, p1, p2, p3, i / n))
-    p0, p1, p2, p3 = (0.50, 1.10 * d), (0.84, 1.10 * d), (0.84, 0.50 * d), (0.70, 0.0)
+    # B2: top of bulb to edge. Mirror of B1.
+    p0, p1, p2, p3 = (0.50, 1.05 * d), (0.90, 1.05 * d), (0.62, 0.15 * d), (0.75, 0.0)
     for i in range(1, n + 1):
         pts.append(bezier_pt(p0, p1, p2, p3, i / n))
     pts.append((1.0, 0.0))
@@ -248,6 +260,32 @@ def find_open_seed(mask, cx, cy, radius=80):
 
 
 def main():
+    import argparse
+
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument(
+        "--word", default=TEXT, help=f"word to render on the puzzle (default: {TEXT})"
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=SEED,
+        help=f"random seed for tab directions (default: {SEED})",
+    )
+    args = p.parse_args()
+    word = args.word.upper()
+    random.seed(args.seed)
+    # Rebuild tab-direction dicts with the (possibly new) seed
+    global vertical_tabs, horizontal_tabs
+    vertical_tabs = {
+        (c, r): random.random() > 0.5 for c in range(COLS - 1) for r in range(ROWS)
+    }
+    horizontal_tabs = {
+        (c, r): random.random() > 0.5 for c in range(COLS) for r in range(ROWS - 1)
+    }
+
+    out_path = OUT_DIR / f"{word.lower()}_phase1_standard_jigsaw.png"
+
     puzzle_w = COLS * CELL_W
     puzzle_h = ROWS * CELL_H
     img_w = puzzle_w + 2 * MARGIN + TAB_HEIGHT
@@ -283,7 +321,7 @@ def main():
     # Render NORA to find its bounding box, then center it
     tmp = Image.new("L", (img_w, img_h), 0)
     td = ImageDraw.Draw(tmp)
-    bbox = td.textbbox((0, 0), TEXT, font=font)
+    bbox = td.textbbox((0, 0), word, font=font)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
 
@@ -293,7 +331,7 @@ def main():
         scale = max_text_w / tw
         font_size = int(font_size * scale)
         font = find_font(font_size)
-        bbox = ImageDraw.Draw(tmp).textbbox((0, 0), TEXT, font=font)
+        bbox = ImageDraw.Draw(tmp).textbbox((0, 0), word, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
 
@@ -303,7 +341,7 @@ def main():
     # Draw the letter outline as additional cuts
     cm_draw.text(
         (text_x, text_y),
-        TEXT,
+        word,
         fill=0,
         font=font,
         stroke_width=LETTER_OUTLINE_WIDTH,
@@ -344,7 +382,7 @@ def main():
     ll_draw = ImageDraw.Draw(letter_layer)
     ll_draw.text(
         (text_x, text_y),
-        TEXT,
+        word,
         fill=(0, 0, 0, 0),
         font=font,
         stroke_width=LETTER_OUTLINE_WIDTH,
@@ -426,8 +464,8 @@ def main():
         font=lf,
     )
 
-    img.save(OUT_PATH, "PNG", optimize=True)
-    print(f"-> wrote {OUT_PATH}  ({img_w}x{img_h})  {len(regions)} regions")
+    img.save(out_path, "PNG", optimize=True)
+    print(f"-> wrote {out_path}  ({img_w}x{img_h})  {len(regions)} regions")
 
 
 if __name__ == "__main__":
