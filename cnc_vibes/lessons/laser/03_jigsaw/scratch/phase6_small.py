@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Phase 6 — small puzzle test: 2x2 grid + 1 letter (N), fits in ~80x80mm.
+
+Reuses the phase5 polygon algorithm by overriding phase2's module-level
+constants BEFORE phase5 imports them. Then emits BOTH a verification
+diagram and a cuttable GCode file.
+
+Cut order: letters first (most surrounded), then cells. Loose-fit puzzle —
+centerline cuts, the kerf becomes the natural clearance.
+
+Use this to dial in real-world fit on a small piece of stock before
+committing to a full-size puzzle. Cuts each test in ~30-60 seconds.
+
+Usage:
+  python phase6_small.py [--word N] [--seed 7] [--material plywood_baltic_birch_3mm]
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+import yaml
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+REPO_ROOT = SCRIPT_DIR.parent.parent.parent.parent  # cnc_vibes/
+
+# --- Small-puzzle config: override phase2 constants BEFORE phase5 import ---
+import diagram_word_phase2 as p2  # noqa: E402
+
+p2.PANEL_MM = 80
+p2.PIECE_MM = 40
+p2.COLS = 2
+p2.ROWS = 2
+p2.CELL_W = p2.PIECE_MM * p2.PX_PER_MM  # 200 px
+p2.CELL_H = p2.PIECE_MM * p2.PX_PER_MM  # 200 px
+# Scale tab radius down proportionally so tabs aren't huge vs cells:
+#   default R/cell ratio at 50mm pieces was 22/250 ≈ 0.088
+#   keep that ratio for 40mm pieces -> R ≈ 15
+p2.TAB_CIRCLE_R = 15
+p2.TAB_HEIGHT = 3 * p2.TAB_CIRCLE_R  # 45 px
+p2.TAB_LEN = max(int(0.40 * p2.CELL_W), 5 * p2.TAB_CIRCLE_R)  # 80 px
+
+# Now import phase5 — its `from p2 import CELL_W, ...` will see the overrides.
+import diagram_word_phase5 as p5  # noqa: E402
+
+# Phase5 also has module-level constants computed from phase2 at its import.
+# Override those too so the shifting + merging logic uses the small-puzzle values.
+p5.TAB_CIRCLE_R = p2.TAB_CIRCLE_R
+p5.TAB_HEIGHT = p2.TAB_HEIGHT
+p5.TAB_LEN = p2.TAB_LEN
+p5.LETTER_CLEARANCE_PX = p2.TAB_CIRCLE_R
+p5.MIN_FRAGMENT_THICKNESS_PX = p2.TAB_CIRCLE_R
+p5.MIN_FRAGMENT_AREA_PX = 0.10 * p2.CELL_W * p2.CELL_H
+
+from diagram_word_phase4 import render_diagram  # noqa: E402
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon  # noqa: E402
+
+OUT_FIG_DIR = SCRIPT_DIR.parent / "figs"
+BUILD_DIR = SCRIPT_DIR.parent / "build"
+OUT_FIG_DIR.mkdir(parents=True, exist_ok=True)
+BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Polygon → machine-coord path conversion
+# ---------------------------------------------------------------------------
+
+
+def img_to_machine_mm(x_px: float, y_px: float) -> tuple[float, float]:
+    """Image pixel coords (panel inset by MARGIN, Y-down) to machine mm
+    (panel at origin, Y-up)."""
+    x_mm = (x_px - p2.MARGIN) / p2.PX_PER_MM
+    # Flip Y: image Y grows downward, machine Y grows upward
+    y_mm = p2.PANEL_MM - (y_px - p2.MARGIN) / p2.PX_PER_MM
+    return (x_mm, y_mm)
+
+
+def polygon_to_paths_mm(poly) -> list[list[tuple[float, float]]]:
+    """Extract exterior + interior rings of a polygon as lists of mm points."""
+    paths = []
+    if isinstance(poly, Polygon):
+        ext = [img_to_machine_mm(x, y) for x, y in poly.exterior.coords]
+        paths.append(ext)
+        for interior in poly.interiors:
+            inner = [img_to_machine_mm(x, y) for x, y in interior.coords]
+            paths.append(inner)
+    elif isinstance(poly, (MultiPolygon, GeometryCollection)):
+        for sub in poly.geoms:
+            if isinstance(sub, Polygon):
+                paths.extend(polygon_to_paths_mm(sub))
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# Cut ordering — letters first, then cells (simple containment heuristic
+# adequate for the small-puzzle case)
+# ---------------------------------------------------------------------------
+
+
+def order_inside_out(pieces: list[dict]) -> list[dict]:
+    """Letter pieces first (they sit inside cell pockets), then cells."""
+    letters = [p for p in pieces if p.get("kind") == "letter"]
+    cells = [p for p in pieces if p.get("kind") != "letter"]
+    return letters + cells
+
+
+# ---------------------------------------------------------------------------
+# Materials + GCode emission
+# ---------------------------------------------------------------------------
+
+
+def load_material(material_id: str) -> dict:
+    with (REPO_ROOT / "profiles" / "laser_materials.yaml").open() as f:
+        materials = yaml.safe_load(f)
+    for m in materials:
+        if m.get("id") == material_id:
+            return m
+    raise SystemExit(f"unknown material: {material_id}")
+
+
+def emit_gcode(pieces: list[dict], material: dict, word: str) -> str:
+    laser = material["laser"]
+    power_s = int(round(laser["power_percent"] * 10))
+    feed = laser["feed_mm_per_min"]
+    passes = laser["passes"]
+
+    lines = [
+        f"; small puzzle test — word={word}, {len(pieces)} pieces, "
+        f"{p2.PANEL_MM}x{p2.PANEL_MM}mm",
+        f"; generated by lessons/laser/03_jigsaw/scratch/phase6_small.py",
+        f"; loose-fit puzzle: centerline cuts, kerf becomes the clearance",
+        f";",
+        f";HEAD: laser",
+        f";MATERIAL: {material['id']}",
+        "",
+        "$32=1   ; GRBL laser mode",
+        "G21     ; mm",
+        "G90     ; absolute",
+        "M5      ; laser off",
+        "G0 X0 Y0",
+        "",
+    ]
+    for i, piece in enumerate(pieces, start=1):
+        paths = polygon_to_paths_mm(piece["polygon"])
+        kind = piece.get("kind", "cell")
+        for path_idx, pts in enumerate(paths):
+            if len(pts) < 3:
+                continue
+            label = f"{kind} {i}"
+            if path_idx > 0:
+                label += f" (hole {path_idx})"
+            lines.append(f"; --- {label} ---")
+            x0, y0 = pts[0]
+            lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+            lines.append(f"M4 S{power_s}")
+            lines.append(f"F{feed}")
+            for pass_n in range(passes):
+                if passes > 1:
+                    lines.append(f"; pass {pass_n + 1} of {passes}")
+                for x, y in pts[1:]:
+                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+            lines.append("M5")
+            lines.append("")
+    lines += ["G0 X0 Y0", ""]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--word", default="N", help="letter(s) to engrave; single letter recommended"
+    )
+    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--material", default="plywood_baltic_birch_3mm")
+    args = ap.parse_args()
+    word = args.word.upper()
+
+    puzzle_w = p2.COLS * p2.CELL_W
+    puzzle_h = p2.ROWS * p2.CELL_H
+    img_w = puzzle_w + 2 * p2.MARGIN + p2.TAB_HEIGHT
+    img_h = puzzle_h + 2 * p2.MARGIN + p2.TAB_HEIGHT + p2.LEGEND_H
+    px = p2.MARGIN
+    py = p2.MARGIN
+
+    print(
+        f"small puzzle: word={word} panel={p2.PANEL_MM}x{p2.PANEL_MM}mm "
+        f"cells={p2.COLS}x{p2.ROWS}@{p2.PIECE_MM}mm tab_R={p2.TAB_CIRCLE_R}px"
+    )
+
+    letter_union, text_x, text_y, font = p2.render_letter_polygons(
+        word, img_w, img_h, px, py, puzzle_w, puzzle_h
+    )
+
+    # Polygon pipeline — same as phase5 v04
+    piece_polys, stats = p5.build_pieces_with_shifted_tabs(args.seed, letter_union)
+    print(f"  tabs: {stats}")
+
+    cell_fragments = []
+    for (c, r), piece in sorted(piece_polys.items()):
+        if letter_union is None:
+            remaining = piece
+        else:
+            try:
+                remaining = piece.difference(letter_union)
+            except Exception:
+                remaining = piece
+        if remaining.is_empty:
+            continue
+        if isinstance(remaining, (MultiPolygon, GeometryCollection)):
+            for geom in remaining.geoms:
+                if isinstance(geom, Polygon) and geom.area > 100:
+                    cell_fragments.append(
+                        {"parent": (c, r), "polygon": geom, "kind": "cell"}
+                    )
+        elif isinstance(remaining, Polygon) and remaining.area > 100:
+            cell_fragments.append(
+                {"parent": (c, r), "polygon": remaining, "kind": "cell"}
+            )
+
+    n_pre_merge = len(cell_fragments)
+    cell_fragments = p5.merge_small_fragments(cell_fragments)
+    print(f"  cell fragments: {n_pre_merge} -> {len(cell_fragments)} after merge")
+
+    letter_polys = []
+    if letter_union is not None:
+        if isinstance(letter_union, MultiPolygon):
+            letter_polys = [g for g in letter_union.geoms if g.area > 100]
+        elif isinstance(letter_union, Polygon):
+            letter_polys = [letter_union]
+    all_pieces = list(cell_fragments) + [
+        {"parent": None, "polygon": lp, "kind": "letter"} for lp in letter_polys
+    ]
+    for i, p in enumerate(all_pieces, start=1):
+        p["serial"] = i
+    print(
+        f"  total pieces: {len(all_pieces)} ({len(cell_fragments)} cells + {len(letter_polys)} letters)"
+    )
+
+    # Verification diagram
+    diagram_path = OUT_FIG_DIR / f"small_puzzle_{word.lower()}.png"
+    render_diagram(
+        all_pieces,
+        img_w,
+        img_h,
+        px,
+        py,
+        puzzle_w,
+        puzzle_h,
+        title=f"Small puzzle test — {word}, {len(all_pieces)} pieces, "
+        f"{p2.PANEL_MM}x{p2.PANEL_MM}mm @ {p2.PIECE_MM}mm cells",
+        out_path=diagram_path,
+        show_letter_marker=False,
+        highlight_letters=False,
+    )
+    print(f"-> diagram: {diagram_path}")
+
+    # Order + emit GCode
+    ordered = order_inside_out(all_pieces)
+    material = load_material(args.material)
+    gcode = emit_gcode(ordered, material, word)
+    gcode_path = BUILD_DIR / f"small_puzzle_{word.lower()}.gcode"
+    gcode_path.write_text(gcode)
+    print(f"-> gcode:   {gcode_path}  ({len(gcode.splitlines())} lines)")
+    print(f"\nValidate with:")
+    print(f"  python cnc.py validate {gcode_path.relative_to(REPO_ROOT)}")
+
+
+if __name__ == "__main__":
+    main()
