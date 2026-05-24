@@ -556,6 +556,41 @@ See also: machine-profile, tools, materials, validate, preflight,
           checklist, lesson-spacer
 """,
     ),
+    "lesson-center-punch": (
+        "lesson 4c — steel center-punch divets",
+        """
+Location: lessons/mill/02_steel_center_punch/
+
+Fully automated. Generates GCode that plunges the spindle to a small
+depth (default 0.4 mm) at a list of (x, y) points. Use an engraver /
+V-bit to make precisely-located marks in mild steel for follow-up
+drilling.
+
+This script does NOT cut steel - the 500W spindle on this class of
+router is too underpowered. It only deforms the surface enough to
+register a drill bit.
+
+Three ways to specify points:
+  --points "x1,y1,x2,y2,..."     inline CSV (typed by hand)
+  --points-file my_holes.yaml     YAML list of [x, y] pairs
+  --grid 5x4 --pitch 12 \\
+         --origin 10,10           parametric grid
+
+Other flags:
+  --depth         (default 0.4 mm; capped at 2.0 mm)
+  --plunge-feed   (default 80 mm/min - slow for hard material)
+  --tool          (default vbit_60deg_6mm)
+  --spindle-rpm   (default 12000)
+
+Validation gates in the script:
+  * depth must be > 0 and <= 2.0 mm
+  * spindle_rpm <= tool max_rpm
+  * plunge_feed <= tool max_plunge_mm_per_min
+  * every point in the machine envelope
+
+See also: tools, machine-profile, validate, preflight, checklist
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -664,7 +699,12 @@ CATEGORIES: dict[str, list[str]] = {
     ],
     "Concepts": ["concepts", "pipeline", "freecad", "workflow"],
     "Reference": ["checklist", "laser-checklist", "validator-rules", "failures"],
-    "Lessons": ["lesson-spacer", "lesson-calibration", "lesson-mill-spacer"],
+    "Lessons": [
+        "lesson-spacer",
+        "lesson-calibration",
+        "lesson-mill-spacer",
+        "lesson-center-punch",
+    ],
 }
 
 
