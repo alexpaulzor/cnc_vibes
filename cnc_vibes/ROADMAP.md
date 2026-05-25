@@ -14,7 +14,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm + small-puzzle GCode + full-puzzle GCode + photo raster all working in `scratch/` (Phases 1-8). Productionization to canonical lesson layout still pending. |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | ✅ Productionized 2026-05. Single CLI (`jigsaw.py`) with `preview` / `cut` / `raster` / `mockup` subcommands; parametric geometry / encoder / emitter modules at lesson root; tests + regression locks vs scratch. |
 | 3d | [Laser-cut spoilboard with M6 hole grid](lessons/laser/04_spoilboard/) | ✅ Parametric grid + auto-tiling for stock larger than design. Default matches Anolex 4030 bed (400×500mm, 9×10 holes @ 45mm). |
 
 ## Mill
@@ -72,16 +72,19 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 - ✅ Simple inside-out cut ordering (letters first, then cells)
 - ✅ Phase 7: photo raster engraving (halftone via Floyd-Steinberg, grayscale via per-pixel power modulation); emits raster-only, cut-only, and combined GCode
 - ✅ Phase 8: full NORA-scale (300×300mm, 44-piece) GCode emitter with edge dedup (`unary_union` + `linemerge`) + containment-aware ordering (letter → interior → panel border) + greedy nearest-neighbor travel reduction
-- 📋 Productionize: move from `scratch/` to canonical lesson layout (README, CLI, tests, profile integration)
-- 📋 Photo engraving on the full puzzle — needs phase7's raster pipeline decoupled from its phase6_small dependency so it can pair with phase8's full-puzzle cut
-- 📋 Empirical gamma curve for phase7's grayscale mode (bake the power-vs-darkness relationship for plywood into a lookup table for accurate tonal reproduction)
+- ✅ Productionized to canonical lesson layout: `jigsaw.py` CLI (preview/cut/raster/mockup), `geometry.py` + `encoder.py` + `emitter.py` modules, `tests/` at lesson root with regression locks against scratch
+- 📋 Delete `scratch/*` after the productionized code has been verified in actual cuts
+- 📋 `job.yaml` integration (declarative config like `lessons/mill/01_spacer/`) so `cnc.py preflight` walks the laser-cut checklist before firing
+- 📋 Empirical gamma LUT for grayscale raster — bake the power-vs-darkness relationship for plywood/MDF into a lookup table (uses Int-04 `--mode engrave` patches as raw data)
 
 ## Next session candidates
 
 Software-side, all unblocked (the bed is on the way but no software work depends on it):
 
-- **Productionize jigsaw out of `scratch/`** — move to canonical lesson layout: `jigsaw.py` (single CLI selecting small/full/raster modes), `tests/` at lesson root, README + SPEC updated, profile-integration via `job.yaml`. Consolidates phases 5/6/7/8 into one coherent script and decouples phase7's raster pipeline from the small-puzzle config so it can pair with phase8.
-- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table so phase7's grayscale mode produces accurate tonal reproduction. Uses calibration patches from Int-04's `--mode engrave` as raw data.
+- **Delete `scratch/*`** after the user verifies the productionized jigsaw cuts cleanly. Small commit, just cleanup.
+- **`job.yaml` integration** for the jigsaw lesson so `cnc.py preflight` runs the laser checklist before firing. Mirror the pattern from `lessons/mill/01_spacer/`.
+- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table so jigsaw raster's grayscale mode produces accurate tonal reproduction. Uses Int-04 `--mode engrave` patches as raw data.
+- **Red-team test workflow** — user provides novel words/photos to surface corner cases the NORA canonical case doesn't.
 
 Hardware-side (waiting on bed arrival):
 - First-corner Z-focus measurement after the bed is installed.
