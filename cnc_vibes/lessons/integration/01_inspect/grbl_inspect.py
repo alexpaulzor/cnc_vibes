@@ -166,6 +166,67 @@ def parse_version(lines: list[str]) -> str | None:
     return None
 
 
+@dataclass
+class WifiInfo:
+    """Parsed from a Grbl_ESP32 `$I` response WiFi message line.
+
+    Grbl_ESP32 emits something like:
+      [MSG:Mode=STA:SSID=MyNet:Status=Connected:IP=192.168.4.116:MAC=AA-BB-CC-DD-EE-FF]
+
+    Vanilla GRBL (AVR) never emits this line — in that case all fields are
+    None and presence-checks should treat the machine as not WiFi-attached.
+    """
+
+    mode: str | None = None  # "STA", "AP", or unknown
+    ssid: str | None = None
+    ip: str | None = None
+    mac: str | None = None
+    status: str | None = None
+    raw: str | None = None
+
+
+def parse_wifi(lines: list[str]) -> WifiInfo:
+    """Parse a Grbl_ESP32 `$I` response for the WiFi MSG line.
+
+    Tolerant: if no MSG line is present (vanilla GRBL, USB-only build,
+    WiFi disabled) returns an empty WifiInfo. Field order inside the
+    bracket may vary across firmware builds; parses key=value pairs by
+    name rather than position.
+    """
+    info = WifiInfo()
+    # Look for [MSG:...IP=...] — the MAC suffix is the most reliable
+    # marker but we accept any MSG line that has Mode= or IP= in it.
+    for line in lines:
+        line = line.strip()
+        if not (line.startswith("[MSG:") and line.endswith("]")):
+            continue
+        body = line[len("[MSG:") : -1]
+        # Some MSG lines are status-only ("[MSG:SSDP Started]"); skip
+        # those — they have no "=" anywhere.
+        if "=" not in body:
+            continue
+        # Tokenize on ":" between key=val pairs. Values themselves may
+        # contain "-" (MAC) or "." (IP) but not ":".
+        fields: dict[str, str] = {}
+        for token in body.split(":"):
+            if "=" in token:
+                k, _, v = token.partition("=")
+                fields[k.strip()] = v.strip()
+        # Heuristic: only treat as WiFi info if we see at least one of
+        # Mode/SSID/IP/MAC keys.
+        if not any(k in fields for k in ("Mode", "SSID", "IP", "MAC")):
+            continue
+        info.raw = line
+        info.mode = fields.get("Mode")
+        info.ssid = fields.get("SSID")
+        info.ip = fields.get("IP")
+        info.mac = fields.get("MAC")
+        info.status = fields.get("Status")
+        # First match wins — there's normally only one WiFi MSG in $I.
+        return info
+    return info
+
+
 # ---------------------------------------------------------------------------
 # GRBL setting metadata — keys that the report calls out by name.
 # ---------------------------------------------------------------------------
@@ -199,6 +260,7 @@ def format_report(
     params: Parameters,
     verbose: bool = False,
     expect_head: str | None = None,
+    wifi: WifiInfo | None = None,
 ) -> tuple[str, list[str]]:
     """Render the human-readable report. Returns (text, flags).
 
@@ -210,6 +272,19 @@ def format_report(
     lines.append("=== machine state ===")
     lines.append(f"Serial:        {port}")
     lines.append(f"GRBL version:  {version or '(unknown)'}")
+    if wifi is not None and (wifi.ip or wifi.ssid or wifi.mac):
+        lines.append("")
+        lines.append("WiFi:")
+        if wifi.mode:
+            lines.append(f"  Mode:    {wifi.mode}")
+        if wifi.ssid:
+            lines.append(f"  SSID:    {wifi.ssid}")
+        if wifi.ip:
+            lines.append(f"  IP:      {wifi.ip}")
+        if wifi.mac:
+            lines.append(f"  MAC:     {wifi.mac}")
+        if wifi.status:
+            lines.append(f"  Status:  {wifi.status}")
     lines.append("")
     lines.append(f"State:         {status.state}")
     lines.append(
@@ -337,7 +412,7 @@ def _read_one_line(ser, timeout_s: float = 1.0) -> str:
 
 def query_machine(
     port: str, baud: int = 115200
-) -> tuple[str | None, MachineStatus, dict, Parameters]:
+) -> tuple[str | None, MachineStatus, dict, Parameters, WifiInfo]:
     """Connect to the machine, issue queries, return parsed results."""
     serial = _import_pyserial()
     try:
@@ -347,13 +422,16 @@ def query_machine(
 
     try:
         # GRBL emits a banner on connection; give it a beat.
+        # Grbl_ESP32 boards reset on USB-open and need ~5s before the
+        # WiFi MSG appears in the $I response.
         time.sleep(2.0)
         ser.reset_input_buffer()
 
-        # Version
+        # Version (and on Grbl_ESP32, WiFi info too — both ride on $I).
         ser.write(b"$I\n")
         ver_lines = _read_until_ok(ser)
         version = parse_version(ver_lines)
+        wifi = parse_wifi(ver_lines)
 
         # Status (real-time, no newline needed; GRBL responds to a single '?')
         ser.write(b"?")
@@ -370,7 +448,7 @@ def query_machine(
         param_lines = _read_until_ok(ser)
         params = parse_parameters(param_lines)
 
-        return version, status, settings, params
+        return version, status, settings, params, wifi
     finally:
         ser.close()
 
@@ -406,6 +484,15 @@ def main() -> int:
         default=None,
         help="also write machine state to PATH as JSON",
     )
+    p.add_argument(
+        "--ip-only",
+        action="store_true",
+        help=(
+            "print just the IP from $I and exit 0 (or exit 1 with stderr "
+            "if the machine isn't WiFi-attached). Suitable for shell capture: "
+            "IP=$(grbl_inspect.py --ip-only --port /dev/cu.usbserial-140)"
+        ),
+    )
     args = p.parse_args()
 
     port = _resolve_port(args.port)
@@ -419,12 +506,34 @@ def main() -> int:
         return 2
 
     try:
-        version, status, settings, params = query_machine(port, args.baud)
+        version, status, settings, params, wifi = query_machine(port, args.baud)
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001
         print(f"error: query failed: {e}", file=sys.stderr)
         return 2
+
+    if args.ip_only:
+        if wifi.ip:
+            print(wifi.ip)
+            # Best-effort persist: write to the state cache so later
+            # cache-only lookups (cnc.py ip) can find it without USB.
+            try:
+                from cnc_state import save_machine  # type: ignore
+
+                save_machine(wifi.ip, mac=wifi.mac, ssid=wifi.ssid)
+            except Exception:  # noqa: BLE001
+                # Don't fail --ip-only just because the cache is unwritable;
+                # the IP itself is the contract.
+                pass
+            return 0
+        print(
+            "error: machine did not report an IP in $I response.\n"
+            "  This usually means vanilla GRBL (no WiFi) or WiFi disabled in "
+            "the Grbl_ESP32 build.",
+            file=sys.stderr,
+        )
+        return 1
 
     text, flags = format_report(
         port=port,
@@ -434,8 +543,18 @@ def main() -> int:
         params=params,
         verbose=args.verbose,
         expect_head=args.expect_head,
+        wifi=wifi,
     )
     print(text)
+
+    # Best-effort: cache discovered IP for cnc.py ip lookups.
+    if wifi.ip:
+        try:
+            from cnc_state import save_machine  # type: ignore
+
+            save_machine(wifi.ip, mac=wifi.mac, ssid=wifi.ssid)
+        except Exception:  # noqa: BLE001
+            pass
 
     if args.write_json:
         payload = {
@@ -446,6 +565,7 @@ def main() -> int:
             "wcs": params.wcs,
             "tlo": params.tlo,
             "last_probe": params.last_probe,
+            "wifi": asdict(wifi),
             "flags": flags,
         }
         args.write_json.write_text(json.dumps(payload, indent=2, default=str))

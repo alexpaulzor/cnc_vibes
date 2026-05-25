@@ -11,11 +11,13 @@ sys.path.insert(0, str(LESSON_DIR))
 from grbl_inspect import (  # noqa: E402
     MachineStatus,
     Parameters,
+    WifiInfo,
     format_report,
     parse_parameters,
     parse_settings,
     parse_status,
     parse_version,
+    parse_wifi,
 )
 
 
@@ -143,6 +145,104 @@ def test_version_extraction():
 
 def test_version_missing_returns_none():
     assert parse_version(["ok"]) is None
+
+
+# ---------------------------------------------------------------------------
+# parse_wifi — Grbl_ESP32 $I response, MSG line with Mode/SSID/IP/MAC
+# ---------------------------------------------------------------------------
+
+
+def test_wifi_typical_sta_msg():
+    lines = [
+        "[VER:1.3a.20221230:]",
+        "[OPT:VNMHL,35,255]",
+        "[MSG:Mode=STA:SSID=MyNet:Status=Connected:IP=192.168.4.116:MAC=AA-BB-CC-DD-EE-FF]",
+        "ok",
+    ]
+    w = parse_wifi(lines)
+    assert w.mode == "STA"
+    assert w.ssid == "MyNet"
+    assert w.ip == "192.168.4.116"
+    assert w.mac == "AA-BB-CC-DD-EE-FF"
+    assert w.status == "Connected"
+
+
+def test_wifi_field_order_independent():
+    # Grbl_ESP32 forks reorder fields; parse by key, not position.
+    lines = ["[MSG:IP=10.0.0.5:Mode=STA:MAC=11-22-33-44-55-66:SSID=Other]"]
+    w = parse_wifi(lines)
+    assert w.ip == "10.0.0.5"
+    assert w.mode == "STA"
+    assert w.ssid == "Other"
+    assert w.mac == "11-22-33-44-55-66"
+
+
+def test_wifi_ap_mode_no_ssid_client():
+    lines = ["[MSG:Mode=AP:SSID=GRBL_ESP:IP=192.168.0.1:MAC=DE-AD-BE-EF-00-01]"]
+    w = parse_wifi(lines)
+    assert w.mode == "AP"
+    assert w.ip == "192.168.0.1"
+
+
+def test_wifi_absent_returns_empty():
+    # Vanilla GRBL (AVR) never emits a MSG line with WiFi info.
+    lines = ["[VER:1.1h.20190825:]", "[OPT:V,15,128]", "ok"]
+    w = parse_wifi(lines)
+    assert w.ip is None
+    assert w.ssid is None
+    assert w.mac is None
+    assert w.mode is None
+
+
+def test_wifi_ignores_non_wifi_msg_lines():
+    # Some MSG lines carry no key=val pairs ("[MSG:SSDP Started]").
+    # Must not crash, must not return a partial WifiInfo.
+    lines = ["[MSG:SSDP Started]", "[MSG:Pgm End]", "ok"]
+    w = parse_wifi(lines)
+    assert w.ip is None
+    assert w.raw is None
+
+
+def test_wifi_first_msg_with_keys_wins():
+    # If two valid WiFi-shaped MSG lines appear (unlikely but possible
+    # if firmware re-prints), take the first.
+    lines = [
+        "[MSG:Mode=STA:IP=192.168.1.10:MAC=00-00-00-00-00-01]",
+        "[MSG:Mode=STA:IP=192.168.1.99:MAC=00-00-00-00-00-99]",
+    ]
+    w = parse_wifi(lines)
+    assert w.ip == "192.168.1.10"
+
+
+# ---------------------------------------------------------------------------
+# format_report — WiFi block rendering
+# ---------------------------------------------------------------------------
+
+
+def test_report_shows_wifi_block_when_present():
+    inputs = _sample_inputs()
+    inputs["wifi"] = WifiInfo(
+        mode="STA", ssid="MyNet", ip="192.168.4.116", mac="AA-BB-CC-DD-EE-FF"
+    )
+    text, _ = format_report(**inputs)
+    assert "WiFi" in text
+    assert "192.168.4.116" in text
+    assert "MyNet" in text
+    assert "AA-BB-CC-DD-EE-FF" in text
+
+
+def test_report_omits_wifi_block_when_absent():
+    inputs = _sample_inputs()
+    inputs["wifi"] = WifiInfo()
+    text, _ = format_report(**inputs)
+    assert "WiFi" not in text
+
+
+def test_report_works_without_wifi_arg():
+    # Back-compat: callers that don't pass wifi= shouldn't crash.
+    text, flags = format_report(**_sample_inputs())
+    assert "WiFi" not in text
+    assert flags == []
 
 
 # ---------------------------------------------------------------------------
