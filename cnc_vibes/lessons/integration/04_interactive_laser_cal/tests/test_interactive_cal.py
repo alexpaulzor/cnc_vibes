@@ -379,3 +379,95 @@ def test_telnet_close_closes_socket():
     t = _telnet_with_response(b"")
     t.close()
     assert t.sock.closed
+
+
+# ---------------------------------------------------------------------------
+# Engrave-mode raster patch (Stage 5+ / grayscale-engrave calibration)
+# ---------------------------------------------------------------------------
+
+
+from interactive_cal import emit_raster_patch_gcode  # noqa: E402
+
+
+def test_raster_patch_uses_m4_not_m3():
+    p = CalParams(z_mm=0, power_percent=30, feed_mm_per_min=3000, passes=1)
+    lines = emit_raster_patch_gcode(slot_x=0, slot_y=0, patch_size=6, params=p, slot_w=22, slot_h=22)
+    text = "\n".join(lines)
+    assert re.search(r"^M4 ", text, re.MULTILINE)
+    assert not re.search(r"^M3\b", text, re.MULTILINE)
+
+
+def test_raster_patch_s_within_range():
+    p = CalParams(z_mm=0, power_percent=100, feed_mm_per_min=3000, passes=1)
+    lines = emit_raster_patch_gcode(0, 0, 6, p, slot_w=22, slot_h=22)
+    s_vals = [int(m.group(1)) for m in re.finditer(r"\bS(\d+)\b", "\n".join(lines))]
+    for s in s_vals:
+        assert 0 <= s <= 1000
+
+
+def test_raster_patch_line_count_matches_spacing():
+    p = CalParams(z_mm=0, power_percent=30, feed_mm_per_min=3000, passes=1)
+    lines = emit_raster_patch_gcode(
+        slot_x=0, slot_y=0, patch_size=6, params=p, slot_w=22, slot_h=22, line_spacing_mm=0.2
+    )
+    # 6mm / 0.2mm = 30 spans => 31 lines
+    g1_count = sum(1 for l in lines if l.startswith("G1 X"))
+    assert g1_count == 31, f"expected 31 raster lines at 0.2mm spacing on 6mm patch, got {g1_count}"
+
+
+def test_raster_patch_coords_within_slot():
+    p = CalParams(z_mm=0, power_percent=30, feed_mm_per_min=3000, passes=1)
+    lines = emit_raster_patch_gcode(slot_x=0, slot_y=0, patch_size=6, params=p, slot_w=22, slot_h=22)
+    for m in re.finditer(r"^G[01]\s+X([-\d.]+)\s+Y([-\d.]+)", "\n".join(lines), re.MULTILINE):
+        x, y = float(m.group(1)), float(m.group(2))
+        # Patch is centered in slot (cx=11, cy=22/2-4=7), 6mm wide
+        # X range: [11-3, 11+3] = [8, 14]
+        # Y range: [7-3, 7+3] = [4, 10]
+        assert 7.5 <= x <= 14.5, f"X={x} outside expected patch range"
+        assert 3.5 <= y <= 10.5, f"Y={y} outside expected patch range"
+
+
+def test_raster_patch_pass_count_replays():
+    p = CalParams(z_mm=0, power_percent=30, feed_mm_per_min=3000, passes=3)
+    lines = emit_raster_patch_gcode(0, 0, 6, p, slot_w=22, slot_h=22, line_spacing_mm=0.2)
+    # Each pass writes 31 raster lines => 93 G1 lines total
+    g1_count = sum(1 for l in lines if l.startswith("G1 X"))
+    assert g1_count == 93
+
+
+def test_raster_patch_emits_z_move_when_z_nonzero():
+    p = CalParams(z_mm=2.0, power_percent=30, feed_mm_per_min=3000, passes=1)
+    lines = emit_raster_patch_gcode(0, 0, 6, p, slot_w=22, slot_h=22)
+    text = "\n".join(lines)
+    assert "G0 Z2.000" in text
+    assert "G0 Z0" in text  # returns to baseline after
+
+
+def test_emit_iteration_dispatches_on_mode_cut():
+    p = CalParams(z_mm=0, power_percent=100, feed_mm_per_min=400, passes=1)
+    lines, _ = emit_iteration_gcode(
+        iter_n=1, origin_x=0, origin_y=0, slots_per_row=4, slot_w=22, slot_h=22,
+        circle_dia=6, digit_height=4, engrave_power_s=250, engrave_feed=1500,
+        params=p, mode="cut",
+    )
+    text = "\n".join(lines)
+    assert "iter cut" in text
+    assert "iter patch" not in text
+    # G3 = arc cut
+    assert any(l.startswith("G3 ") for l in lines)
+
+
+def test_emit_iteration_dispatches_on_mode_engrave():
+    p = CalParams(z_mm=0, power_percent=30, feed_mm_per_min=3000, passes=1)
+    lines, _ = emit_iteration_gcode(
+        iter_n=1, origin_x=0, origin_y=0, slots_per_row=4, slot_w=22, slot_h=22,
+        circle_dia=6, digit_height=4, engrave_power_s=250, engrave_feed=1500,
+        params=p, mode="engrave", patch_size=6, line_spacing_mm=0.2,
+    )
+    text = "\n".join(lines)
+    assert "iter patch" in text
+    assert "iter cut" not in text
+    # No G3 in engrave mode; should have many G1 raster lines
+    assert not any(l.startswith("G3 ") for l in lines)
+    g1_count = sum(1 for l in lines if l.startswith("G1 X"))
+    assert g1_count >= 30  # at least one pass of raster lines

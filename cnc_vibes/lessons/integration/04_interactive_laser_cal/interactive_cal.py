@@ -169,6 +169,64 @@ def emit_circle_cut_gcode(
     return lines
 
 
+def emit_raster_patch_gcode(
+    slot_x: float,
+    slot_y: float,
+    patch_size: float,
+    params: CalParams,
+    slot_w: float = DEFAULT_SLOT_W,
+    slot_h: float = DEFAULT_SLOT_H,
+    line_spacing_mm: float = 0.2,
+) -> list[str]:
+    """Raster-fill a small square patch at the iteration's params.
+
+    Used for grayscale-engrave calibration: the operator iterates through
+    power values and visually evaluates the resulting darkness on the
+    material. After enough iterations, a power-vs-darkness LUT can be
+    baked for phase7_raster's grayscale mode.
+
+    Same scan pattern as phase7_raster (unidirectional horizontal, G0
+    rapids between rows), so this calibration patch's behavior matches
+    what the real engrave job emits.
+    """
+    cx = slot_x + slot_w / 2
+    cy = slot_y + slot_h / 2 - 4  # below the label, mirrors the cut placement
+    half = patch_size / 2
+    x_start = cx - half
+    x_end = cx + half
+    y_top = cy + half
+    y_bot = cy - half
+    power_s = int(round(params.power_percent * 10))
+
+    lines = [
+        f"; iter patch: Z={params.z_mm} S={power_s} F={params.feed_mm_per_min} "
+        f"P={params.passes} at ({cx:.1f}, {cy:.1f}) {patch_size}x{patch_size}mm",
+        f"G0 X{x_start:.3f} Y{y_top:.3f}",
+    ]
+    if abs(params.z_mm) > 1e-6:
+        lines.append(f"G0 Z{params.z_mm:.3f}")
+    lines.append(f"M4 S{power_s}")
+    lines.append(f"F{params.feed_mm_per_min}")
+
+    # Unidirectional raster: G0 back to x_start between lines. Same pattern
+    # phase7_raster uses, so the calibration matches the real engrave.
+    n_lines = max(2, int(round(patch_size / line_spacing_mm)) + 1)
+    for pass_n in range(params.passes):
+        if params.passes > 1:
+            lines.append(f"; pass {pass_n + 1} of {params.passes}")
+        for i in range(n_lines):
+            # Walk top-down so first line is at y_top, last at y_bot
+            y = y_top - i * line_spacing_mm
+            if y < y_bot - 1e-6:
+                y = y_bot
+            lines.append(f"G0 X{x_start:.3f} Y{y:.3f}")
+            lines.append(f"G1 X{x_end:.3f} Y{y:.3f}")
+    lines.append("M5")
+    if abs(params.z_mm) > 1e-6:
+        lines.append("G0 Z0")
+    return lines
+
+
 def emit_iteration_gcode(
     iter_n: int,
     origin_x: float,
@@ -181,8 +239,17 @@ def emit_iteration_gcode(
     engrave_power_s: int,
     engrave_feed: int,
     params: CalParams,
+    mode: str = "cut",
+    patch_size: float = 6.0,
+    line_spacing_mm: float = 0.2,
 ) -> tuple[list[str], tuple[float, float]]:
-    """Compose the full GCode for one iteration. Returns (lines, position)."""
+    """Compose the full GCode for one iteration. Returns (lines, position).
+
+    mode="cut" (default) emits a circle cut at params (Stage 1-4 cal).
+    mode="engrave" emits a raster-filled patch at params (Stage 5+ cal,
+    or grayscale calibration). The iteration-number label is the same
+    in both modes.
+    """
     slot_x, slot_y = grid_position(
         iter_n, origin_x, origin_y, slots_per_row, slot_w, slot_h
     )
@@ -198,11 +265,24 @@ def emit_iteration_gcode(
         slot_w=slot_w,
         slot_h=slot_h,
     )
-    lines.extend(
-        emit_circle_cut_gcode(
-            slot_x, slot_y, circle_dia, params, slot_w=slot_w, slot_h=slot_h
+    if mode == "engrave":
+        lines.extend(
+            emit_raster_patch_gcode(
+                slot_x,
+                slot_y,
+                patch_size,
+                params,
+                slot_w=slot_w,
+                slot_h=slot_h,
+                line_spacing_mm=line_spacing_mm,
+            )
         )
-    )
+    else:  # "cut"
+        lines.extend(
+            emit_circle_cut_gcode(
+                slot_x, slot_y, circle_dia, params, slot_w=slot_w, slot_h=slot_h
+            )
+        )
     return lines, (cx, cy)
 
 
@@ -576,6 +656,26 @@ def main() -> int:
     p.add_argument("--slot-h", type=float, default=DEFAULT_SLOT_H)
     p.add_argument("--slots-per-row", type=int, default=DEFAULT_SLOTS_PER_ROW)
     p.add_argument("--circle-dia", type=float, default=DEFAULT_CIRCLE_DIA)
+    p.add_argument(
+        "--mode",
+        choices=["cut", "engrave"],
+        default="cut",
+        help="cut (default) = circle G3 cut test for kerf/cut calibration; "
+        "engrave = raster-filled patch for grayscale-engrave power calibration "
+        "(operator visually evaluates the darkness produced at each S value).",
+    )
+    p.add_argument(
+        "--patch-size",
+        type=float,
+        default=6.0,
+        help="raster patch size (mm square) in engrave mode (default 6.0)",
+    )
+    p.add_argument(
+        "--patch-line-spacing",
+        type=float,
+        default=0.20,
+        help="raster line spacing (mm) in engrave mode (default 0.20)",
+    )
     p.add_argument("--engrave-height", type=float, default=DEFAULT_ENGRAVE_HEIGHT)
     p.add_argument(
         "--engrave-power-percent", type=int, default=DEFAULT_ENGRAVE_POWER_PCT
@@ -750,6 +850,9 @@ def main() -> int:
                 engrave_power_s=int(args.engrave_power_percent * 10),
                 engrave_feed=DEFAULT_ENGRAVE_FEED,
                 params=params,
+                mode=args.mode,
+                patch_size=args.patch_size,
+                line_spacing_mm=args.patch_line_spacing,
             )
 
             print(f"\n=== Iteration {iter_n} ===")

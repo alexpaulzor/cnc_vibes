@@ -33,7 +33,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 | Int-01 | [`inspect`](lessons/integration/01_inspect/) — read GRBL state via serial | ✅ |
 | Int-02 | [`snapshot`](lessons/integration/02_snapshot/) — webcam stills for setup verification | ✅ |
 | Int-03 | [`probe-corner`](lessons/integration/03_probe_corner/) — automated WCS-finding via touch plate | ✅ |
-| Int-04 | [interactive laser cal](lessons/integration/04_interactive_laser_cal/) — iterative Z/power/feed/passes tuning | ✅ (cutting mode; grayscale mode pending — see lesson README) |
+| Int-04 | [interactive laser cal](lessons/integration/04_interactive_laser_cal/) — iterative Z/power/feed/passes tuning | ✅ (cut mode + engrave mode for grayscale calibration) |
 
 ## Plasma
 
@@ -81,8 +81,7 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 Software-side, all unblocked (the bed is on the way but no software work depends on it):
 
 - **Productionize jigsaw out of `scratch/`** — move to canonical lesson layout: `jigsaw.py` (single CLI selecting small/full/raster modes), `tests/` at lesson root, README + SPEC updated, profile-integration via `job.yaml`. Consolidates phases 5/6/7/8 into one coherent script and decouples phase7's raster pipeline from the small-puzzle config so it can pair with phase8.
-- **Add grayscale-engrave mode to Int-04** — currently cutting-only; raster patches at varying power for grayscale calibration.
-- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood into a lookup table so phase7's grayscale mode produces accurate tonal reproduction.
+- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table so phase7's grayscale mode produces accurate tonal reproduction. Uses calibration patches from Int-04's `--mode engrave` as raw data.
 
 Hardware-side (waiting on bed arrival):
 - First-corner Z-focus measurement after the bed is installed.
