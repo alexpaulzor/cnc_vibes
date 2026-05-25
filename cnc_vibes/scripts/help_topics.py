@@ -677,6 +677,76 @@ Full workflow:
 See also: machine-profile, validate, preflight, checklist
 """,
     ),
+    "lesson-laser-cal": (
+        "Int-04 — interactive laser calibration",
+        """
+Location: lessons/integration/04_interactive_laser_cal/
+
+Drives the laser via USB serial. Each iteration engraves an iteration
+number, cuts a small test circle at the current params, returns to
+safe Z + M5, prompts the operator to evaluate and adjust before the
+next cut. Designed for iterative dialing-in of Z/focus, power, feed,
+and pass count where static patterns don't give enough resolution.
+
+Safety:
+  * Refuses to start if GRBL is in ALARM (must $X or $H in your sender).
+  * --max-z-offset bounds the Z prompt; default 10mm prevents typos
+    from crashing the head.
+  * Envelope check vs profiles/<machine>.yaml fires in --dry-run too.
+  * Setup commands (M5, $32=1, G21, G90) abort on error/ALARM response.
+  * Conservative defaults (--start-power 50, --start-feed 800,
+    --start-passes 1) for Stage 1 focus calibration.
+
+Usage:
+  python lessons/integration/04_interactive_laser_cal/interactive_cal.py \\
+      --port /dev/ttyUSB0
+  python lessons/integration/04_interactive_laser_cal/interactive_cal.py \\
+      --dry-run --max-iterations 4
+
+Per-run manifest is saved to runs/cal_<timestamp>.json (gitignored).
+
+See the lesson README for the Stage 0-5 novice procedure with per-stage
+hazards. Grayscale rastering calibration is not yet supported — only
+cutting calibration.
+
+See also: laser-checklist, laser-materials, lesson-calibration
+""",
+    ),
+    "lesson-jigsaw": (
+        "lesson 3c — wooden jigsaw with name-preserving cuts",
+        """
+Location: lessons/laser/03_jigsaw/
+
+Generates a wooden jigsaw puzzle that embeds a name (default NORA) into
+the cut pattern: letters become intact pieces that nest into pockets
+carved from the surrounding cells.
+
+Status: algorithm complete in scratch/ (phases 2, 4, 5, 6). The small
+test variant (phase6_small.py) emits cuttable GCode that passes the
+validator. Full-panel GCode emission and productionization out of
+scratch/ are pending.
+
+Small puzzle test (4 pieces + 1 letter, ~80x80mm):
+  python lessons/laser/03_jigsaw/scratch/phase6_small.py --word N --seed 7
+  python cnc.py validate lessons/laser/03_jigsaw/build/small_puzzle_n.gcode
+
+Full NORA puzzle (300x300mm, 44 pieces): see scratch/diagram_word_phase5.py
+for the polygon + diagram; GCode emitter not yet wired up.
+
+Algorithm highlights:
+  * Lollipop tab geometry (thin stem + circular bulb) for mechanical
+    undercut grip.
+  * Tab shifting: tabs that would cut into a letter outline are moved
+    along the edge to a clear position; dropped if no clear position
+    exists.
+  * Sliver merging: thin cell fragments left over after letter pocket
+    carving are absorbed into their largest adjacent neighbor.
+  * Loose-fit puzzle: cut on centerline, the laser kerf becomes the
+    natural clearance between pieces.
+
+See also: lesson-calibration, lesson-laser-cal, laser-materials
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -792,6 +862,8 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-center-punch",
         "lesson-aluminum-slot",
         "lesson-pcb-drill",
+        "lesson-laser-cal",
+        "lesson-jigsaw",
     ],
 }
 

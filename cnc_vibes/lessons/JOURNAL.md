@@ -153,3 +153,58 @@ Every new generator follows the same shape:
 10. Commit + push to github only.
 
 The repetition is the point: future lessons just follow the pattern.
+
+---
+
+## 2026-05-24 — Jigsaw 3c algorithm + Int-04 safety hardening
+
+Two threads landed back-to-back this session.
+
+### Jigsaw 3c (out of `📋 SPEC only` into 🔨 in-progress)
+
+The name-preserving cut algorithm got built end-to-end in `lessons/laser/03_jigsaw/scratch/`, reversing the SPEC's original 3c-1→3c-4 phasing (raster engraving deferred; name-preserving came first). The phases preserved in `scratch/`:
+
+| Phase | What it added |
+|---|---|
+| diagram_word_phase2.py | Cell grid + lollipop tab geometry (stem + circular bulb, mechanical undercut). Letter polygons via OpenCV `findContours` RETR_CCOMP (correctly handles counters like O's hole). |
+| diagram_word_phase4.py | Letters as intact polygons carved into cell pockets; polygon-with-hole rendering. |
+| diagram_word_phase5.py | Tab shifting: tabs that would slice a letter shift along their edge to a clear spot, or drop if no clear position exists. Sliver merging: thin cell fragments absorb into largest adjacent neighbor. One-tab-radius clearance rule. |
+| phase6_small.py | Small (80x80mm) test puzzle generator. Emits cuttable GCode (validator-clean). Letters cut first, then cells. Loose-fit: kerf becomes the natural clearance. 12 new tests. |
+
+Phase 3 (curved tabs along letter perimeters) was abandoned. Phase 1 superseded by phase 2.
+
+Tab geometry evolved: started as Bezier knobs, switched to **lollipop** (thin stem + circular head) for better mechanical grip — the circular bulb gives undercut both sides. The stem width = R, the bulb radius = R, total tab depth = 3R; walls extend tangentially into the circle so the join is smooth.
+
+`phase6_small.py` uses a constant-override trick: it mutates `phase2.PANEL_MM`, `CELL_W`, etc. BEFORE importing phase5, so phase5's `from phase2 import CELL_W, ...` captures the small-puzzle values. An assert guards against phase5 being pre-imported.
+
+### Int-04 interactive laser cal — safety hardening (`a1df229`)
+
+Pre-existing script reviewed end-to-end. Issues found and fixed:
+
+| Severity | Issue | Fix |
+|---|---|---|
+| C1 | `emit_label_gcode` / `emit_circle_cut_gcode` used `DEFAULT_SLOT_W/H` constants, ignoring CLI `--slot-w/--slot-h` → iterations drift off the grid | Pass slot dims through; regression test added |
+| C2 | Setup commands (M5, $32=1, G21, G90) ignored error/ALARM responses | New `_send_line_checked`; raises RuntimeError → abort |
+| C3 | No GRBL state check at startup; would silently send motion in ALARM | Query state; refuse if ALARM, prompt user to $X / $H |
+| C4 | Absolute Z moves with no bound; typo at prompt could crash head | `--max-z-offset` (default 10mm) bounds all Z input |
+| C5 | No envelope check vs machine profile | New `load_machine_envelope` + `check_layout_within_envelope`; fires in --dry-run too |
+| M1 | Setup order had `$32=1` before `M5` | Reordered: M5 first |
+| (post-audit) | `_prompt_evaluate_and_adjust` didn't catch EOFError/KeyboardInterrupt → manifest entry lost on Ctrl-C after firing | Wrap whole eval block; returns ("eof"/"interrupt", "") so iteration is logged |
+| (post-audit) | First-run defaults (100%/400/2 passes on 3mm ply) were the combustion regime | Lowered to 50%/800/1 for Stage 1 focus calibration; README documents raise-for-cut-stages |
+
+Tests: 13 → 24. Lesson README expanded with Stage 0-5 novice procedure (bench prep → Z focus → power → feed → passes → write back to profile), with per-stage hazards called out.
+
+### Other artifacts
+
+- `ROADMAP.md` added at repo root, linked from main README. Has a 3c sub-roadmap.
+- Help topics `lesson-laser-cal` and `lesson-jigsaw` registered in `scripts/help_topics.py` so `cnc.py help` surfaces them.
+- Main `README.md` updated: Int-04 listed; 3c moved out of "specced for future" into "in progress"; lesson tree slimmed.
+- Jigsaw `README.md` rewritten from "FUTURE / aspirational" to a current-state guide pointing at `scratch/phase6_small.py`. `SPEC.md` got an implementation-note banner explaining the phasing divergence.
+
+Test count: 254 → 290 (+36 new tests). All passing.
+
+3 commits pushed to github (`a1df229`, `8cfa142`, and the doc/audit-fix commit following this entry).
+
+### Pattern reinforced
+
+Every safety-relevant change in Int-04 has a regression test. The audit caught what humans tend to miss in code review (the slot-dim bug ran silently for who-knows-how-long). When I add safety features without tests, future me will not know if they still work.

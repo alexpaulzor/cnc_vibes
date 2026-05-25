@@ -37,7 +37,7 @@ python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
 | `--circle-dia` | 8 mm | Test cut diameter. |
 | `--engrave-height` | 4 mm | Iteration-number digit height. |
 | `--engrave-power-percent` | 25 | Low power so the label doesn't cut through. |
-| `--start-z` / `--start-power` / `--start-feed` / `--start-passes` | 0, 100, 400, 2 | Initial params. |
+| `--start-z` / `--start-power` / `--start-feed` / `--start-passes` | 0, 50, 800, 1 | Initial params. **Conservative for Stage 1 (focus)** — lower than the material profile so an unknown-focus first run can't immediately combust. Override explicitly when you reach Stages 2-4 (typically `--start-power 100 --start-feed 400 --start-passes 2` to match the material profile). |
 | `--max-iterations` | 24 | Hard safety stop. |
 | `--max-z-offset` | 10 mm | Reject Z values whose absolute value exceeds this. Bounds the blast radius of a typo at the prompt. |
 | `--machine-profile` | `profiles/anolex_4030_evo_ultra2.yaml` | Profile read for the envelope check. |
@@ -84,9 +84,11 @@ This is the hardest of the four parameters. The diode laser has a tight focal de
 3. Start the script:
    ```
    python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
-       --port COM3 --start-z 0 --start-power 100 --start-feed 400 --start-passes 2
+       --port COM3 --start-z 0
    ```
    (substitute your port; on Linux/macOS that's `/dev/ttyUSB0` or `/dev/tty.usbserial-*`)
+
+   For Stage 1 (focus), the defaults are deliberately conservative — 50% power, 800 mm/min, 1 pass. Cuts may not go through; that's fine. You're measuring kerf width to find focus, not making a usable part.
 
 4. The script checks: GRBL state is not ALARM, layout fits envelope, Z is within ±10mm. If any check fails it aborts before any motion. Read errors carefully.
 

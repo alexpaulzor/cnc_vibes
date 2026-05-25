@@ -14,7 +14,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Phase 5 working in `scratch/`; GCode emission + cut-ordering not yet built |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm working through Phase 6 in `scratch/` (lollipop tabs, tab-shift, sliver merge, small-puzzle test, GCode emission). Productionization to canonical lesson layout still pending. |
 
 ## Mill
 
@@ -66,9 +66,10 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 - ✅ Phase 5: tab shifting away from letters + sliver merging
 - ✅ Lollipop tab geometry (stem + circle, mechanical undercut)
 - ✅ One-tab-radius clearance enforcement between tab cavities and letter edges
-- 🔨 Small puzzle test variant (4 pieces + 1 letter, <10×10cm) — pending
-- 🔨 GCode emission from polygon set — pending
-- 🔨 Cut ordering via containment toposort — pending
+- ✅ Phase 6: small puzzle test variant (4 pieces + 1 letter, ~80×80mm)
+- ✅ GCode emission from polygon set (centerline cuts, validator-clean)
+- ✅ Simple inside-out cut ordering (letters first, then cells)
+- 📋 Full containment toposort for the NORA-scale puzzle (44 pieces)
 - 📋 Productionize: move from `scratch/` to canonical lesson layout (README, CLI, tests, profile integration)
 - 📋 Photo engraving overlay (per original spec; user's current target is name-only)
 

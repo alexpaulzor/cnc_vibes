@@ -104,9 +104,10 @@ If `params` says your derived feed is 1440 mm/min and the GCode coming out of Fr
 ```
 cnc_vibes/
 ├── README.md                          ← this file
+├── ROADMAP.md                         ← at-a-glance lesson status
 ├── cnc_for_the_scad.md                ← conceptual guide (read first)
 ├── cnc.py                             ← task runner (cross-platform)
-├── requirements.txt                   ← pyyaml, pytest
+├── requirements.txt                   ← pyyaml, pytest, shapely, opencv, Pillow
 ├── profiles/
 │   ├── anolex_4030_evo_ultra2.yaml   ← machine envelope + feeds + spindle range
 │   ├── tools.yaml                     ← endmills, ball-ends, V-bits with limits
@@ -118,8 +119,11 @@ cnc_vibes/
 │       ├── job.yaml                   ← material + tool + spindle_rpm for this job
 │       ├── hole_in_sheet.FCStd        ← FreeCAD CAM project (you create in step 3)
 │       └── build/                     ← generated CSG / STL / GCode (gitignored)
-├── lessons/                           ← progressive tutorials (see lessons/README.md)
-│   └── laser/01_spacer/               ← 3a: fully-automated laser-cut spacer
+├── lessons/                           ← see lessons/README.md for full index
+│   ├── laser/    {01_spacer, 02_calibration, 03_jigsaw}
+│   ├── mill/     {01_spacer, 02_steel_center_punch, 03_aluminum, 04_pcb}
+│   ├── integration/  {01_inspect, 02_snapshot, 03_probe_corner, 04_interactive_laser_cal}
+│   └── plasma/   (specced, not implemented)
 ├── scripts/
 │   ├── gcode_validate.py              ← per-line GCode rules (spindle + laser)
 │   ├── job_params.py                  ← loaders, derived math, preflight checklists
@@ -151,13 +155,17 @@ Progressive tutorials, each demonstrating a technique you can reuse. See [lesson
 - **Int-01** — [`inspect`](lessons/integration/01_inspect/) — read GRBL state via serial
 - **Int-02** — [`snapshot`](lessons/integration/02_snapshot/) — webcam stills for setup verification
 - **Int-03** — [`probe-corner`](lessons/integration/03_probe_corner/) — automated WCS-finding via touch plate
+- **Int-04** — [interactive laser cal](lessons/integration/04_interactive_laser_cal/) — iterative Z/power/feed/passes tuning via serial
+
+**In progress**:
+
+- **3c** — [Photo-engraved jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) (algorithm complete in `scratch/`; productionization pending)
 
 **Specced for future work**:
 
-- **3c** — [Photo-engraved jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) (aspirational)
 - **5** — [Plasma cutting](lessons/plasma/) (requires mechanical fabrication first)
 
-The session journal at [lessons/JOURNAL.md](lessons/JOURNAL.md) captures the decisions and progress history.
+The full status view is in [ROADMAP.md](ROADMAP.md); the session journal at [lessons/JOURNAL.md](lessons/JOURNAL.md) captures decisions and progress history.
 
 ---
 

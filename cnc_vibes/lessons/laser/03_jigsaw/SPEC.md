@@ -1,8 +1,8 @@
 # Lesson 3c — Wooden jigsaw with engraved photo and name-preserving cuts
 
-> **Status: SPEC only — aspirational endgoal.** Not implemented and not appropriate to implement in one session. This document captures the three sub-problems, a realistic phasing, and the prior art.
+> **Implementation note (2026-05):** the name-preserving cut algorithm has shipped in `scratch/` (phases 2, 4, 5, 6 — see [README.md](README.md) for the canonical guide). The phasing described below (3c-1 raster → 3c-2 tessellate → 3c-3 integration → 3c-4 name-preserving) was the original plan; what actually got built reversed the order — name-preserving came first, raster engraving is the deferred piece. The rest of this document is preserved as historical design context.
 >
-> When you're ready to tackle this for real, the SPEC is here as the starting point.
+> **Original status was SPEC only — aspirational endgoal.** This document captures the three sub-problems, a realistic phasing, and the prior art.
 
 ## The endgoal
 

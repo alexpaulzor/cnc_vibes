@@ -27,7 +27,6 @@ import json
 import os
 import sys
 import time
-from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -380,52 +379,63 @@ def _prompt_evaluate_and_adjust(
 
     Returns (next_params or None to stop, outcome, notes). Z values that
     exceed max_z_offset are rejected at the prompt rather than sent to
-    the machine.
+    the machine. EOFError / KeyboardInterrupt anywhere in the eval block
+    returns (None, "eof"/"interrupt", "") so the just-fired iteration
+    still gets logged before the run wraps.
     """
-    print("\n--- Evaluate the cut ---")
-    outcome_help = "clean / incomplete / burnt / kerf-wide / kerf-narrow / abort / done"
-    while True:
-        outcome = input(f"  Outcome [{outcome_help}]: ").strip().lower() or "unknown"
-        if outcome in ("done", "abort", "q", "quit"):
-            return None, outcome, ""
-        break
+    try:
+        print("\n--- Evaluate the cut ---")
+        outcome_help = (
+            "clean / incomplete / burnt / kerf-wide / kerf-narrow / abort / done"
+        )
+        while True:
+            outcome = (
+                input(f"  Outcome [{outcome_help}]: ").strip().lower() or "unknown"
+            )
+            if outcome in ("done", "abort", "q", "quit"):
+                return None, outcome, ""
+            break
 
-    notes = input("  Notes (free-form, optional): ").strip()
+        notes = input("  Notes (free-form, optional): ").strip()
 
-    print("\n--- Adjust params for next iteration ---")
-    print("  Press ENTER to keep current value. Type 'done' on any line to finish.")
+        print("\n--- Adjust params for next iteration ---")
+        print("  Press ENTER to keep current value. Type 'done' on any line to finish.")
 
-    def ask_adjust(label, current, cast):
-        ans = input(f"  {label} (current {current}): ").strip()
-        if not ans:
-            return current, False
-        if ans.lower() in ("done", "abort", "q", "quit"):
-            return current, True
-        try:
-            return cast(ans), False
-        except ValueError:
-            print(f"    (invalid, keeping {current})")
-            return current, False
+        def ask_adjust(label, current, cast):
+            ans = input(f"  {label} (current {current}): ").strip()
+            if not ans:
+                return current, False
+            if ans.lower() in ("done", "abort", "q", "quit"):
+                return current, True
+            try:
+                return cast(ans), False
+            except ValueError:
+                print(f"    (invalid, keeping {current})")
+                return current, False
 
-    while True:
-        new_z, stop = ask_adjust("Z (mm)", current.z_mm, float)
+        while True:
+            new_z, stop = ask_adjust("Z (mm)", current.z_mm, float)
+            if stop:
+                return None, "done", notes
+            z_problem = check_z_bounds(new_z, max_z_offset)
+            if z_problem is None:
+                break
+            print(f"    REJECTED: {z_problem}")
+        new_p, stop = ask_adjust("Power %", current.power_percent, int)
         if stop:
             return None, "done", notes
-        z_problem = check_z_bounds(new_z, max_z_offset)
-        if z_problem is None:
-            break
-        print(f"    REJECTED: {z_problem}")
-    new_p, stop = ask_adjust("Power %", current.power_percent, int)
-    if stop:
-        return None, "done", notes
-    new_f, stop = ask_adjust("Feed mm/min", current.feed_mm_per_min, int)
-    if stop:
-        return None, "done", notes
-    new_n, stop = ask_adjust("Passes", current.passes, int)
-    if stop:
-        return None, "done", notes
+        new_f, stop = ask_adjust("Feed mm/min", current.feed_mm_per_min, int)
+        if stop:
+            return None, "done", notes
+        new_n, stop = ask_adjust("Passes", current.passes, int)
+        if stop:
+            return None, "done", notes
 
-    return CalParams(new_z, new_p, new_f, new_n), outcome, notes
+        return CalParams(new_z, new_p, new_f, new_n), outcome, notes
+    except EOFError:
+        return None, "eof", ""
+    except KeyboardInterrupt:
+        return None, "interrupt", ""
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +480,14 @@ def main() -> int:
         "--engrave-power-percent", type=int, default=DEFAULT_ENGRAVE_POWER_PCT
     )
     p.add_argument("--start-z", type=float, default=0.0)
-    p.add_argument("--start-power", type=int, default=100)
-    p.add_argument("--start-feed", type=int, default=400)
-    p.add_argument("--start-passes", type=int, default=2)
+    # Conservative defaults: Stage 1 (Z/focus) wants low power and few passes —
+    # cleaner kerf to measure and far below combustion regime even if focus is
+    # way off. The material profile values (e.g. 100% / 400 / 2 for 3mm ply)
+    # are the right STARTING POINT for power/feed/passes tuning AFTER focus is
+    # dialed in; override these defaults explicitly when you reach Stages 2-4.
+    p.add_argument("--start-power", type=int, default=50)
+    p.add_argument("--start-feed", type=int, default=800)
+    p.add_argument("--start-passes", type=int, default=1)
     p.add_argument(
         "--dry-run", action="store_true", help="print GCode without opening serial port"
     )
