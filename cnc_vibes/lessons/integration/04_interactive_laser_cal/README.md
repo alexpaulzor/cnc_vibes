@@ -16,11 +16,16 @@ No open-source tool I'm aware of does the interactive flow. LightBurn (proprieta
 ## Usage
 
 ```
-# Real run (requires --port or CNC_PORT env)
+# Real run via USB serial
 python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
     --port /dev/ttyUSB0 \
     --origin-x 10 --origin-y 10 \
     --start-z 0 --start-power 100 --start-feed 400 --start-passes 2
+
+# Real run via raw TCP (Grbl_ESP32 listens on port 23). Avoids the ~5s
+# boot-banner reset that happens every time you open the USB port.
+python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
+    --telnet 192.168.4.116
 
 # Dry run (no serial; prints all GCode and uses defaults for all iterations)
 python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
@@ -29,8 +34,9 @@ python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--port` | `$CNC_PORT` | Serial port (required unless --dry-run). |
+| `--port` | `$CNC_PORT` | Serial port (mutually exclusive with `--telnet`). |
 | `--baud` | 115200 | GRBL standard. |
+| `--telnet` | none | `host[:port]` for raw-TCP transport (default port 23). Avoids the boot-banner reset that happens on every USB port open with the Grbl_ESP32 build. Mutually exclusive with `--port`. |
 | `--origin-x` / `--origin-y` | 10, 10 mm | Lower-left of first iteration slot. |
 | `--slot-w` / `--slot-h` | 30, 30 mm | Slot size per iteration. |
 | `--slots-per-row` | 6 | Wraps to next row after this many. |

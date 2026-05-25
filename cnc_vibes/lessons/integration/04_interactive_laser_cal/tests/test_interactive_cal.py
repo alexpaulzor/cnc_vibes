@@ -13,6 +13,7 @@ sys.path.insert(0, str(LESSON_DIR))
 
 from interactive_cal import (  # noqa: E402
     CalParams,
+    TelnetTransport,
     check_layout_within_envelope,
     check_z_bounds,
     emit_circle_cut_gcode,
@@ -282,3 +283,99 @@ def test_load_envelope_reads_real_profile():
     env = load_machine_envelope(profile)
     assert env["x"] == 400.0
     assert env["y"] == 300.0
+
+
+# ---------------------------------------------------------------------------
+# TelnetTransport — mock socket so we don't need a live server
+# ---------------------------------------------------------------------------
+
+
+class _FakeSocket:
+    """Behaves enough like a TCP socket for TelnetTransport's needs."""
+
+    def __init__(self, response_bytes: bytes = b""):
+        self.sent = bytearray()
+        self._recv_buf = bytearray(response_bytes)
+        self.closed = False
+        self._blocking = True
+        self._timeout = None
+        import socket as _s
+
+        self._mod = _s
+
+    def sendall(self, data):
+        self.sent.extend(data)
+
+    def recv(self, n, flags=0):
+        if not self._recv_buf:
+            if self._blocking:
+                raise self._mod.timeout("no data")
+            raise BlockingIOError
+        chunk = bytes(self._recv_buf[:n])
+        if not (flags & getattr(self._mod, "MSG_PEEK", 0)):
+            del self._recv_buf[:n]
+        return chunk
+
+    def setblocking(self, flag):
+        self._blocking = bool(flag)
+
+    def settimeout(self, t):
+        self._timeout = t
+
+    def close(self):
+        self.closed = True
+
+    def feed(self, data: bytes):
+        self._recv_buf.extend(data)
+
+
+def _telnet_with_response(response: bytes) -> TelnetTransport:
+    t = TelnetTransport.__new__(TelnetTransport)
+    import socket as _s
+
+    t._socket_mod = _s
+    t.sock = _FakeSocket(response)
+    t._buf = b""
+    t._default_timeout = 2.0
+    return t
+
+
+def test_telnet_write_sends_bytes():
+    t = _telnet_with_response(b"")
+    t.write(b"$$\n")
+    assert bytes(t.sock.sent) == b"$$\n"
+
+
+def test_telnet_readline_returns_one_line():
+    t = _telnet_with_response(b"<Idle|MPos:0,0,0>\nok\n")
+    assert t.readline() == b"<Idle|MPos:0,0,0>\n"
+    assert t.readline() == b"ok\n"
+
+
+def test_telnet_read_uses_internal_buffer_first():
+    t = _telnet_with_response(b"")
+    t._buf = b"prefilled"
+    assert t.read(4) == b"pref"
+    assert t.read(5) == b"illed"
+
+
+def test_telnet_reset_input_buffer_drains():
+    t = _telnet_with_response(b"old data to drain\n")
+    t._buf = b"also queued"
+    t.reset_input_buffer()
+    assert t._buf == b""
+    # Subsequent read should not see the drained bytes
+    t.sock.feed(b"fresh\n")
+    assert t.readline() == b"fresh\n"
+
+
+def test_telnet_in_waiting_reports_buffered_bytes():
+    t = _telnet_with_response(b"")
+    t._buf = b"queued"
+    assert t.in_waiting >= len(b"queued")
+
+
+def test_telnet_close_closes_socket():
+    t = _telnet_with_response(b"")
+    t.close()
+    assert t.sock.closed

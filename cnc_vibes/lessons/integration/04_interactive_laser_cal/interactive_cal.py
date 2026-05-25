@@ -220,6 +220,100 @@ def _import_pyserial():
         sys.exit("error: pyserial not installed. Run: python -m pip install pyserial")
 
 
+# ---------------------------------------------------------------------------
+# Transport: USB serial or TCP/telnet — both quack like pyserial.Serial for
+# the subset of methods this script uses (.read, .readline, .write,
+# .reset_input_buffer, .in_waiting, .close).
+#
+# The Grbl_ESP32 build on the Anolex exposes a raw-TCP listener on port 23
+# (labeled "telnet" in the boot banner but no IAC negotiation). Using TCP
+# avoids the boot-banner reset that happens on every USB port open.
+# ---------------------------------------------------------------------------
+
+
+class TelnetTransport:
+    """Minimal pyserial-compatible adapter for raw TCP to a Grbl_ESP32 board."""
+
+    def __init__(self, host: str, port: int = 23, timeout: float = 2.0):
+        import socket
+
+        self._socket_mod = socket
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock.settimeout(timeout)
+        self._buf = b""
+        self._default_timeout = timeout
+
+    def write(self, data: bytes) -> int:
+        self.sock.sendall(data)
+        return len(data)
+
+    def read(self, n: int = 1) -> bytes:
+        if self._buf:
+            chunk, self._buf = self._buf[:n], self._buf[n:]
+            return chunk
+        try:
+            return self.sock.recv(n)
+        except self._socket_mod.timeout:
+            return b""
+
+    def readline(self) -> bytes:
+        while b"\n" not in self._buf:
+            try:
+                chunk = self.sock.recv(256)
+                if not chunk:
+                    out, self._buf = self._buf, b""
+                    return out
+                self._buf += chunk
+            except self._socket_mod.timeout:
+                return b""
+        line, _, self._buf = self._buf.partition(b"\n")
+        return line + b"\n"
+
+    def reset_input_buffer(self) -> None:
+        self._buf = b""
+        self.sock.setblocking(False)
+        try:
+            while True:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    break
+        except (BlockingIOError, OSError):
+            pass
+        finally:
+            self.sock.setblocking(True)
+            self.sock.settimeout(self._default_timeout)
+
+    @property
+    def in_waiting(self) -> int:
+        if self._buf:
+            return len(self._buf)
+        self.sock.setblocking(False)
+        try:
+            data = self.sock.recv(4096, self._socket_mod.MSG_PEEK)
+            return len(data)
+        except (BlockingIOError, OSError):
+            return 0
+        finally:
+            self.sock.setblocking(True)
+            self.sock.settimeout(self._default_timeout)
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+def _open_transport(args):
+    """Return an open transport (serial or telnet), or raise."""
+    if args.telnet:
+        host, _, port_str = args.telnet.partition(":")
+        tcp_port = int(port_str) if port_str else 23
+        return TelnetTransport(host, tcp_port, timeout=2.0)
+    serial = _import_pyserial()
+    return serial.Serial(args.port, args.baud, timeout=0.1)
+
+
 def _read_until_ok(ser, timeout_s: float = 30.0) -> list[str]:
     """Read lines until we see `ok`, `error`, or `ALARM`, or timeout."""
     deadline = time.monotonic() + timeout_s
@@ -466,6 +560,13 @@ def main() -> int:
     p.add_argument("--port", default=None, help="serial port (or CNC_PORT env)")
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument(
+        "--telnet",
+        default=None,
+        help="Use raw-TCP transport instead of serial: 'host[:port]' (default port 23). "
+        "Grbl_ESP32 listens on port 23 as labeled 'TELNET' (no IAC negotiation). "
+        "Avoids the boot-banner reset that happens on every USB port open.",
+    )
+    p.add_argument(
         "--origin-x", type=float, default=10.0, help="X for first iteration's slot, mm"
     )
     p.add_argument(
@@ -514,13 +615,21 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    port = args.port or os.environ.get("CNC_PORT")
-    if not port and not args.dry_run:
+    if args.telnet and args.port:
         print(
-            "error: --port required (or set CNC_PORT, or use --dry-run)",
+            "error: --telnet and --port are mutually exclusive (pick one transport)",
             file=sys.stderr,
         )
         return 2
+    port = args.port or os.environ.get("CNC_PORT")
+    if not args.telnet and not port and not args.dry_run:
+        print(
+            "error: --port or --telnet required (or set CNC_PORT, or use --dry-run)",
+            file=sys.stderr,
+        )
+        return 2
+    # Stash resolved port back into args so _open_transport picks it up
+    args.port = port
 
     # Envelope check — runs in both dry-run and real-run so dry-run catches
     # bad layouts before you ever connect the machine.
@@ -594,10 +703,13 @@ def main() -> int:
     logs: list[IterationLog] = []
     ser = None
     if not args.dry_run:
-        serial = _import_pyserial()
         try:
-            ser = serial.Serial(port, args.baud, timeout=0.1)
-            time.sleep(2.0)  # GRBL banner
+            ser = _open_transport(args)
+            # USB serial: opening the port pulses DTR which resets the
+            # ESP32, so we wait for the boot banner + WiFi association to
+            # finish. Telnet: no reset, just clear any queued bytes.
+            if not args.telnet:
+                time.sleep(5.0)  # Grbl_ESP32 boot + WiFi takes ~3-5s
             ser.reset_input_buffer()
             # Refuse to start if GRBL is in ALARM — operator must $X or $H
             # first to acknowledge state.
@@ -618,7 +730,10 @@ def main() -> int:
                 print(f"error during setup: {e}", file=sys.stderr)
                 return 2
         except Exception as e:  # noqa: BLE001
-            print(f"error opening port: {e}", file=sys.stderr)
+            transport_label = (
+                f"telnet {args.telnet}" if args.telnet else f"serial {args.port}"
+            )
+            print(f"error opening transport ({transport_label}): {e}", file=sys.stderr)
             return 2
 
     try:
