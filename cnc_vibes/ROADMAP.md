@@ -14,7 +14,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm working through Phase 6 in `scratch/` (lollipop tabs, tab-shift, sliver merge, small-puzzle test, GCode emission). Productionization to canonical lesson layout still pending. |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm + small-puzzle GCode + photo raster all working in `scratch/` (Phases 1-7). Full NORA-scale GCode emission and productionization to canonical lesson layout still pending. |
 
 ## Mill
 
@@ -76,7 +76,14 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 
 ## Next session candidates
 
-- Run the cal script for real (user is queued up for this)
-- Build the small-puzzle test variant + GCode emitter
-- Productionize the jigsaw lesson out of `scratch/`
-- Add grayscale-engrave mode to Int-04
+Software-side, all unblocked (the bed is on the way but no software work depends on it):
+
+- **Full NORA-scale GCode emission** — extend phase7's emitter to the 300×300mm, 44-piece full puzzle. Needs containment toposort (letter counters → letter perimeters → cell-to-cell boundaries → panel perimeter) and edge dedup so shared boundaries are cut once.
+- **Productionize jigsaw out of `scratch/`** — move to canonical lesson layout: `jigsaw.py` (single CLI), `tests/` at lesson root, README + SPEC updated, profile-integration via `job.yaml`.
+- **Add grayscale-engrave mode to Int-04** — currently cutting-only; raster patches at varying power for grayscale calibration.
+- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood into a lookup table so phase7's grayscale mode produces accurate tonal reproduction.
+
+Hardware-side (waiting on bed arrival):
+- First-corner Z-focus measurement after the bed is installed.
+- Run Int-04 cal on a real piece of stock to dial in cutting params.
+- Cut the small puzzle test (phase6_small.gcode) on the dialed-in params.

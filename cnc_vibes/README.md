@@ -165,7 +165,7 @@ Progressive tutorials, each demonstrating a technique you can reuse. See [lesson
 
 - **5** — [Plasma cutting](lessons/plasma/) (requires mechanical fabrication first)
 
-The full status view is in [ROADMAP.md](ROADMAP.md); the session journal at [lessons/JOURNAL.md](lessons/JOURNAL.md) captures decisions and progress history. Hardware purchase notes live in [docs/](docs/).
+The full status view is in [ROADMAP.md](ROADMAP.md); the session journal at [lessons/JOURNAL.md](lessons/JOURNAL.md) captures decisions and progress history.
 
 ---
 
