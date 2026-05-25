@@ -2,5 +2,7 @@ pyyaml>=6.0
 pytest>=7.0
 pyserial>=3.5
 Pillow>=10.0
+# For scripts/find_cnc.py (mDNS discovery of Grbl_ESP32 controllers):
+zeroconf>=0.130
 # Optional for snapshot --camera mode:
 #   opencv-python-headless>=4.8

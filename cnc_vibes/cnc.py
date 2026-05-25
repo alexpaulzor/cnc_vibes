@@ -348,6 +348,22 @@ def _extract_material_comment(gcode_text: str) -> str | None:
     return None
 
 
+def cmd_find_machine(args: argparse.Namespace) -> None:
+    """Discover Grbl_ESP32 controllers on the LAN via mDNS + SSDP."""
+    rc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "find_cnc.py"),
+            "--timeout",
+            str(args.timeout),
+            *(["--first"] if args.first else []),
+            *(["--no-probe"] if args.no_probe else []),
+            *(["--cache"] if args.cache else []),
+        ]
+    ).returncode
+    sys.exit(rc)
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -417,6 +433,33 @@ def main() -> None:
         help="print the checklist without prompting (for review/printing)",
     )
     pf.set_defaults(func=cmd_preflight)
+
+    fm = subs.add_parser(
+        "find-machine",
+        help="discover Grbl_ESP32 controllers on the LAN (mDNS + SSDP)",
+    )
+    fm.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="scan duration in seconds (default 5)",
+    )
+    fm.add_argument(
+        "--first",
+        action="store_true",
+        help="exit on first confirmed match (for scripting)",
+    )
+    fm.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="skip description.xml fingerprint (faster, noisier)",
+    )
+    fm.add_argument(
+        "--cache",
+        action="store_true",
+        help="write first hit to ~/.cnc_state.json",
+    )
+    fm.set_defaults(func=cmd_find_machine)
 
     h = subs.add_parser(
         "help",
