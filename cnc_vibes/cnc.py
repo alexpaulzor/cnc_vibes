@@ -364,6 +364,75 @@ def cmd_find_machine(args: argparse.Namespace) -> None:
     sys.exit(rc)
 
 
+def cmd_ip(args: argparse.Namespace) -> None:
+    """Print the controller's IP. Prefers cached state; falls back to mDNS scan."""
+    from cnc_state import (  # local import — keeps cnc.py import-light
+        DEFAULT_FRESHNESS_SEC,
+        format_age,
+        get_machine,
+        is_fresh,
+    )
+
+    max_age = (
+        args.max_age_sec if args.max_age_sec is not None else DEFAULT_FRESHNESS_SEC
+    )
+    record = get_machine()
+    if record and is_fresh(record, max_age_sec=max_age):
+        age = record.age_seconds() or 0
+        if args.verbose:
+            print(
+                f"{record.ip}  (cached, last seen {format_age(age)}"
+                + (f", MAC {record.mac}" if record.mac else "")
+                + ")",
+                file=sys.stderr,
+            )
+        print(record.ip)
+        return
+    if record and not args.no_cache_fallback:
+        # Stale cache. Try a discovery scan; if it works, use that.
+        # If discovery fails, we'll fall back to the stale cache with a
+        # warning so the user has SOMETHING to try.
+        pass
+    if not args.no_discover:
+        if args.verbose:
+            print(
+                f"no fresh cache; scanning network (timeout {args.discover_timeout}s)...",
+                file=sys.stderr,
+            )
+        rc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "find_cnc.py"),
+                "--first",
+                "--cache",
+                "--timeout",
+                str(args.discover_timeout),
+            ]
+        ).returncode
+        if rc == 0:
+            # find_cnc.py just wrote to the cache; read it back
+            record = get_machine()
+            if record:
+                print(record.ip)
+                return
+    if record:
+        # Stale cache fallback
+        age = record.age_seconds() or 0
+        print(
+            f"warning: using stale cache (last seen {format_age(age)}); "
+            f"machine may have changed IP",
+            file=sys.stderr,
+        )
+        print(record.ip)
+        return
+    print(
+        "error: no machine in cache and discovery found none. "
+        "Try `cnc.py inspect` over USB to populate the cache.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -460,6 +529,37 @@ def main() -> None:
         help="write first hit to ~/.cnc_state.json",
     )
     fm.set_defaults(func=cmd_find_machine)
+
+    ip = subs.add_parser(
+        "ip",
+        help="print the controller's IP (cached if fresh, else mDNS scan)",
+    )
+    ip.add_argument(
+        "--max-age-sec",
+        type=float,
+        default=None,
+        help="cache freshness threshold in seconds (default 21600 = 6h)",
+    )
+    ip.add_argument(
+        "--discover-timeout",
+        type=float,
+        default=5.0,
+        help="mDNS scan timeout if cache is stale (seconds, default 5)",
+    )
+    ip.add_argument(
+        "--no-discover",
+        action="store_true",
+        help="never scan; only use the cache (exit 1 if cache is missing or stale)",
+    )
+    ip.add_argument(
+        "--no-cache-fallback",
+        action="store_true",
+        help="if a discovery scan fails, do NOT fall back to a stale cached IP",
+    )
+    ip.add_argument(
+        "-v", "--verbose", action="store_true", help="print cache + scan info to stderr"
+    )
+    ip.set_defaults(func=cmd_ip)
 
     h = subs.add_parser(
         "help",
