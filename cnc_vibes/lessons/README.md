@@ -10,7 +10,8 @@ Each lesson directory has its own README with goal, prerequisites, the actual wo
 |---|---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](laser/01_spacer/) | ✅ implemented | Fully automated. Pure Python → GCode. |
 | 3b | [Laser calibration pattern (power × passes × speed)](laser/02_calibration/) | ✅ implemented | Fully automated. Pure Python → GCode with engraved labels. |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](laser/03_jigsaw/) | spec only (aspirational) | Multi-stage. Raster engrave + tessellation + name-preserving cut algorithm. |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](laser/03_jigsaw/) | 🔨 algorithm complete in `scratch/` | Lollipop tabs + tab-shifting + sliver merge + GCode emission + photo raster across Phases 1-8. Productionization pending. |
+| 3d | [Laser-cut spoilboard with M6 hole grid](laser/04_spoilboard/) | ✅ implemented | Parametric grid + tiling logic for designs larger than stock. Pure Python → GCode. |
 
 ## Mill
 

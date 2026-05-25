@@ -747,6 +747,43 @@ Algorithm highlights:
 See also: lesson-calibration, lesson-laser-cal, laser-materials
 """,
     ),
+    "lesson-spoilboard": (
+        "lesson 3d — laser-cut spoilboard with M6 hole grid",
+        """
+Location: lessons/laser/04_spoilboard/
+
+Generates GCode for a fresh spoilboard with a regular M6 mounting-hole
+grid. Auto-tiles the design when the panel exceeds your stock size, with
+tile joints falling between hole rows/columns (never through a hole).
+
+Defaults match the Anolex 4030 bed: 9x10 hole grid @ 45mm spacing,
+400x500mm panel, M6 clearance holes (6.5mm), 300x300mm stock, MDF 3mm.
+
+Usage:
+  python lessons/laser/04_spoilboard/spoilboard.py
+  python lessons/laser/04_spoilboard/spoilboard.py --no-gcode  # layout image only
+
+Output:
+  figs/spoilboard_layout.png        — verification image
+  build/spoilboard_tile_<N>.gcode   — one file per tile (default 4 tiles)
+
+Each tile cuts holes first (innermost), then the perimeter releases the
+tile last. Cut on centerline — kerf widens each hole by ~0.2mm beyond
+nominal (default 6.5mm becomes ~6.7mm, an M6 clearance fit).
+
+Flags:
+  --panel-w / --panel-h         spoilboard dimensions (mm)
+  --hole-cols / --hole-rows     grid size
+  --hole-spacing                grid pitch (mm)
+  --hole-dia                    nominal hole diameter
+  --margin-x / --margin-y       custom edge-to-first-hole; default auto-center
+  --stock-w / --stock-h         available stock; binds tile size
+  --material                    profile id from profiles/laser_materials.yaml
+  --no-gcode                    render layout image only
+
+See also: laser-materials, lesson-calibration, lesson-laser-cal
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -864,6 +901,7 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-pcb-drill",
         "lesson-laser-cal",
         "lesson-jigsaw",
+        "lesson-spoilboard",
     ],
 }
 

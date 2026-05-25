@@ -15,6 +15,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
 | 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm + small-puzzle GCode + full-puzzle GCode + photo raster all working in `scratch/` (Phases 1-8). Productionization to canonical lesson layout still pending. |
+| 3d | [Laser-cut spoilboard with M6 hole grid](lessons/laser/04_spoilboard/) | ✅ Parametric grid + auto-tiling for stock larger than design. Default matches Anolex 4030 bed (400×500mm, 9×10 holes @ 45mm). |
 
 ## Mill
 
