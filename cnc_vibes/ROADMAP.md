@@ -14,7 +14,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm + small-puzzle GCode + photo raster all working in `scratch/` (Phases 1-7). Full NORA-scale GCode emission and productionization to canonical lesson layout still pending. |
+| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | 🔨 Algorithm + small-puzzle GCode + full-puzzle GCode + photo raster all working in `scratch/` (Phases 1-8). Productionization to canonical lesson layout still pending. |
 
 ## Mill
 
@@ -70,16 +70,16 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 - ✅ GCode emission from polygon set (centerline cuts, validator-clean)
 - ✅ Simple inside-out cut ordering (letters first, then cells)
 - ✅ Phase 7: photo raster engraving (halftone via Floyd-Steinberg, grayscale via per-pixel power modulation); emits raster-only, cut-only, and combined GCode
-- 📋 Full containment toposort for the NORA-scale puzzle (44 pieces)
+- ✅ Phase 8: full NORA-scale (300×300mm, 44-piece) GCode emitter with edge dedup (`unary_union` + `linemerge`) + containment-aware ordering (letter → interior → panel border) + greedy nearest-neighbor travel reduction
 - 📋 Productionize: move from `scratch/` to canonical lesson layout (README, CLI, tests, profile integration)
-- 📋 Photo engraving overlay — implemented in phase7 (halftone + grayscale); future: gamma-calibrated grayscale power curve for "photo-realistic" rendering
+- 📋 Photo engraving on the full puzzle — needs phase7's raster pipeline decoupled from its phase6_small dependency so it can pair with phase8's full-puzzle cut
+- 📋 Empirical gamma curve for phase7's grayscale mode (bake the power-vs-darkness relationship for plywood into a lookup table for accurate tonal reproduction)
 
 ## Next session candidates
 
 Software-side, all unblocked (the bed is on the way but no software work depends on it):
 
-- **Full NORA-scale GCode emission** — extend phase7's emitter to the 300×300mm, 44-piece full puzzle. Needs containment toposort (letter counters → letter perimeters → cell-to-cell boundaries → panel perimeter) and edge dedup so shared boundaries are cut once.
-- **Productionize jigsaw out of `scratch/`** — move to canonical lesson layout: `jigsaw.py` (single CLI), `tests/` at lesson root, README + SPEC updated, profile-integration via `job.yaml`.
+- **Productionize jigsaw out of `scratch/`** — move to canonical lesson layout: `jigsaw.py` (single CLI selecting small/full/raster modes), `tests/` at lesson root, README + SPEC updated, profile-integration via `job.yaml`. Consolidates phases 5/6/7/8 into one coherent script and decouples phase7's raster pipeline from the small-puzzle config so it can pair with phase8.
 - **Add grayscale-engrave mode to Int-04** — currently cutting-only; raster patches at varying power for grayscale calibration.
 - **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood into a lookup table so phase7's grayscale mode produces accurate tonal reproduction.
 
@@ -87,3 +87,4 @@ Hardware-side (waiting on bed arrival):
 - First-corner Z-focus measurement after the bed is installed.
 - Run Int-04 cal on a real piece of stock to dial in cutting params.
 - Cut the small puzzle test (phase6_small.gcode) on the dialed-in params.
+- After confirming fit looks right at small scale, cut the full NORA puzzle (phase8 output).

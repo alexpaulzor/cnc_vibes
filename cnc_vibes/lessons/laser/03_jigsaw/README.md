@@ -23,8 +23,10 @@ Everything is in `scratch/` while the algorithm stabilizes.
 | `scratch/diagram_word_phase5.py` | Tab shifting (move tabs along the edge to clear letter outlines), sliver merging (absorb thin fragments into larger neighbors), one-tab-radius clearance enforcement. The current "canonical" algorithm. |
 | `scratch/phase6_small.py` | Small (80×80mm) puzzle generator that overrides phase2's module constants and emits a cuttable `.gcode` file. Validator-clean. Exposes `generate_pieces()` for reuse. |
 | `scratch/phase7_raster.py` | Photo raster engraving on top of the small puzzle. Halftone (Floyd-Steinberg) or grayscale (per-pixel power) modes; emits three GCode files (raster-only, cut-only, combined). |
+| `scratch/phase8_full_puzzle.py` | Full NORA-scale (300×300mm, 44-piece) GCode emitter. Edge dedup via `unary_union` + `linemerge`; containment-aware ordering (letter perimeters → interior cell-to-cell → panel border); greedy nearest-neighbor within each tier. |
 | `scratch/tests/test_phase6_small.py` | 12 unit tests for the small-puzzle GCode emitter. |
 | `scratch/tests/test_phase7_raster.py` | 33 unit tests for image preprocessing, encoders, run extraction, raster GCode shape, and the three output forms. |
+| `scratch/tests/test_phase8_full_puzzle.py` | 15 unit tests for edge dedup, classification, greedy ordering, and full-puzzle GCode shape. |
 
 Phases 1 and 3 are dead ends preserved for history; do not import them.
 
@@ -56,7 +58,18 @@ python lessons/laser/03_jigsaw/scratch/phase7_raster.py --test-pattern
 
 Emits three GCode files per run: `<stem>_raster.gcode` (engrave only), `<stem>_cut.gcode` (pieces only), `<stem>_full.gcode` (engrave then cut). Use the separate files if you want to verify the engrave before committing to the cut; use the combined file for one-shot jobs.
 
-For the full NORA-sized puzzle (300×300mm, 44 pieces), run phase5 for the polygon set and image. **GCode emission for the full-size puzzle is not wired up yet** — phase6_small's emitter handles small/test cases; the full puzzle needs proper containment toposort (see ROADMAP).
+For the full NORA-sized puzzle (300×300mm, 44 pieces):
+
+```bash
+python lessons/laser/03_jigsaw/scratch/phase8_full_puzzle.py --word NORA --seed 7
+python cnc.py validate lessons/laser/03_jigsaw/build/full_puzzle_nora.gcode
+```
+
+Emits `build/full_puzzle_nora.gcode` (~24k lines, ~7.2m of cuts at the default plywood feed). Shared cell-to-cell boundaries are cut exactly once (edge dedup via `unary_union` + `linemerge`); cut order is letter perimeters → interior → panel border (so the stock stays attached until the very last pass).
+
+> **Note on running phase6/7 and phase8 together**: they want different `phase2` constants (small puzzle vs. full puzzle). Don't import them in the same Python process. `phase8.generate_pieces()` will raise `RuntimeError` if it detects phase6 has been loaded. Run each from its own `python` invocation.
+
+Photo raster engraving for the full puzzle is intentionally deferred — combining phase7's raster pipeline with phase8's full-puzzle cuts needs phase7 decoupled from its phase6_small dependency. See ROADMAP.
 
 ## What the algorithm does
 
