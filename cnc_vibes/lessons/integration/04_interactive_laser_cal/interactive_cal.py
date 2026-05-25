@@ -780,8 +780,17 @@ def main() -> int:
                     if not line.strip() or line.strip().startswith(";"):
                         continue
                     resp = _send_line(ser, line.strip())
-                    if any(r.startswith("ALARM") for r in resp):
-                        print(f"  ALARM during '{line}'. Aborting.")
+                    alarm_lines = [r for r in resp if r.startswith("ALARM")]
+                    error_lines = [r for r in resp if r.startswith("error")]
+                    if alarm_lines or error_lines:
+                        print(f"  GRBL refused '{line.strip()}'. Full response:")
+                        for r in resp:
+                            print(f"    {r}")
+                        if alarm_lines:
+                            print(
+                                "  Machine is now in ALARM lockout. Send $X in your "
+                                "sender to unlock before retrying."
+                            )
                         return 1
                 # Wait for machine to finish moving
                 _wait_for_idle(ser, timeout_s=120)
