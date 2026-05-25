@@ -253,3 +253,83 @@ def test_regression_full_emits_polygons_in_expected_area():
         assert min_x <= bx_max <= max_x
         assert min_y <= by_min <= max_y
         assert min_y <= by_max <= max_y
+
+
+# ---------------------------------------------------------------------------
+# Sliver-merge contract — surfaced during AYANA red-team
+# ---------------------------------------------------------------------------
+
+from geometry import (  # noqa: E402
+    _adjacency_length,
+    _too_thin_or_small,
+    build_pieces_with_shifted_tabs,
+    carve_letter_pockets,
+    merge_small_fragments,
+    render_letter_polygons,
+)
+
+
+def _surviving_slivers_with_eligible_neighbors(fragments, cfg, min_shared=5.0):
+    """Return list of (idx, area, n_eligible) tuples for any sliver that
+    survived merge_small_fragments while having mergeable neighbors. The
+    contract is: surviving slivers MUST be truly isolated (e.g. letter
+    counters). If this list is non-empty, the merge algorithm has a bug."""
+    out = []
+    for i, f in enumerate(fragments):
+        if f.get("kind") != "cell":
+            continue
+        if not _too_thin_or_small(f["polygon"], cfg):
+            continue
+        n_eligible = sum(
+            1
+            for j, g in enumerate(fragments)
+            if j != i
+            and _adjacency_length(f["polygon"], g["polygon"]) >= min_shared
+        )
+        if n_eligible > 0:
+            out.append((i, f["polygon"].area, n_eligible))
+    return out
+
+
+@pytest.mark.parametrize("word", ["NORA", "AYANA", "OAT", "LILY"])
+def test_merge_leaves_only_isolated_slivers(word):
+    """After merge_small_fragments, every surviving sliver must have
+    ZERO eligible neighbors. The only reason a sliver should survive is
+    geometric isolation (letter counters like O's hole, A's triangle).
+
+    Word list deliberately includes:
+    - NORA: original canonical case with one O counter
+    - AYANA: red-team case with three A counters (surfaced this test)
+    - OAT: O + A counters in one word
+    - LILY: no counters in any letter
+    """
+    cfg = full_puzzle_config()
+    letter_union, _, _, _ = render_letter_polygons(word, cfg)
+    piece_polys, _ = build_pieces_with_shifted_tabs(7, letter_union, cfg)
+    fragments = merge_small_fragments(
+        carve_letter_pockets(piece_polys, letter_union), cfg
+    )
+    leaked = _surviving_slivers_with_eligible_neighbors(fragments, cfg)
+    assert leaked == [], (
+        f"{word}: {len(leaked)} slivers survived merge despite having "
+        f"eligible neighbors. (idx, area, n_eligible) = {leaked}"
+    )
+
+
+def test_ayana_keeps_three_a_counters_as_isolated_pieces():
+    """Regression for the AYANA red-team finding: the three A's each have
+    a triangular counter that survives as its own piece (drops into the A
+    pocket on assembly). Lock that they exist + are roughly the same size."""
+    cfg = full_puzzle_config()
+    pieces, _ = generate_pieces("AYANA", 7, cfg)
+    counters = [
+        p for p in pieces
+        if p["kind"] == "cell" and _too_thin_or_small(p["polygon"], cfg)
+    ]
+    assert len(counters) == 3, f"expected 3 A counters, got {len(counters)}"
+    areas = sorted(c["polygon"].area for c in counters)
+    # All three should be within 10% of each other (Arial Bold A counters
+    # are the same shape regardless of position)
+    assert areas[-1] - areas[0] < areas[0] * 0.10, (
+        f"A counters vary in size more than 10%: {areas}"
+    )
