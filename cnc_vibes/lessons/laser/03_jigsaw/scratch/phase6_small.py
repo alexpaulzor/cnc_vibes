@@ -177,6 +177,52 @@ def emit_gcode(pieces: list[dict], material: dict, word: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def generate_pieces(word: str, seed: int) -> tuple[list[dict], dict]:
+    """Run the phase5 polygon pipeline for the small-puzzle config.
+    Returns (pieces, tab_stats). Letters are appended last with kind='letter'."""
+    puzzle_w = p2.COLS * p2.CELL_W
+    puzzle_h = p2.ROWS * p2.CELL_H
+    img_w = puzzle_w + 2 * p2.MARGIN + p2.TAB_HEIGHT
+    img_h = puzzle_h + 2 * p2.MARGIN + p2.TAB_HEIGHT + p2.LEGEND_H
+    px = p2.MARGIN
+    py = p2.MARGIN
+
+    letter_union, _, _, _ = p2.render_letter_polygons(
+        word, img_w, img_h, px, py, puzzle_w, puzzle_h
+    )
+    piece_polys, stats = p5.build_pieces_with_shifted_tabs(seed, letter_union)
+
+    cell_fragments = []
+    for (c, r), piece in sorted(piece_polys.items()):
+        remaining = piece if letter_union is None else piece.difference(letter_union)
+        if remaining.is_empty:
+            continue
+        if isinstance(remaining, (MultiPolygon, GeometryCollection)):
+            for geom in remaining.geoms:
+                if isinstance(geom, Polygon) and geom.area > 100:
+                    cell_fragments.append(
+                        {"parent": (c, r), "polygon": geom, "kind": "cell"}
+                    )
+        elif isinstance(remaining, Polygon) and remaining.area > 100:
+            cell_fragments.append(
+                {"parent": (c, r), "polygon": remaining, "kind": "cell"}
+            )
+    cell_fragments = p5.merge_small_fragments(cell_fragments)
+
+    letter_polys = []
+    if letter_union is not None:
+        if isinstance(letter_union, MultiPolygon):
+            letter_polys = [g for g in letter_union.geoms if g.area > 100]
+        elif isinstance(letter_union, Polygon):
+            letter_polys = [letter_union]
+    all_pieces = list(cell_fragments) + [
+        {"parent": None, "polygon": lp, "kind": "letter"} for lp in letter_polys
+    ]
+    for i, p in enumerate(all_pieces, start=1):
+        p["serial"] = i
+    return all_pieces, stats
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
@@ -199,54 +245,11 @@ def main():
         f"cells={p2.COLS}x{p2.ROWS}@{p2.PIECE_MM}mm tab_R={p2.TAB_CIRCLE_R}px"
     )
 
-    letter_union, text_x, text_y, font = p2.render_letter_polygons(
-        word, img_w, img_h, px, py, puzzle_w, puzzle_h
-    )
-
-    # Polygon pipeline — same as phase5 v04
-    piece_polys, stats = p5.build_pieces_with_shifted_tabs(args.seed, letter_union)
+    all_pieces, stats = generate_pieces(word, args.seed)
     print(f"  tabs: {stats}")
-
-    cell_fragments = []
-    for (c, r), piece in sorted(piece_polys.items()):
-        if letter_union is None:
-            remaining = piece
-        else:
-            try:
-                remaining = piece.difference(letter_union)
-            except Exception:
-                remaining = piece
-        if remaining.is_empty:
-            continue
-        if isinstance(remaining, (MultiPolygon, GeometryCollection)):
-            for geom in remaining.geoms:
-                if isinstance(geom, Polygon) and geom.area > 100:
-                    cell_fragments.append(
-                        {"parent": (c, r), "polygon": geom, "kind": "cell"}
-                    )
-        elif isinstance(remaining, Polygon) and remaining.area > 100:
-            cell_fragments.append(
-                {"parent": (c, r), "polygon": remaining, "kind": "cell"}
-            )
-
-    n_pre_merge = len(cell_fragments)
-    cell_fragments = p5.merge_small_fragments(cell_fragments)
-    print(f"  cell fragments: {n_pre_merge} -> {len(cell_fragments)} after merge")
-
-    letter_polys = []
-    if letter_union is not None:
-        if isinstance(letter_union, MultiPolygon):
-            letter_polys = [g for g in letter_union.geoms if g.area > 100]
-        elif isinstance(letter_union, Polygon):
-            letter_polys = [letter_union]
-    all_pieces = list(cell_fragments) + [
-        {"parent": None, "polygon": lp, "kind": "letter"} for lp in letter_polys
-    ]
-    for i, p in enumerate(all_pieces, start=1):
-        p["serial"] = i
-    print(
-        f"  total pieces: {len(all_pieces)} ({len(cell_fragments)} cells + {len(letter_polys)} letters)"
-    )
+    n_cells = sum(1 for p in all_pieces if p["kind"] == "cell")
+    n_letters = len(all_pieces) - n_cells
+    print(f"  total pieces: {len(all_pieces)} ({n_cells} cells + {n_letters} letters)")
 
     # Verification diagram
     diagram_path = OUT_FIG_DIR / f"small_puzzle_{word.lower()}.png"

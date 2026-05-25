@@ -21,8 +21,10 @@ Everything is in `scratch/` while the algorithm stabilizes.
 | `scratch/diagram_word_phase2.py` | Cell grid + Bezier→**lollipop** tab geometry + letter polygon rendering (contour-traced via OpenCV). The geometric foundation. |
 | `scratch/diagram_word_phase4.py` | Letters as intact pieces carved into cell pockets. Polygon-with-hole rendering. |
 | `scratch/diagram_word_phase5.py` | Tab shifting (move tabs along the edge to clear letter outlines), sliver merging (absorb thin fragments into larger neighbors), one-tab-radius clearance enforcement. The current "canonical" algorithm. |
-| `scratch/phase6_small.py` | Small (80×80mm) puzzle generator that overrides phase2's module constants and emits a cuttable `.gcode` file. Validator-clean. |
+| `scratch/phase6_small.py` | Small (80×80mm) puzzle generator that overrides phase2's module constants and emits a cuttable `.gcode` file. Validator-clean. Exposes `generate_pieces()` for reuse. |
+| `scratch/phase7_raster.py` | Photo raster engraving on top of the small puzzle. Halftone (Floyd-Steinberg) or grayscale (per-pixel power) modes; emits three GCode files (raster-only, cut-only, combined). |
 | `scratch/tests/test_phase6_small.py` | 12 unit tests for the small-puzzle GCode emitter. |
+| `scratch/tests/test_phase7_raster.py` | 33 unit tests for image preprocessing, encoders, run extraction, raster GCode shape, and the three output forms. |
 
 Phases 1 and 3 are dead ends preserved for history; do not import them.
 
@@ -38,6 +40,21 @@ python cnc.py validate lessons/laser/03_jigsaw/build/small_puzzle_n.gcode
 Outputs:
 - `figs/small_puzzle_n.png` — verification diagram
 - `build/small_puzzle_n.gcode` — cuttable GCode (loose-fit: kerf becomes the natural clearance)
+
+Engrave a photo on top of that puzzle, then cut:
+
+```bash
+# Halftone (default): Floyd-Steinberg dither at fixed power. Calibration-tolerant.
+python lessons/laser/03_jigsaw/scratch/phase7_raster.py --image baby.jpg
+
+# Grayscale: per-pixel power modulation. Smoother gradients; needs a calibrated power curve.
+python lessons/laser/03_jigsaw/scratch/phase7_raster.py --image baby.jpg --mode grayscale
+
+# No image handy? Test with a built-in gradient + disc pattern.
+python lessons/laser/03_jigsaw/scratch/phase7_raster.py --test-pattern
+```
+
+Emits three GCode files per run: `<stem>_raster.gcode` (engrave only), `<stem>_cut.gcode` (pieces only), `<stem>_full.gcode` (engrave then cut). Use the separate files if you want to verify the engrave before committing to the cut; use the combined file for one-shot jobs.
 
 For the full NORA-sized puzzle (300×300mm, 44 pieces), run phase5 for the polygon set and image. **GCode emission for the full-size puzzle is not wired up yet** — phase6_small's emitter handles small/test cases; the full puzzle needs proper containment toposort (see ROADMAP).
 

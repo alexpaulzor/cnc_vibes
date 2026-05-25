@@ -69,9 +69,10 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 - ✅ Phase 6: small puzzle test variant (4 pieces + 1 letter, ~80×80mm)
 - ✅ GCode emission from polygon set (centerline cuts, validator-clean)
 - ✅ Simple inside-out cut ordering (letters first, then cells)
+- ✅ Phase 7: photo raster engraving (halftone via Floyd-Steinberg, grayscale via per-pixel power modulation); emits raster-only, cut-only, and combined GCode
 - 📋 Full containment toposort for the NORA-scale puzzle (44 pieces)
 - 📋 Productionize: move from `scratch/` to canonical lesson layout (README, CLI, tests, profile integration)
-- 📋 Photo engraving overlay (per original spec; user's current target is name-only)
+- 📋 Photo engraving overlay — implemented in phase7 (halftone + grayscale); future: gamma-calibrated grayscale power curve for "photo-realistic" rendering
 
 ## Next session candidates
 
