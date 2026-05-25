@@ -46,6 +46,61 @@ def _load(path: str, size: int) -> ImageFont.ImageFont:
     return ImageFont.truetype(path, size)
 
 
+# Cross-platform font search roots, tried in order. _find_font_path
+# resolves a font name to an actual file by checking each root.
+FONT_SEARCH_ROOTS = [
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/Library/Fonts",
+    "/usr/share/fonts",
+    "/usr/share/fonts/truetype",
+    "/usr/share/fonts/truetype/dejavu",
+    "C:\\Windows\\Fonts",
+]
+
+
+def _find_font_path(filename: str) -> str:
+    """Locate a font file by name across platform-typical font directories.
+    Returns the first hit; raises FileNotFoundError if no root contains it."""
+    import os
+
+    for root in FONT_SEARCH_ROOTS:
+        candidate = os.path.join(root, filename)
+        if os.path.exists(candidate):
+            return candidate
+    raise FileNotFoundError(
+        f"font {filename!r} not found in any of: {FONT_SEARCH_ROOTS}"
+    )
+
+
+def _cap_height_at_size(font: ImageFont.ImageFont, char: str) -> int:
+    """Pixel height of a single capital glyph at the font's current size.
+    Used for per-glyph auto-scaling so different fonts all render at a
+    consistent visual height."""
+    bbox = font.getbbox(char)
+    return bbox[3] - bbox[1]
+
+
+def _load_at_target_cap_height(
+    path: str, char: str, target_h: int
+) -> ImageFont.ImageFont:
+    """Load `path` at whatever font-size makes `char`'s cap height ≈ target_h.
+    Uses one measurement at size 200 to derive the scale factor, then a
+    refining measurement at the candidate size."""
+    probe = _load(path, 200)
+    probe_h = _cap_height_at_size(probe, char) or 1
+    scale = target_h / probe_h
+    size = max(8, int(round(200 * scale)))
+    # One refinement pass: actual cap height at the chosen size may
+    # differ slightly from the linear projection, so adjust once.
+    final = _load(path, size)
+    actual = _cap_height_at_size(final, char) or 1
+    if abs(actual - target_h) > target_h * 0.05:
+        size = max(8, int(round(size * target_h / actual)))
+        final = _load(path, size)
+    return final
+
+
 # Per-letter font assignment for "NORA ♥ AYANA". Chosen to maximize
 # visual variety — serif, sans, mono, italic, display, condensed, script.
 LINE_FONT_RECIPES = [
@@ -74,61 +129,96 @@ LINE_FONT_RECIPES = [
 ]
 
 
-def render_multiline_polygons(line_recipes, cfg: PuzzleConfig, font_size: int):
-    """Render multi-line text with per-glyph fonts. Returns the shapely
-    union of all letter shapes (compatible with build_pieces_with_shifted_tabs
-    et al)."""
+def render_multiline_polygons(
+    line_recipes,
+    cfg: PuzzleConfig,
+    target_cap_height_px: int | None = None,
+    line_height_px: int | None = None,
+):
+    """Render multi-line text with per-glyph fonts, each glyph auto-scaled
+    so its cap-height matches target_cap_height_px (defaults to cfg.cell_h_px
+    — letters end up at least as tall as a standard puzzle piece). Different
+    fonts have wildly different size→cap-height relationships; per-glyph
+    scaling makes the line look visually uniform regardless of font choice.
+
+    Baseline alignment: each glyph drawn so its font baseline sits on the
+    line baseline (not bbox center). This fixes the "letters bouncing" look
+    you get from naive bbox-center alignment.
+
+    Returns the shapely union of all letter shapes."""
     img_w, img_h = cfg.canvas_w_px, cfg.canvas_h_px
     px, py = cfg.margin_px, cfg.margin_px
     puzzle_w, puzzle_h = cfg.puzzle_w_px, cfg.puzzle_h_px
 
+    if target_cap_height_px is None:
+        target_cap_height_px = cfg.cell_h_px
+
     n_lines = len(line_recipes)
-    line_pitch = puzzle_h // (n_lines + 1)  # space lines evenly with gaps
+    if line_height_px is None:
+        # Pack lines: cap-height + small gap; positioned within the panel
+        gap = max(20, cfg.cell_h_px // 6)
+        line_height_px = target_cap_height_px + gap
+    # Anchor lines around vertical center of the panel.
+    total_text_h = line_height_px * n_lines
+    block_top = py + (puzzle_h - total_text_h) // 2
 
     mask = Image.new("L", (img_w, img_h), 0)
     draw = ImageDraw.Draw(mask)
 
     for line_idx, glyphs in enumerate(line_recipes):
-        # Pre-measure each glyph at the chosen font size
-        loaded = [(char, _load(path, font_size)) for char, path in glyphs]
-        widths, heights, bboxes = [], [], []
-        for char, font in loaded:
+        # Per-glyph load at the right size to hit target_cap_height_px
+        loaded = []
+        widths = []
+        bboxes = []
+        for char, path in glyphs:
+            font = _load_at_target_cap_height(path, char, target_cap_height_px)
             bbox = draw.textbbox((0, 0), char, font=font)
+            loaded.append((char, font))
             widths.append(bbox[2] - bbox[0])
-            heights.append(bbox[3] - bbox[1])
             bboxes.append(bbox)
-        kerning = font_size // 8
-        total_w = sum(widths) + kerning * (len(loaded) - 1)
-        max_h = max(heights) if heights else 1
 
-        # Auto-scale this line down if too wide
+        kerning = max(8, target_cap_height_px // 16)
+        total_w = sum(widths) + kerning * max(0, len(loaded) - 1)
+
+        # If too wide, scale all line glyphs down uniformly until it fits
         max_line_w = int(puzzle_w * 0.92)
-        line_scale = 1.0
         if total_w > max_line_w:
-            line_scale = max_line_w / total_w
-            # Re-render with scaled fonts. Since PIL fonts can't be live-scaled,
-            # reload each at the new size.
-            scaled_size = max(8, int(font_size * line_scale))
-            loaded = [(char, _load(path, scaled_size)) for char, path in glyphs]
-            widths, heights, bboxes = [], [], []
-            for char, font in loaded:
+            shrink = max_line_w / total_w
+            new_target = max(20, int(target_cap_height_px * shrink))
+            loaded = []
+            widths = []
+            bboxes = []
+            for char, path in glyphs:
+                font = _load_at_target_cap_height(path, char, new_target)
                 bbox = draw.textbbox((0, 0), char, font=font)
+                loaded.append((char, font))
                 widths.append(bbox[2] - bbox[0])
-                heights.append(bbox[3] - bbox[1])
                 bboxes.append(bbox)
-            kerning = scaled_size // 8
-            total_w = sum(widths) + kerning * (len(loaded) - 1)
-            max_h = max(heights) if heights else 1
+            kerning = max(8, new_target // 16)
+            total_w = sum(widths) + kerning * max(0, len(loaded) - 1)
+            print(
+                f"  line {line_idx}: too wide at target cap-height; "
+                f"shrunk to {new_target}px"
+            )
 
-        # Position the line
-        line_y_center = py + line_pitch * (line_idx + 1)
+        # Line baseline = bottom of the cap region for this line.
+        # block_top + per-line offset + cap_height = baseline
+        line_baseline_y = (
+            block_top
+            + line_height_px * (line_idx + 1)
+            - max(8, target_cap_height_px // 6)
+        )
         x_cursor = px + (puzzle_w - total_w) // 2
 
-        for (char, font), w, h, bbox in zip(loaded, widths, heights, bboxes):
-            # Vertical alignment: center this glyph's bbox on line_y_center
-            y_draw = line_y_center - h // 2 - bbox[1]
+        for (char, font), w, bbox in zip(loaded, widths, bboxes):
+            # font.getmetrics() -> (ascent, descent). The baseline sits at
+            # `ascent` pixels from the TOP of the font's drawing area, so
+            # to put baseline at line_baseline_y, draw the text starting
+            # at y_top = line_baseline_y - ascent.
+            ascent, _descent = font.getmetrics()
+            y_top = line_baseline_y - ascent
             x_draw = x_cursor - bbox[0]
-            draw.text((x_draw, y_draw), char, fill=255, font=font)
+            draw.text((x_draw, y_top), char, fill=255, font=font)
             x_cursor += w + kerning
 
     return _trace_mask_polygons(mask)
@@ -204,15 +294,26 @@ def _load_label_font(size):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--image", type=Path, default=Path("/tmp/cnc_mockup/pomsky.jpg"))
-    ap.add_argument("--font-size", type=int, default=180)
+    ap.add_argument(
+        "--cap-height-mm",
+        type=float,
+        default=None,
+        help="target cap-height per letter in mm (default: one cell tall)",
+    )
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--px-per-mm", type=float, default=4.0)
     args = ap.parse_args()
 
     cfg = full_puzzle_config()
 
-    print("rendering multi-line text...")
-    letter_union = render_multiline_polygons(LINE_FONT_RECIPES, cfg, args.font_size)
+    target_cap_height_px = None
+    if args.cap_height_mm is not None:
+        target_cap_height_px = int(args.cap_height_mm * cfg.px_per_mm)
+
+    print("rendering multi-line text (cap-height auto-targeted per glyph)...")
+    letter_union = render_multiline_polygons(
+        LINE_FONT_RECIPES, cfg, target_cap_height_px=target_cap_height_px
+    )
     if letter_union is None:
         sys.exit(
             "error: letter rendering produced empty polygon — fonts may be missing"
