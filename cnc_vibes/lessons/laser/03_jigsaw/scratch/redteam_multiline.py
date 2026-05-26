@@ -300,11 +300,27 @@ def main():
         default=None,
         help="target cap-height per letter in mm (default: one cell tall)",
     )
+    ap.add_argument(
+        "--wave-mm",
+        type=float,
+        default=0.0,
+        help="wavy-edge amplitude in mm (default 0 = straight grid edges; "
+        "try 2-3mm for a commercial-puzzle look)",
+    )
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--px-per-mm", type=float, default=4.0)
     args = ap.parse_args()
 
-    cfg = full_puzzle_config()
+    if args.wave_mm > 0:
+        cfg = PuzzleConfig(
+            panel_mm=300,
+            piece_mm=50,
+            tab_circle_r_px=22,
+            wave_amplitude_px=int(round(args.wave_mm * 5)),  # cfg.px_per_mm = 5
+        )
+        print(f"wavy grid: amplitude {args.wave_mm}mm ({cfg.wave_amplitude_px}px)")
+    else:
+        cfg = full_puzzle_config()
 
     target_cap_height_px = None
     if args.cap_height_mm is not None:
@@ -379,7 +395,8 @@ def main():
     d.text((10, panel_px + 10), line1, fill=(20, 20, 20), font=title_font)
     d.text((10, panel_px + 50), line2, fill=(60, 60, 60), font=title_font)
 
-    out_path = FIG_DIR / "redteam_multiline_pomsky.png"
+    suffix = f"_wavy{int(args.wave_mm)}mm" if args.wave_mm > 0 else ""
+    out_path = FIG_DIR / f"redteam_multiline_pomsky{suffix}.png"
     out.save(out_path, "PNG", optimize=True)
     print(f"-> {out_path}")
 

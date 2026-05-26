@@ -333,3 +333,52 @@ def test_ayana_keeps_three_a_counters_as_isolated_pieces():
     assert areas[-1] - areas[0] < areas[0] * 0.10, (
         f"A counters vary in size more than 10%: {areas}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wavy edges (Option A organic-grid implementation)
+# ---------------------------------------------------------------------------
+
+
+def test_wave_amplitude_default_is_zero():
+    """Default config produces straight grid edges — locks
+    backwards-compatibility with the regression tests above."""
+    assert full_puzzle_config().wave_amplitude_px == 0
+    assert small_puzzle_config().wave_amplitude_px == 0
+
+
+def test_wavy_mode_produces_more_vertices_than_straight():
+    """Same word + seed in wavy mode yields significantly more cell-edge
+    vertices than straight mode (the half-sine subdivision adds points
+    along every flat segment of every internal edge)."""
+    straight = full_puzzle_config()
+    wavy = PuzzleConfig(
+        panel_mm=300, piece_mm=50, tab_circle_r_px=22, wave_amplitude_px=12
+    )
+    p_s, _ = generate_pieces("NORA", 7, straight)
+    p_w, _ = generate_pieces("NORA", 7, wavy)
+    cell_verts_s = sum(
+        len(p["polygon"].exterior.coords) for p in p_s if p["kind"] == "cell"
+    )
+    cell_verts_w = sum(
+        len(p["polygon"].exterior.coords) for p in p_w if p["kind"] == "cell"
+    )
+    assert cell_verts_w > cell_verts_s * 1.15, (
+        f"expected wavy to add ≥15% more vertices; got "
+        f"straight={cell_verts_s} wavy={cell_verts_w}"
+    )
+
+
+def test_wavy_mode_preserves_sliver_merge_contract():
+    """Wavy edges don't break the merge algorithm — surviving slivers
+    must still all be geometrically isolated."""
+    cfg = PuzzleConfig(
+        panel_mm=300, piece_mm=50, tab_circle_r_px=22, wave_amplitude_px=12
+    )
+    letter_union, _, _, _ = render_letter_polygons("NORA", cfg)
+    piece_polys, _ = build_pieces_with_shifted_tabs(7, letter_union, cfg)
+    fragments = merge_small_fragments(
+        carve_letter_pockets(piece_polys, letter_union), cfg
+    )
+    leaked = _surviving_slivers_with_eligible_neighbors(fragments, cfg)
+    assert leaked == [], f"wavy mode leaked mergeable slivers: {leaked}"

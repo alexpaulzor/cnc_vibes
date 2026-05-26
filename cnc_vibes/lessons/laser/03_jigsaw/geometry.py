@@ -71,6 +71,15 @@ class PuzzleConfig:
     shift_steps: int = 12
     shift_step_frac: float = 0.2
 
+    # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
+    # matches the original grid-puzzle behavior and keeps all existing
+    # regression tests stable. >0 enables a single-half-sine perpendicular
+    # wave on each internal cell-cell edge's flat segments (corner→tab_base
+    # and tab_base→corner), producing a more organic "commercial puzzle"
+    # look. Panel-perimeter edges always stay straight.
+    wave_amplitude_px: float = 0.0
+    wave_steps: int = 12  # subdivisions per wavy segment
+
     # Derived properties (computed in __post_init__ for backwards-compat
     # with phase2's int-coercion of these values)
     cols: int = field(init=False)
@@ -132,6 +141,38 @@ def small_puzzle_config() -> PuzzleConfig:
 def full_puzzle_config() -> PuzzleConfig:
     """300x300mm panel with 50mm cells. Matches scratch/phase2.py defaults."""
     return PuzzleConfig(panel_mm=300, piece_mm=50, tab_circle_r_px=22)
+
+
+# ---------------------------------------------------------------------------
+# Wavy segment helper (used when cfg.wave_amplitude_px > 0)
+# ---------------------------------------------------------------------------
+
+
+def wavy_points(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    amplitude_px: float,
+    n_steps: int = 12,
+) -> list[tuple[float, float]]:
+    """Subdivide segment p1→p2 into n_steps+1 points with a single
+    half-sine perpendicular displacement. Endpoints have zero displacement
+    so the wave stitches cleanly to whatever the caller's path is doing.
+    Returns the list INCLUDING both endpoints — caller drops p1 if it
+    already exists in their accumulator."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-6 or n_steps < 2 or amplitude_px <= 0:
+        return [p1, p2]
+    nx, ny = -dy / length, dx / length  # left perpendicular to direction
+    out = []
+    for i in range(n_steps + 1):
+        t = i / n_steps
+        wave = amplitude_px * math.sin(t * math.pi)
+        x = p1[0] + dx * t + nx * wave
+        y = p1[1] + dy * t + ny * wave
+        out.append((x, y))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -382,29 +423,58 @@ def build_pieces_with_shifted_tabs(
     }
 
     stats = {"total": 0, "centered": 0, "shifted": 0, "dropped": 0}
+    wave_amp = cfg.wave_amplitude_px
+    wave_steps = cfg.wave_steps
 
     def add_tab(pts, edge_start, edge_dir, edge_length, direction):
+        """Original API preserved: append tab points to `pts` between
+        edge_start (already in pts) and the next corner (caller appends
+        after). When wave_amp > 0, the flat segments before/after the
+        tab bulge are wavy; the bulge itself is unchanged. When the tab
+        is dropped (no clear position), this function leaves pts as-is —
+        the caller's subsequent corner-append produces a straight or
+        wavy connection via the corner_after handling below."""
         stats["total"] += 1
         max_offset = edge_length - cfg.tab_len_px
         if max_offset <= 0:
             stats["dropped"] += 1
-            return
+            return False  # no tab placed
         center = max_offset / 2
         offset = find_clear_tab_offset(
             edge_start, edge_dir, edge_length, letter_union, direction, cfg
         )
         if offset is None:
             stats["dropped"] += 1
-            return
+            return False
         if abs(offset - center) < 1.0:
             stats["centered"] += 1
         else:
             stats["shifted"] += 1
-        pts.extend(
-            place_tab_at_offset(
-                edge_start, edge_dir, edge_length, direction, offset, cfg
-            )[1:-1]
+        tab_world = place_tab_at_offset(
+            edge_start, edge_dir, edge_length, direction, offset, cfg
         )
+        if wave_amp > 0:
+            # corner_a (= pts[-1]) → wavy → tab base left
+            pts.extend(wavy_points(pts[-1], tab_world[1], wave_amp, wave_steps)[1:])
+            # bulge interior (excluding the two v=0 base points)
+            pts.extend(tab_world[2:-2])
+            # tab base right (last v=0 point on the tab outline)
+            pts.append(tab_world[-2])
+            # NOTE: wavy connection from tab base right → next corner
+            # is handled by the caller via _connect_to_corner below.
+        else:
+            pts.extend(tab_world[1:-1])
+        return True  # tab placed
+
+    def _connect_to_corner(pts, corner, edge_has_tab):
+        """Append a straight or wavy connection from pts[-1] to corner.
+        Wavy when cfg.wave_amplitude_px > 0 AND the edge has a tab (or
+        had one dropped — either way, it's an internal cell-cell edge).
+        Panel-perimeter edges (edge_has_tab=False) always stay straight."""
+        if wave_amp > 0 and edge_has_tab:
+            pts.extend(wavy_points(pts[-1], corner, wave_amp, wave_steps)[1:])
+        else:
+            pts.append(corner)
 
     def piece_polygon(col, row, ox, oy):
         x0 = ox + col * cfg.cell_w_px
@@ -412,25 +482,32 @@ def build_pieces_with_shifted_tabs(
         x1 = x0 + cfg.cell_w_px
         y1 = y0 + cfg.cell_h_px
         pts = [(x0, y0)]
-        if row > 0:
-            bulges_down = horizontal_tabs[(col, row - 1)]
-            d = -1 if bulges_down else +1
+        # Top edge (TL → TR)
+        top_has_tab = row > 0
+        if top_has_tab:
+            d = -1 if horizontal_tabs[(col, row - 1)] else +1
             add_tab(pts, (x0, y0), (1, 0), cfg.cell_w_px, d)
-        pts.append((x1, y0))
-        if col < cfg.cols - 1:
-            bulges_right = vertical_tabs[(col, row)]
-            d = +1 if bulges_right else -1
+        _connect_to_corner(pts, (x1, y0), top_has_tab)
+        # Right edge (TR → BR)
+        right_has_tab = col < cfg.cols - 1
+        if right_has_tab:
+            d = +1 if vertical_tabs[(col, row)] else -1
             add_tab(pts, (x1, y0), (0, 1), cfg.cell_h_px, d)
-        pts.append((x1, y1))
-        if row < cfg.rows - 1:
-            bulges_down = horizontal_tabs[(col, row)]
-            d = +1 if bulges_down else -1
+        _connect_to_corner(pts, (x1, y1), right_has_tab)
+        # Bottom edge (BR → BL)
+        bottom_has_tab = row < cfg.rows - 1
+        if bottom_has_tab:
+            d = +1 if horizontal_tabs[(col, row)] else -1
             add_tab(pts, (x1, y1), (-1, 0), cfg.cell_w_px, d)
-        pts.append((x0, y1))
-        if col > 0:
-            bulges_right = vertical_tabs[(col - 1, row)]
-            d = -1 if bulges_right else +1
+        _connect_to_corner(pts, (x0, y1), bottom_has_tab)
+        # Left edge (BL → TL closes the polygon implicitly)
+        left_has_tab = col > 0
+        if left_has_tab:
+            d = -1 if vertical_tabs[(col - 1, row)] else +1
             add_tab(pts, (x0, y1), (0, -1), cfg.cell_h_px, d)
+            # Wavy connection back to the starting TL corner
+            if wave_amp > 0:
+                pts.extend(wavy_points(pts[-1], (x0, y0), wave_amp, wave_steps)[1:-1])
         return pts
 
     px, py = cfg.margin_px, cfg.margin_px
