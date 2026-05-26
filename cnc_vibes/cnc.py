@@ -433,6 +433,50 @@ def cmd_ip(args: argparse.Namespace) -> None:
     sys.exit(1)
 
 
+def cmd_preview(args: argparse.Namespace) -> None:
+    """Open the given GCode file in CAMotics for 3D toolpath inspection.
+
+    CAMotics is a separate install (https://camotics.org). On macOS we
+    launch the bundled .app via `open -a CAMotics`; on Linux/Windows we
+    invoke the `camotics` binary if it's on PATH. The app stays open for
+    interactive inspection; close it when done. No headless render today —
+    the prebuilt CAMotics CLI tools (camsim, gcodetool) link against an
+    Intel libcairo that doesn't load cleanly on Apple Silicon, so we skip
+    them and rely on the GUI launcher.
+    """
+    gcode = Path(args.gcode).resolve()
+    if not gcode.exists():
+        sys.exit(f"error: gcode file not found: {gcode}")
+
+    import platform as _platform
+
+    system = _platform.system()
+    if system == "Darwin":
+        app = "/Applications/CAMotics.app"
+        if not Path(app).exists():
+            sys.exit(
+                "error: CAMotics not installed in /Applications. "
+                "Download from https://camotics.org and drag to /Applications."
+            )
+        # `open -a` returns immediately; CAMotics stays running for the user
+        rc = subprocess.run(["open", "-a", "CAMotics", str(gcode)]).returncode
+        if rc != 0:
+            sys.exit(rc)
+        print(f"-> opened {gcode.name} in CAMotics")
+        return
+
+    # Linux / Windows: assume `camotics` is on PATH
+    binary = "camotics"
+    try:
+        subprocess.Popen([binary, str(gcode)])
+        print(f"-> opened {gcode.name} in CAMotics")
+    except FileNotFoundError:
+        sys.exit(
+            f"error: `camotics` not on PATH. Install from https://camotics.org "
+            f"or apt install camotics on Debian/Ubuntu."
+        )
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -560,6 +604,13 @@ def main() -> None:
         "-v", "--verbose", action="store_true", help="print cache + scan info to stderr"
     )
     ip.set_defaults(func=cmd_ip)
+
+    pv = subs.add_parser(
+        "preview",
+        help="open a GCode file in CAMotics for 3D toolpath inspection",
+    )
+    pv.add_argument("gcode", help="path to GCode file to visualize")
+    pv.set_defaults(func=cmd_preview)
 
     h = subs.add_parser(
         "help",
