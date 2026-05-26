@@ -49,8 +49,8 @@ A code-first CAM library that produces validator-clean GCode for the common 2.5D
 - ✅ `profile_cut` — inside/outside/on cut around a polygon's perimeter (multi-pass Z)
 - ✅ `pocket_mill` — offset-spiral clearance of a polygon interior (multi-pass Z, configurable stepover)
 - ✅ `drill_array` — peck or single-plunge drill cycle at each (x, y)
-- ✅ Worked example: `lessons/mill/05_generic_cam/` composes all three into a mounting plate
-- 📋 `engrave_text` — constant-depth centerline trace (deferred; v-carve variant farther out)
+- ✅ `engrave_text` — constant-depth outline trace of glyph contours (PIL+cv2 rasterize → findContours → per-contour G-code). NOT V-carve; variable-depth medial-axis variant still on the roadmap.
+- ✅ Worked example: `lessons/mill/05_generic_cam/` composes profile/pocket/drill into a mounting plate
 - 📋 `cnc.py preview <gcode>` ✅ for CAMotics already; `cnc.py cam <op>` CLI shim is unstarted
 
 ## Suggested learning order

@@ -797,6 +797,8 @@ Operations shipped (use these from your own Python scripts):
   profile_cut(polygon, depth_mm, tool, material, side, cfg) -> GcodeOutput
   pocket_mill (polygon, depth_mm, tool, material, stepover_factor, cfg)
   drill_array (holes, depth_mm, tool, material, peck_depth_mm, cfg)
+  engrave_text(text, position, height_mm, depth_mm, tool, material,
+               font_path, cfg)  -- constant-depth outline; NOT V-carve
 
 Each op:
   - Loads tool + material from profiles/{tools,materials}.yaml

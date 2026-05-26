@@ -467,3 +467,188 @@ def test_drill_array_all_holes_within_machine_envelope():
     visited = {(float(x), float(y)) for x, y in xy_pairs}
     for h in holes:
         assert h in visited
+
+
+# ---------------------------------------------------------------------------
+# engrave_text
+# ---------------------------------------------------------------------------
+
+
+from cam import engrave_text, _find_default_font_path  # noqa: E402
+
+
+# Helper: macOS-known font path. Tests that depend on actually rasterizing
+# glyph contours skip if the font isn't present (e.g. running on Linux CI
+# without Helvetica). Tests that only exercise the warning logic don't need
+# a font and run unconditionally.
+_MAC_FONT = "/System/Library/Fonts/Helvetica.ttc"
+
+
+def _font_available() -> bool:
+    return _find_default_font_path() is not None
+
+
+requires_font = pytest.mark.skipif(
+    not _font_available(), reason="no system font available for rasterizing text"
+)
+
+
+@requires_font
+def test_engrave_text_validator_headers():
+    out = engrave_text("HELLO", position=(10, 10), height_mm=10, depth_mm=0.5)
+    text = out.text
+    assert ";HEAD: spindle" in text
+    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";TOOL: flat_3.175mm_2flute" in text
+    assert "$32=0" in text  # spindle mode, not laser
+
+
+@requires_font
+def test_engrave_text_uses_m3_not_m4():
+    out = engrave_text("HELLO", position=(10, 10), height_mm=10, depth_mm=0.5)
+    assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
+    assert not re.search(r"^M4\b", out.text, re.MULTILINE)
+
+
+@requires_font
+def test_engrave_text_spindle_rpm_in_range():
+    """S value must be in [0, 1000] for laser, in [0, max_rpm] for spindle.
+    Spindle default is 18000; assert it appears as such, not capped at 1000."""
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5)
+    m = re.search(r"^M3 S(\d+)", out.text, re.MULTILINE)
+    assert m is not None
+    s_val = int(m.group(1))
+    assert 0 < s_val <= 24000  # spindle units, not laser PWM
+
+
+@requires_font
+def test_engrave_text_emits_g1_lines():
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5)
+    g1_lines = [l for l in out.lines if l.startswith("G1 ")]
+    assert len(g1_lines) > 10  # at least some cutting moves
+
+
+@requires_font
+def test_engrave_text_depth_respected():
+    out = engrave_text("H", position=(0, 0), height_mm=10, depth_mm=0.7)
+    # Every G1 Z plunge should be to Z=-0.700
+    plunges = re.findall(r"^G1 Z(-[\d.]+)\b", out.text, re.MULTILINE)
+    assert plunges
+    for z in plunges:
+        assert float(z) == pytest.approx(-0.7)
+
+
+def test_engrave_text_empty_string_warns_and_emits_nothing():
+    out = engrave_text("", position=(0, 0), height_mm=10, depth_mm=0.5)
+    assert out.lines == []
+    assert any("empty text" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_v_bit_warning_fires():
+    t = load_tool("vbit_60deg_6mm")
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, tool=t)
+    assert any("v_bit" in w.lower() or "V-carve" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_default_tool_warning_fires():
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5)
+    assert any("default tool" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_explicit_tool_suppresses_default_warning():
+    t = load_tool("flat_3.175mm_2flute")
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, tool=t)
+    assert not any("default tool" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_strict_mode_escalates_default_tool():
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit, match="default tool"):
+        engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, cfg=cfg)
+
+
+@requires_font
+def test_engrave_text_strict_mode_escalates_v_bit():
+    t = load_tool("vbit_60deg_6mm")
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit, match="v_bit"):
+        engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, tool=t, cfg=cfg)
+
+
+@requires_font
+def test_engrave_text_ball_endmill_warning():
+    t = load_tool("ball_3mm_2flute")
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, tool=t)
+    assert any("ball_endmill" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_drill_warning():
+    t = load_tool("drill_3.2mm_m4_clearance")
+    out = engrave_text("HI", position=(0, 0), height_mm=10, depth_mm=0.5, tool=t)
+    assert any("drill" in w.lower() for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_wide_tool_small_text_warning():
+    """3.175mm tool + 3mm cap-height text → too-wide warning."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = engrave_text("HI", position=(0, 0), height_mm=3, depth_mm=0.5, tool=t)
+    assert any("too wide to trace small text" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_depth_exceeds_flute_length_warning():
+    t = load_tool("flat_3.175mm_2flute")  # flute_length_mm = 17
+    out = engrave_text("HI", position=(0, 0), height_mm=20, depth_mm=20, tool=t)
+    assert any("flute length" in w for w in out.warnings)
+
+
+@requires_font
+def test_engrave_text_multiple_contours_for_o_or_a():
+    """A character with an inner counter (O, A, P, D) should produce more
+    than one closed contour: outer perimeter + inner counter."""
+    out = engrave_text("O", position=(0, 0), height_mm=15, depth_mm=0.5)
+    # Count contour-section markers in the output
+    n_contours = sum(1 for l in out.lines if l.startswith("; --- contour"))
+    assert n_contours >= 2
+
+
+@requires_font
+def test_engrave_text_position_offsets_output():
+    """Output coordinates should be translated by the requested position."""
+    out_at_origin = engrave_text("H", position=(0, 0), height_mm=10, depth_mm=0.5)
+    out_offset = engrave_text("H", position=(100, 50), height_mm=10, depth_mm=0.5)
+    # X coordinates in offset version should generally be ~100 higher
+    coords_origin = [
+        (float(x), float(y))
+        for x, y in re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out_at_origin.text)
+    ]
+    coords_offset = [
+        (float(x), float(y))
+        for x, y in re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out_offset.text)
+    ]
+    # Skip the final park (G0 X0 Y0) move in both
+    cut_o = [(x, y) for x, y in coords_origin if (x, y) != (0.0, 0.0)]
+    cut_off = [(x, y) for x, y in coords_offset if (x, y) != (0.0, 0.0)]
+    # Mean X should be ~100 mm apart, mean Y ~50 mm apart
+    mean_x_o = sum(x for x, _ in cut_o) / len(cut_o)
+    mean_x_off = sum(x for x, _ in cut_off) / len(cut_off)
+    assert abs((mean_x_off - mean_x_o) - 100) < 1
+
+
+def test_engrave_text_missing_font_falls_back():
+    """Passing a bogus font_path warns and falls back to platform default
+    (or warns again + emits nothing if no platform default exists)."""
+    out = engrave_text(
+        "HI",
+        position=(0, 0),
+        height_mm=10,
+        depth_mm=0.5,
+        font_path="/no/such/font.ttf",
+    )
+    assert any("not found" in w for w in out.warnings)

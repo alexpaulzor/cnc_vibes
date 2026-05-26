@@ -36,10 +36,10 @@ Standalone Python tools — any human (or other CLI) can run them without an LLM
 
 ## Library — `scripts/cam.py`
 
-Not a lesson per se, but the foundation for code-first 2.5D milling. Pure-function library: shapely shape + tool + material → validator-clean GCode, no FreeCAD GUI. Ships `profile_cut`, `pocket_mill`, `drill_array` (51 tests); `engrave_text` still on the roadmap. Each op emits clear warnings for default-pick / op-tool mismatch and supports `CamConfig(strict=True)` to escalate warnings to errors. The worked example at **[4e generic CAM](mill/05_generic_cam/)** composes all three ops into one part — read its README for the full pipeline (generate → validate → CAMotics preview → preflight → cut).
+Not a lesson per se, but the foundation for code-first 2.5D milling. Pure-function library: shapely shape + tool + material → validator-clean GCode, no FreeCAD GUI. Ships `profile_cut`, `pocket_mill`, `drill_array`, and `engrave_text` (constant-depth outline trace of glyph contours; not V-carve). Each op emits clear warnings for default-pick / op-tool mismatch and supports `CamConfig(strict=True)` to escalate warnings to errors. The worked example at **[4e generic CAM](mill/05_generic_cam/)** composes the cut/pocket/drill ops into one part — read its README for the full pipeline (generate → validate → CAMotics preview → preflight → cut); `engrave_text` composes the same way.
 
 ```python
-from cam import profile_cut, pocket_mill, drill_array, load_tool, load_material
+from cam import profile_cut, pocket_mill, drill_array, engrave_text, load_tool, load_material
 out_cut = profile_cut(my_polygon, depth_mm=6.0,
                       tool=load_tool("flat_6mm_2flute"),
                       material=load_material("plywood_baltic_birch_6mm"))

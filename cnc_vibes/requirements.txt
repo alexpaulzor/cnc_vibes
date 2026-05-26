@@ -4,5 +4,9 @@ pyserial>=3.5
 Pillow>=10.0
 # For scripts/find_cnc.py (mDNS discovery of Grbl_ESP32 controllers):
 zeroconf>=0.130
-# Optional for snapshot --camera mode:
-#   opencv-python-headless>=4.8
+# For scripts/cam.py engrave_text (rasterize text → findContours), and
+# for lessons/laser/03_jigsaw geometry tracing:
+opencv-python-headless>=4.8
+# For scripts/cam.py (shapely geometry input):
+shapely>=2.0
+# Optional for snapshot --camera mode (uses cv2, already pulled in above)

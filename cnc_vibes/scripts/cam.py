@@ -5,13 +5,16 @@ Single-file library that produces validator-clean GCode for the common
 emitters in lessons/laser/{01_spacer,03_jigsaw}: pure function takes a
 shapely shape + tool + material, returns GcodeOutput.
 
-Operations (this file, this turn):
+Operations (this file):
   - profile_cut: cut around a polygon's perimeter (inside, outside, on)
-
-Operations on the roadmap (follow-up commits):
   - pocket_mill: clear the interior with an offset spiral
-  - drill_array: G81/explicit cycle at each (x, y)
-  - engrave_text: centerline trace (constant depth) or V-carve (variable)
+  - drill_array: peck or single-plunge drill cycle at each (x, y)
+  - engrave_text: constant-depth outline trace of rendered text glyphs
+
+Not yet shipped:
+  - True V-carve (variable depth via medial-axis transform). engrave_text
+    is OUTLINE-only — it traces glyph contours at constant depth. See its
+    docstring for the distinction.
 
 Defaults are designed to fail loud, not silent. When the caller didn't
 specify a tool, a warning prints with the default tool's name and the
@@ -652,6 +655,329 @@ def drill_array(
                 if cur_depth < depth_mm:
                     lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
                     lines.append(f"G0 X{hx:.3f} Y{hy:.3f}")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: engrave_text (constant-depth outline)
+# ---------------------------------------------------------------------------
+
+
+# Cross-platform font search roots, in order. _find_default_font_path returns
+# the first one that exists. macOS Helvetica is the canonical first pick;
+# Windows Arial and Linux DejaVu are the platform fallbacks.
+_FONT_SEARCH_PATHS = [
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "C:\\Windows\\Fonts\\arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+]
+
+
+def _find_default_font_path() -> str | None:
+    for p in _FONT_SEARCH_PATHS:
+        if Path(p).exists():
+            return p
+    return None
+
+
+# Render resolution: how many pixels per mm in the rasterized text mask.
+# Higher = smoother contours but slower. 20 px/mm is plenty for 0.5-3mm
+# strokes traced by a 0.5-3mm tool. Coordinates are quantized to 3 decimal
+# places downstream anyway.
+_ENGRAVE_PX_PER_MM = 20
+
+
+def _load_font_at_cap_height(font_path: str, sample_char: str, target_cap_px: int):
+    """Load font_path at whatever pixel size makes sample_char's cap-height
+    ~= target_cap_px. Same approach as the multi-line text renderer in
+    lessons/laser/03_jigsaw/scratch/redteam_multiline.py: probe at a fixed
+    size to derive scale, then refine once."""
+    from PIL import ImageFont
+
+    probe = ImageFont.truetype(font_path, 200)
+    bbox = probe.getbbox(sample_char)
+    probe_h = max(1, bbox[3] - bbox[1])
+    scale = target_cap_px / probe_h
+    size = max(8, int(round(200 * scale)))
+    final = ImageFont.truetype(font_path, size)
+    bbox = final.getbbox(sample_char)
+    actual = max(1, bbox[3] - bbox[1])
+    if abs(actual - target_cap_px) > target_cap_px * 0.05:
+        size = max(8, int(round(size * target_cap_px / actual)))
+        final = ImageFont.truetype(font_path, size)
+    return final
+
+
+def _text_to_contours(
+    text: str, font_path: str, height_mm: float, px_per_mm: int
+) -> list[list[tuple[float, float]]]:
+    """Rasterize text to a high-resolution mask, then extract outer + inner
+    glyph contours with cv2.findContours(RETR_CCOMP).
+
+    Returns a list of closed polylines, each in mm coordinates relative to
+    (0, 0) at the text's baseline-left. Y axis is FLIPPED relative to the
+    image (image Y is top-down; CNC Y is bottom-up). Caller adds the final
+    translation to the requested baseline position.
+
+    Each contour is a tuple of (x, y) points in mm, closed (first point
+    repeated at end). Both outer and inner contours (e.g. O's counter) are
+    emitted as separate closed paths — for outline engraving we want to
+    trace every closed curve."""
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    target_cap_px = max(8, int(round(height_mm * px_per_mm)))
+
+    # Pick a sample char for cap-height calibration. Prefer an uppercase
+    # ASCII letter from the text; fall back to "H" if text has none.
+    sample = next((c for c in text if c.isupper() and c.isascii()), None) or "H"
+    font = _load_font_at_cap_height(font_path, sample, target_cap_px)
+
+    # Measure the full text bbox so we can size the mask canvas tightly.
+    # We use a throwaway 1x1 draw context just to call textbbox.
+    tmp = Image.new("L", (1, 1), 0)
+    bbox = ImageDraw.Draw(tmp).textbbox((0, 0), text, font=font)
+    # Pad by a few pixels so contours don't clip the edge.
+    pad = 4
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    canvas_w = text_w + 2 * pad
+    canvas_h = text_h + 2 * pad
+
+    mask = Image.new("L", (canvas_w, canvas_h), 0)
+    # Draw with bbox offset compensated so glyphs land at (pad, pad).
+    ImageDraw.Draw(mask).text((pad - bbox[0], pad - bbox[1]), text, fill=255, font=font)
+
+    # Track baseline position in the mask: PIL textbbox includes ascent
+    # above and descent below the visible glyphs, so the baseline in mask
+    # pixel coords is at: pad + ascent (where ascent = -bbox[1] effectively,
+    # because bbox[1] is the top of the ink relative to drawing origin).
+    # The font.getmetrics() ascent is the distance from baseline to top of
+    # the font's drawing area; we drew the text such that the text-bbox
+    # top-of-ink sits at y=pad. So baseline in mask = pad + (ascent - top_of_ink_offset).
+    ascent, _ = font.getmetrics()
+    # The text was drawn starting at y = pad - bbox[1]. The baseline of
+    # the font is `ascent` pixels below that origin.
+    baseline_y_mask = (pad - bbox[1]) + ascent
+    # Glyph left edge sits at pad - bbox[0] + bbox[0] = pad. So the text's
+    # "baseline-left" anchor in mask pixel coords is (pad, baseline_y_mask).
+
+    arr = np.array(mask)
+    if arr.max() == 0:
+        return []
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return []
+
+    polylines: list[list[tuple[float, float]]] = []
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        # Convert pixel coords -> mm, with Y flipped (mask Y is top-down,
+        # CNC Y is bottom-up). Anchor at the text baseline-left.
+        path = []
+        for p in contour:
+            px = float(p[0][0])
+            py = float(p[0][1])
+            x_mm = (px - pad) / px_per_mm
+            # Baseline-left anchor: y=0 at baseline, positive y is UP.
+            y_mm = (baseline_y_mask - py) / px_per_mm
+            path.append((x_mm, y_mm))
+        # Close the path (cv2 contours are already cyclic in storage but
+        # the first point isn't repeated at the end).
+        if path[0] != path[-1]:
+            path.append(path[0])
+        polylines.append(path)
+    return polylines
+
+
+def engrave_text(
+    text: str,
+    position: tuple[float, float],
+    height_mm: float,
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    font_path: str | None = None,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Engrave text as a constant-depth outline trace of glyph contours.
+
+    OUTLINE engrave only. Each glyph is rasterized at high resolution, its
+    outer + inner contours extracted (cv2.findContours RETR_CCOMP, so e.g.
+    'O' produces both rings, 'A' produces both rings), and each closed
+    contour becomes one G0+G1+G0 cycle at the requested depth. The result
+    looks like letters traced with a pen at uniform stroke width.
+
+    NOT a V-carve: V-carve modulates depth so a V-bit's cut width matches
+    the stroke width at every point, producing the impression of variable
+    stroke thickness in 3D. That requires medial-axis-transform algorithms
+    and is explicitly out of scope here. If you pass a V-bit, a warning
+    fires recommending a flat endmill or fine engraving cutter instead.
+
+    Args:
+        text: the string to engrave (multi-char supported, no kerning beyond
+              what PIL does with the chosen font).
+        position: (x, y) of text baseline-left in CNC coordinates (mm).
+        height_mm: cap-height of uppercase letters in mm. Lowercase
+                   descenders may extend below baseline; ascenders may
+                   extend above cap-height — both fine.
+        depth_mm: how deep to engrave (positive number; Z is driven negative).
+        tool: a Tool, or None to use the default flat endmill.
+        material: a Material, or None to use the default plywood.
+        font_path: full path to a .ttf/.ttc/.otf font file, or None to use
+                   a sensible platform default (Helvetica on macOS, Arial on
+                   Windows, DejaVu on Linux).
+        cfg: a CamConfig, or None for defaults.
+
+    Warning categories:
+      - Default tool used
+      - V-bit (this op is constant-depth, not V-carve)
+      - Ball endmill / drill (wrong tool)
+      - tool.diameter_mm > 1.5mm with small text (cap-height < 5mm): the
+        tool is wider than the glyph strokes; you'll lose fine detail.
+      - depth > flute_length
+      - Font file not found (falls back to platform default)
+      - Empty text or no contours extracted
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    # Tool checks — engrave has its own list because the right answer for
+    # engraving is a fine flat endmill or engraving cutter, NOT a v-bit
+    # (despite what the v-bit name suggests; v-bit engraving requires
+    # variable-depth control which we don't do here).
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool.id}' for engrave_text. "
+            f"{_DEFAULT_TOOL_WARNING_IMPLICATIONS['engrave_text']} "
+            f"Pass tool=... explicitly to suppress this warning.",
+            cfg,
+            warnings,
+        )
+    if tool.type == "v_bit":
+        _warn_or_fail(
+            f"engrave_text with type=v_bit: this op is CONSTANT-DEPTH outline "
+            f"tracing, NOT V-carve. A V-bit produces a wider cut at depth than "
+            f"its tip diameter would suggest, so outlines will be thicker than "
+            f"expected. For true variable-width V-carve you need medial-axis "
+            f"depth modulation (not implemented). Use a small flat_endmill or "
+            f"a dedicated engraving cutter for predictable outlines.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "ball_endmill":
+        _warn_or_fail(
+            f"engrave_text with type=ball_endmill produces rounded-bottom "
+            f"grooves. Usable but cosmetically inferior to a flat endmill "
+            f"for outline engraving.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "drill":
+        _warn_or_fail(
+            f"engrave_text with type=drill: drills don't side-cut. You'll "
+            f"snap the bit on the first horizontal move. Use a flat_endmill "
+            f"or engraving cutter.",
+            cfg,
+            warnings,
+        )
+    if height_mm < 5.0 and tool.diameter_mm > 1.5:
+        _warn_or_fail(
+            f"engrave_text: tool diameter {tool.diameter_mm}mm is too wide "
+            f"to trace small text (cap-height {height_mm}mm < 5mm). Glyph "
+            f"strokes will be obliterated by the tool. Use a tool with "
+            f"diameter <= ~1.5mm for sub-5mm text, or increase height_mm.",
+            cfg,
+            warnings,
+        )
+    if tool.flute_length_mm is not None and depth_mm > tool.flute_length_mm:
+        _warn_or_fail(
+            f"requested depth {depth_mm}mm exceeds tool flute length "
+            f"{tool.flute_length_mm}mm; tool shank will rub against the cut "
+            f"wall.",
+            cfg,
+            warnings,
+        )
+    if material.chipload_for(tool.id) is None:
+        _warn_or_fail(
+            f"material '{material.id}' has no chipload entry for tool "
+            f"'{tool.id}'; feed rate will fall back to a conservative default.",
+            cfg,
+            warnings,
+        )
+
+    if not text:
+        _warn_or_fail(
+            "engrave_text called with empty text; no output emitted.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    # Resolve font: explicit path > platform default > PIL default (rare).
+    if font_path is not None and not Path(font_path).exists():
+        _warn_or_fail(
+            f"font_path {font_path!r} not found; falling back to platform "
+            f"default font.",
+            cfg,
+            warnings,
+        )
+        font_path = None
+    if font_path is None:
+        font_path = _find_default_font_path()
+        if font_path is None:
+            _warn_or_fail(
+                "no system font found in any of the standard locations "
+                f"({', '.join(_FONT_SEARCH_PATHS)}); cannot rasterize text. "
+                "Pass font_path=... explicitly to a .ttf/.ttc/.otf file.",
+                cfg,
+                warnings,
+            )
+            return GcodeOutput(lines=[], warnings=warnings)
+
+    contours = _text_to_contours(text, font_path, height_mm, _ENGRAVE_PX_PER_MM)
+    if not contours:
+        _warn_or_fail(
+            f"engrave_text: rasterizing text={text!r} at height={height_mm}mm "
+            f"produced no contours (font may not have the characters, or "
+            f"height too small). No output emitted.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+    x_origin, y_origin = position
+
+    lines = _spindle_header("engrave_text", tool, material, cfg, depth_mm)
+    lines.append(f"; text={text!r}  height={height_mm}mm  font={Path(font_path).name}")
+    lines.append(f"; {len(contours)} closed contour(s), feed={feed}, plunge={plunge_f}")
+    lines.append(f"; constant-depth outline engrave (NOT V-carve); see docstring")
+    lines.append("")
+
+    for ci, contour in enumerate(contours, start=1):
+        if len(contour) < 3:
+            continue
+        x0, y0 = contour[0]
+        lines.append(f"; --- contour {ci}/{len(contours)} ({len(contour)} pts) ---")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append(f"G0 X{x_origin + x0:.3f} Y{y_origin + y0:.3f}")
+        lines.append(f"G1 Z{-depth_mm:.3f} F{plunge_f}")
+        for x, y in contour[1:]:
+            lines.append(f"G1 X{x_origin + x:.3f} Y{y_origin + y:.3f} F{feed}")
         lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
         lines.append("")
 
