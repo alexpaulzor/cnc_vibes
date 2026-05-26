@@ -51,7 +51,9 @@ A code-first CAM library that produces validator-clean GCode for the common 2.5D
 - ✅ `drill_array` — peck or single-plunge drill cycle at each (x, y)
 - ✅ `engrave_text` — constant-depth outline trace of glyph contours (PIL+cv2 rasterize → findContours → per-contour G-code). NOT V-carve; variable-depth medial-axis variant still on the roadmap.
 - ✅ Worked example: `lessons/mill/05_generic_cam/` composes profile/pocket/drill into a mounting plate
+- ✅ `scripts/openscad_loader.py` — load 2D OpenSCAD designs into shapely polygons via `--export-format svg` → svgelements → shapely. Closes the loop between OpenSCAD authoring and the cam.py CAM library.
 - 📋 `cnc.py preview <gcode>` ✅ for CAMotics already; `cnc.py cam <op>` CLI shim is unstarted
+- 📋 V-carve (medial-axis variable-depth) for `engrave_text` — bigger algorithmic problem; constant-depth handles most cases
 
 ## Suggested learning order
 

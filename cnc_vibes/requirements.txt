@@ -9,4 +9,6 @@ zeroconf>=0.130
 opencv-python-headless>=4.8
 # For scripts/cam.py (shapely geometry input):
 shapely>=2.0
+# For scripts/openscad_loader.py (parse OpenSCAD's SVG export into shapely):
+svgelements>=1.9
 # Optional for snapshot --camera mode (uses cv2, already pulled in above)

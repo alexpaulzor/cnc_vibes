@@ -114,7 +114,8 @@ cnc_vibes/
 │   ├── integration/  {inspect, snapshot, probe-corner, interactive-laser-cal}
 │   └── plasma/                         ← future tool head (specced, hardware-blocked)
 ├── scripts/
-│   ├── cam.py                          ← parametric 2.5D CAM library (profile cuts, etc.)
+│   ├── cam.py                          ← parametric 2.5D CAM library (profile/pocket/drill/engrave)
+│   ├── openscad_loader.py              ← OpenSCAD .scad/.svg → shapely Polygons (feeds cam.py)
 │   ├── gcode_validate.py               ← per-line GCode rules (spindle + laser)
 │   ├── job_params.py                   ← loaders, derived math, preflight checklists
 │   ├── help_topics.py                  ← `cnc.py help` reference content
@@ -148,8 +149,10 @@ Code in `scripts/` and `lessons/` reads from these. To retarget a different GRBL
 
 ## Adding a new parametric part (Workflow A)
 
+Two ways to feed shapes into the cam.py library — define them in Python directly with `shapely`, OR author in OpenSCAD and load via the loader.
+
 ```python
-# scripts/my_part.py
+# Option 1 — pure Python
 from cam import profile_cut, load_tool, load_material, CamConfig
 from shapely.geometry import Polygon
 
@@ -163,7 +166,19 @@ gcode = profile_cut(
 print(gcode.text)
 ```
 
-Then `python scripts/my_part.py > build/my_part.gcode`, validate, preview, preflight, cut. Same downstream pipeline as any lesson.
+```python
+# Option 2 — design in OpenSCAD, CAM in Python
+from openscad_loader import openscad_to_polygons
+from cam import profile_cut, load_tool, load_material
+
+# my_part.scad contains: difference() { square([80, 40]); ...holes... }
+polys = openscad_to_polygons("my_part.scad")
+gcode = profile_cut(polys[0], depth_mm=6.0,
+                    tool=load_tool("flat_6mm_2flute"),
+                    material=load_material("plywood_baltic_birch_6mm"))
+```
+
+Then `python my_script.py > build/my_part.gcode`, validate, preview, preflight, cut. Same downstream pipeline as any lesson.
 
 ## Adding a new example with FreeCAD (Workflow B)
 

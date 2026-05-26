@@ -819,7 +819,39 @@ Full pipeline:
   python cnc.py preflight build/part.gcode # interactive safety
   # ...load in your sender, swap tools at ;TOOL markers, cut...
 
-See also: lesson-mounting-plate, validator-rules
+See also: lesson-mounting-plate, validator-rules, openscad-loader
+""",
+    ),
+    "openscad-loader": (
+        "scripts/openscad_loader.py — OpenSCAD .scad/.svg → shapely Polygons",
+        """
+Location: scripts/openscad_loader.py
+
+Lets you author 2D shapes in OpenSCAD and feed them directly into the
+cam.py CAM library. Two-step pipeline: OpenSCAD's `--export-format svg`
+writes the shape; svgelements parses the path data; result is shapely
+Polygon (or MultiPolygon) ready for profile_cut / pocket_mill /
+drill_array.
+
+API:
+  openscad_to_polygons("part.scad")  # runs openscad CLI, parses SVG
+  openscad_to_polygons("part.svg")   # parses pre-exported SVG
+  scad_to_svg("part.scad", "part.svg")  # explicit conversion
+  svg_to_polygons("part.svg")           # SVG-only path
+
+OpenSCAD CLI must be on PATH or pointed at via $OPENSCAD env var
+(same convention as cnc.py doctor). macOS .app bundle is auto-detected
+at /Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD.
+
+For 3D OpenSCAD models, wrap in `projection(cut=true) { ... }` first;
+the loader handles 2D primitives + their differences/unions natively
+but won't slice a 3D solid for you.
+
+Returns polygons in OpenSCAD's native coords (+Y up, mm). Holes from
+`difference()` become Polygon interiors automatically (containment
+classifier handles nested rings).
+
+See also: cam-library, lesson-mounting-plate
 """,
     ),
     "lesson-mounting-plate": (
@@ -965,6 +997,7 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-spoilboard",
         "lesson-mounting-plate",
         "cam-library",
+        "openscad-loader",
     ],
 }
 
