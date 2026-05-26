@@ -23,6 +23,21 @@ class JobSpec:
     gcode: str  # path to expected .gcode, relative to repo root
 
 
+@dataclass
+class LaserJob:
+    """Declarative laser-head job loaded from a job.yaml.
+
+    `extras` carries head-specific config (e.g. the `jigsaw:` block) so
+    the loader stays head-agnostic — each lesson interprets its own
+    sub-schema.
+    """
+
+    name: str
+    material: str
+    gcode: str
+    extras: dict  # everything outside the standard {head, material, gcode}
+
+
 def load_yaml(path: Path):
     with path.open() as f:
         return yaml.safe_load(f)
@@ -46,6 +61,63 @@ def load_job(job_dir: Path) -> JobSpec:
         tool=data["tool"],
         spindle_rpm=int(data["spindle_rpm"]),
         gcode=data["gcode"],
+    )
+
+
+def load_job_yaml(path: Path) -> dict:
+    """Load + validate a standalone job.yaml file (not a directory).
+
+    Returns the raw dict; callers route on `head:` to interpret the
+    rest. Raises FileNotFoundError for missing files, ValueError for
+    missing required keys.
+
+    Required keys (any head): material, gcode.
+    Spindle jobs additionally require: tool, spindle_rpm.
+    Laser jobs additionally require: head == "laser" (other heads TBD).
+
+    `head` defaults to "spindle" if absent for backward compatibility
+    with the original dir-based job.yaml files.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"no job.yaml at {path}")
+    data = load_yaml(path)
+    if not isinstance(data, dict):
+        raise ValueError(f"job.yaml at {path}: top-level must be a mapping")
+
+    head = data.get("head", "spindle")
+    if head not in ("spindle", "laser"):
+        raise ValueError(
+            f"job.yaml at {path}: unknown head {head!r}. "
+            f"Expected one of: spindle, laser."
+        )
+
+    base_required = {"material", "gcode"}
+    if head == "spindle":
+        required = base_required | {"tool", "spindle_rpm"}
+    else:  # laser
+        required = base_required
+    missing = required - data.keys()
+    if missing:
+        raise ValueError(
+            f"job.yaml at {path} (head={head}) missing keys: {sorted(missing)}"
+        )
+    return data
+
+
+def laser_job_from_yaml(path: Path) -> LaserJob:
+    """Parse a laser-head job.yaml into a LaserJob. Raises ValueError if
+    head is not 'laser'."""
+    data = load_job_yaml(path)
+    if data.get("head") != "laser":
+        raise ValueError(
+            f"job.yaml at {path}: expected head: laser, got {data.get('head')!r}"
+        )
+    extras = {k: v for k, v in data.items() if k not in {"head", "material", "gcode"}}
+    return LaserJob(
+        name=path.stem,
+        material=data["material"],
+        gcode=data["gcode"],
+        extras=extras,
     )
 
 

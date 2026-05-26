@@ -47,17 +47,40 @@ python cnc.py validate lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
 
 Both emit three files: `<base>_raster.gcode` (engrave only), `<base>_cut.gcode` (pieces only), `<base>_full.gcode` (engrave then cut). Run the separate files if you want to verify the engrave before committing to the cut.
 
-## Module layout
+## Declarative jobs via `job.yaml`
+
+For a curated invocation that survives outside your shell history, drop a `job.yaml` into [`examples/`](examples/) and dispatch via `cnc.py`. Three samples ship with the lesson:
+
+| File | What it cuts | Use when |
+|---|---|---|
+| [`examples/small_n.yaml`](examples/small_n.yaml) | 80x80mm N, cut only | Calibration / first cut on a new material |
+| [`examples/nora_300.yaml`](examples/nora_300.yaml) | Full 300x300mm NORA, cut only | The canonical deliverable |
+| [`examples/nora_with_photo.yaml`](examples/nora_with_photo.yaml) | Full NORA + halftone photo raster | When you want the kitten-on-NORA effect |
+
+```bash
+# Generate GCode declared by the yaml (dispatches to jigsaw.py with the right flags)
+python cnc.py jigsaw lessons/laser/03_jigsaw/examples/small_n.yaml
+
+# Walk the laser preflight checklist against the yaml
+python cnc.py preflight lessons/laser/03_jigsaw/examples/small_n.yaml
+```
+
+`head: laser` in the yaml routes `cnc.py preflight` to the laser checklist (PPE, air assist, fire-safety, laser-safe material) instead of the spindle one. Schema lives in [`job_yaml.py`](job_yaml.py); see the example files for the field shapes.
+
+
 
 ```
 lessons/laser/03_jigsaw/
 ├── jigsaw.py        ← CLI entry point (subcommands)
+├── job_yaml.py      ← job.yaml schema + argv derivation for `cnc.py jigsaw`
 ├── geometry.py      ← parametric polygon math (PuzzleConfig + pure functions)
 ├── encoder.py       ← image preprocessing + halftone/grayscale encoders
 ├── emitter.py       ← cut GCode (simple + dedup/toposort), raster GCode, combined output
+├── examples/        ← sample job.yaml files (small_n, nora_300, nora_with_photo)
 ├── tests/
-│   ├── test_geometry.py    ← regression locks vs scratch/phaseN
-│   └── test_emitter.py     ← validator-contract + dedup + classification
+│   ├── test_geometry.py          ← regression locks vs scratch/phaseN
+│   ├── test_emitter.py           ← validator-contract + dedup + classification
+│   └── test_jigsaw_job_yaml.py   ← schema + argv round-trip + preflight routing
 ├── figs/            ← preview + mockup PNGs (rendered)
 ├── build/           ← generated GCode (gitignored)
 ├── scratch/         ← historical phase-by-phase development; superseded by the modules above
@@ -90,6 +113,5 @@ Install via the repo's standard `pip install -r requirements.txt`.
 Productionized 2026-05. The `scratch/` directory is kept alive for reference but is no longer the canonical implementation — please use `jigsaw.py` for any new work. The `scratch/` phase scripts will be removed in a follow-up commit after the productionized code has been verified in actual cuts.
 
 Pending on the roadmap:
-- **job.yaml integration** — declarative config like `lessons/mill/01_spacer/`. Would let `cnc.py preflight` walk the laser-cut checklist before firing.
 - **Empirical gamma LUT for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table for accurate tonal reproduction. Uses Int-04's `--mode engrave` for the raw calibration data.
 - **Red-team testing** — once NORA is verified physical-cut-correct, user provides novel words/photos to surface corner cases the canonical case can't.

@@ -88,7 +88,7 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 - ✅ Phase 8: full NORA-scale (300×300mm, 44-piece) GCode emitter with edge dedup (`unary_union` + `linemerge`) + containment-aware ordering (letter → interior → panel border) + greedy nearest-neighbor travel reduction
 - ✅ Productionized to canonical lesson layout: `jigsaw.py` CLI (preview/cut/raster/mockup), `geometry.py` + `encoder.py` + `emitter.py` modules, `tests/` at lesson root with regression locks against scratch
 - 📋 Delete `scratch/*` after the productionized code has been verified in actual cuts
-- 📋 `job.yaml` integration (declarative config like `lessons/mill/01_spacer/`) so `cnc.py preflight` walks the laser-cut checklist before firing
+- ✅ `job.yaml` integration (declarative config; `cnc.py jigsaw <yaml>` dispatches + `cnc.py preflight <yaml>` walks the laser checklist). Three sample yamls in [`examples/`](lessons/laser/03_jigsaw/examples/).
 - 📋 Empirical gamma LUT for grayscale raster — bake the power-vs-darkness relationship for plywood/MDF into a lookup table (uses Int-04 `--mode engrave` patches as raw data)
 
 ## Next session candidates
@@ -96,7 +96,6 @@ The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_
 Software-side, all unblocked (the bed is on the way but no software work depends on it):
 
 - **Delete `scratch/*`** after the user verifies the productionized jigsaw cuts cleanly. Small commit, just cleanup.
-- **`job.yaml` integration** for the jigsaw lesson so `cnc.py preflight` runs the laser checklist before firing. Mirror the pattern from `lessons/mill/01_spacer/`.
 - **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table so jigsaw raster's grayscale mode produces accurate tonal reproduction. Uses Int-04 `--mode engrave` patches as raw data.
 - **Red-team test workflow** — user provides novel words/photos to surface corner cases the NORA canonical case doesn't.
 

@@ -35,7 +35,9 @@ from job_params import (  # noqa: E402
     compute_derived,
     find_by_id,
     format_report,
+    laser_job_from_yaml,
     load_job,
+    load_job_yaml,
     load_yaml,
 )
 
@@ -249,6 +251,12 @@ def _walk_checklist(
     print("All preflight items confirmed. Cleared to start the cut.")
 
 
+def _looks_like_yaml_path(s: str) -> bool:
+    """Heuristic: ends in .yaml/.yml AND points to an existing file."""
+    p = Path(s)
+    return p.suffix in (".yaml", ".yml") and p.exists() and p.is_file()
+
+
 def _looks_like_gcode_path(s: str) -> bool:
     """Heuristic: if it ends in .gcode/.nc/.cnc OR is an existing file path."""
     if s.endswith((".gcode", ".nc", ".cnc", ".tap")):
@@ -257,10 +265,12 @@ def _looks_like_gcode_path(s: str) -> bool:
 
 
 def cmd_preflight(args: argparse.Namespace) -> None:
-    # Two modes: example-name (spindle, job.yaml-driven) or raw gcode path
-    # (head detected from the file's ;HEAD: marker; laser uses the laser
-    # checklist).
-    if _looks_like_gcode_path(args.name):
+    # Three modes: standalone job.yaml file (head: laser|spindle), raw
+    # gcode path (head detected from ;HEAD: marker), or example-name
+    # (directory under examples/, spindle, dir-based job.yaml).
+    if _looks_like_yaml_path(args.name):
+        _preflight_from_yaml(Path(args.name), args.print_only)
+    elif _looks_like_gcode_path(args.name):
         _preflight_from_gcode(Path(args.name), args.print_only)
     else:
         _preflight_from_example(args.name, args.print_only)
@@ -346,6 +356,98 @@ def _extract_material_comment(gcode_text: str) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+def _preflight_from_yaml(yaml_path: Path, print_only: bool) -> None:
+    """Walk preflight against a standalone job.yaml file.
+
+    Routes to the laser or spindle checklist based on `head:` in the
+    yaml. For laser jobs we skip the spindle params report (different
+    schema — no tool/rpm) and go straight to the checklist.
+    """
+    data = load_job_yaml(yaml_path)
+    head = data.get("head", "spindle")
+
+    print(f"Job:      {yaml_path}")
+    print(f"Head:     {head}")
+    print(f"Material: {data['material']}")
+    print(f"GCode:    {data['gcode']}")
+    print()
+    print("Reminder: run `cnc.py validate` on the GCode first if you haven't.")
+    print()
+
+    if head == "laser":
+        checklist = LASER_PREFLIGHT_CHECKLIST
+        banner = "Pre-burn checklist — confirm each item before firing the laser."
+        bindings = {
+            "tool_id": "(n/a — laser)",
+            "tool_diameter": "(n/a — laser)",
+            "material": data["material"],
+            "gcode": data["gcode"],
+        }
+    else:
+        checklist = PREFLIGHT_CHECKLIST
+        banner = "Pre-cut checklist — confirm each item before starting the spindle."
+        bindings = {
+            "tool_id": data.get("tool", "(see job.yaml)"),
+            "tool_diameter": "(see profiles/tools.yaml)",
+            "material": data["material"],
+            "gcode": data["gcode"],
+        }
+
+    print("=" * 60)
+    print(banner)
+    print("=" * 60)
+    print()
+
+    _walk_checklist(
+        checklist,
+        bindings,
+        print_only=print_only,
+        arg_for_rerun=str(yaml_path),
+    )
+
+
+def cmd_jigsaw(args: argparse.Namespace) -> None:
+    """Dispatch a jigsaw job.yaml to lessons/laser/03_jigsaw/jigsaw.py.
+
+    Reads the job.yaml, validates the schema, derives the right CLI
+    args, and shells out. Saves the user from remembering which combo
+    of --size / --word / --mode flags this particular job needs.
+    """
+    yaml_path = Path(args.job_yaml)
+    if not yaml_path.exists():
+        sys.exit(f"error: job.yaml not found: {yaml_path}")
+
+    data = load_job_yaml(yaml_path)
+    if data.get("head") != "laser":
+        sys.exit(f"error: cnc.py jigsaw expects head: laser, got {data.get('head')!r}")
+
+    # Lazy import: this lesson's module isn't on sys.path by default,
+    # and we don't want to drag PIL/shapely into every cnc.py invocation.
+    jigsaw_dir = ROOT / "lessons" / "laser" / "03_jigsaw"
+    sys.path.insert(0, str(jigsaw_dir))
+    try:
+        from job_yaml import jigsaw_argv
+    finally:
+        sys.path.remove(str(jigsaw_dir))
+
+    argv = jigsaw_argv(data)
+    script = jigsaw_dir / "jigsaw.py"
+    cmd = [sys.executable, str(script), *argv]
+    print("->", " ".join(cmd))
+    rc = subprocess.run(cmd).returncode
+    if rc != 0:
+        sys.exit(rc)
+
+    # Confirm the gcode path the yaml declared was actually written.
+    declared = ROOT / data["gcode"]
+    if not declared.exists():
+        print(
+            f"\nwarning: jigsaw.py succeeded but {data['gcode']} does not exist. "
+            f"Check the gcode: key in {yaml_path} matches what jigsaw.py wrote.",
+            file=sys.stderr,
+        )
 
 
 def cmd_find_machine(args: argparse.Namespace) -> None:
@@ -546,6 +648,16 @@ def main() -> None:
         help="print the checklist without prompting (for review/printing)",
     )
     pf.set_defaults(func=cmd_preflight)
+
+    jg = subs.add_parser(
+        "jigsaw",
+        help="dispatch a jigsaw job.yaml to lessons/laser/03_jigsaw/jigsaw.py",
+    )
+    jg.add_argument(
+        "job_yaml",
+        help="path to a jigsaw job.yaml (e.g. lessons/laser/03_jigsaw/examples/nora_300.yaml)",
+    )
+    jg.set_defaults(func=cmd_jigsaw)
 
     fm = subs.add_parser(
         "find-machine",
