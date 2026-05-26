@@ -49,6 +49,7 @@ from emitter import (  # noqa: E402
 from geometry import (  # noqa: E402
     full_puzzle_config,
     generate_pieces,
+    micro_puzzle_config,
     small_puzzle_config,
 )
 
@@ -62,7 +63,19 @@ def _config_for_size(size: str):
         return small_puzzle_config()
     if size == "full":
         return full_puzzle_config()
-    raise SystemExit(f"unknown --size {size!r} (expected 'small' or 'full')")
+    if size == "micro":
+        return micro_puzzle_config()
+    raise SystemExit(f"unknown --size {size!r} (expected 'small', 'micro', or 'full')")
+
+
+def _apply_origin(cfg, origin: str):
+    """Mutate cfg.origin_offset_mm based on the --origin flag."""
+    if origin == "corner":
+        return
+    if origin == "center":
+        cfg.origin_offset_mm = (cfg.panel_mm / 2, cfg.panel_mm / 2)
+        return
+    raise SystemExit(f"unknown --origin {origin!r} (expected 'corner' or 'center')")
 
 
 def _emit_cut_for(pieces, material, cfg, word, size):
@@ -196,14 +209,17 @@ def cmd_preview(args):
 
 def cmd_cut(args):
     cfg = _config_for_size(args.size)
+    _apply_origin(cfg, args.origin)
     word = args.word.upper()
     pieces, stats = generate_pieces(word, args.seed, cfg)
     material = load_material(args.material)
     gcode = _emit_cut_for(pieces, material, cfg, word, args.size)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    out = BUILD_DIR / f"cut_{args.size}_{word.lower()}_seed{args.seed}.gcode"
+    suffix = "_centered" if args.origin == "center" else ""
+    out = BUILD_DIR / f"cut_{args.size}_{word.lower()}_seed{args.seed}{suffix}.gcode"
     out.write_text(gcode)
     print(f"pieces: {len(pieces)}  tabs: {stats}")
+    print(f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
     print(f"\nValidate with:")
     print(f"  python cnc.py validate {out.relative_to(REPO_ROOT)}")
@@ -300,17 +316,24 @@ def main():
 
     # preview
     pv = subs.add_parser("preview", help="render a verification diagram only")
-    pv.add_argument("--size", default="full", choices=("small", "full"))
+    pv.add_argument("--size", default="full", choices=("small", "micro", "full"))
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
     pv.set_defaults(func=cmd_preview)
 
     # cut
     cu = subs.add_parser("cut", help="emit cut GCode")
-    cu.add_argument("--size", default="full", choices=("small", "full"))
+    cu.add_argument("--size", default="full", choices=("small", "micro", "full"))
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
     cu.add_argument("--material", default="mdf_3mm")
+    cu.add_argument(
+        "--origin",
+        default="corner",
+        choices=("corner", "center"),
+        help="WCS origin placement: 'corner' = panel bottom-left at (0,0) "
+        "(default); 'center' = panel center at (0,0), coords symmetric around 0",
+    )
     cu.set_defaults(func=cmd_cut)
 
     # raster

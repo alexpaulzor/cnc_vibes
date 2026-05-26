@@ -80,6 +80,13 @@ class PuzzleConfig:
     wave_amplitude_px: float = 0.0
     wave_steps: int = 12  # subdivisions per wavy segment
 
+    # Machine-origin offset applied at GCode-emission time, in mm. Default
+    # (0, 0) places the panel's bottom-left corner at WCS origin (legacy
+    # behavior). Set to (panel_mm/2, panel_mm/2) to center the panel on
+    # WCS origin — useful when stock is positioned around a known center
+    # rather than registered against a corner.
+    origin_offset_mm: tuple[float, float] = (0.0, 0.0)
+
     # Derived properties (computed in __post_init__ for backwards-compat
     # with phase2's int-coercion of these values)
     cols: int = field(init=False)
@@ -141,6 +148,12 @@ def small_puzzle_config() -> PuzzleConfig:
 def full_puzzle_config() -> PuzzleConfig:
     """300x300mm panel with 50mm cells. Matches scratch/phase2.py defaults."""
     return PuzzleConfig(panel_mm=300, piece_mm=50, tab_circle_r_px=22)
+
+
+def micro_puzzle_config() -> PuzzleConfig:
+    """150x150mm panel with 50mm cells (3x3 grid). Sized for cardboard
+    tram/tolerance test cuts."""
+    return PuzzleConfig(panel_mm=150, piece_mm=50, tab_circle_r_px=22)
 
 
 # ---------------------------------------------------------------------------

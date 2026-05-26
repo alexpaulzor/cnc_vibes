@@ -12,6 +12,7 @@ Each lesson directory has its own `README.md` (user-facing: goal, prereqs, usage
 | 3b | [Laser calibration pattern (power × passes × speed)](laser/02_calibration/) | ✅ | Fully automated. Pure Python → GCode with engraved labels. |
 | 3c | [Wooden jigsaw with name-preserving cuts + photo raster](laser/03_jigsaw/) | ✅ | Productionized: `jigsaw.py` CLI (preview / cut / raster / mockup). Lollipop tabs, tab-shifting, sliver merging, Floyd-Steinberg or grayscale photo engrave, multi-line per-letter fonts, optional wavy edges. |
 | 3d | [Laser-cut spoilboard with M6 hole grid](laser/04_spoilboard/) | ✅ | Parametric grid + auto-tiling for designs larger than stock. Pure Python → GCode. |
+| 3e | [Laser test card (kerf / tram / dimensional)](laser/05_test_card/) | ✅ | Small square-in-square cut, centered on WCS origin. Measure outer + inner with calipers to back out effective kerf and check tram. Fast pre-flight before any real cut. |
 
 ## Mill
 

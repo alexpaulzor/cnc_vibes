@@ -66,9 +66,13 @@ def img_to_machine_mm(
     x_px: float, y_px: float, cfg: PuzzleConfig
 ) -> tuple[float, float]:
     """Image pixel coords (panel inset by margin_px, Y-down) to machine
-    mm (panel at origin, Y-up)."""
-    x_mm = (x_px - cfg.margin_px) / cfg.px_per_mm
-    y_mm = cfg.panel_mm - (y_px - cfg.margin_px) / cfg.px_per_mm
+    mm (panel at origin, Y-up). cfg.origin_offset_mm shifts the result —
+    set it to (panel_mm/2, panel_mm/2) to center the panel on WCS origin
+    instead of pinning the bottom-left corner there."""
+    x_mm = (x_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[0]
+    y_mm = (
+        cfg.panel_mm - (y_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[1]
+    )
     return (x_mm, y_mm)
 
 
