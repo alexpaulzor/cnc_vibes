@@ -67,6 +67,10 @@ python3 cnc.py doctor
 
 Use `python3` instead of `python` on macOS (or alias it). The same `cnc.py` commands work on both platforms.
 
+### Raspberry Pi (sender or full workstation)
+
+See [RASPBERRY_PI.md](RASPBERRY_PI.md) — Pi 4/5 with 64-bit Pi OS Lite runs the whole toolchain. RAM tiers, sender choice (bCNC vs FluidNC WebUI vs CNCjs caveats), CAMotics-doesn't-run-on-ARM workaround, and OS recommendation.
+
 ### Python deps (auto-installed via `requirements.txt`)
 
 `pyyaml`, `pytest`, `shapely`, `opencv-python-headless` (jigsaw letter contour tracing), `Pillow` (image + font rendering), `pyserial` (Int-01/03/04 talking to GRBL), `zeroconf` (mDNS discovery for `cnc.py find-machine`).
