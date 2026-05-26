@@ -11,4 +11,6 @@ opencv-python-headless>=4.8
 shapely>=2.0
 # For scripts/openscad_loader.py (parse OpenSCAD's SVG export into shapely):
 svgelements>=1.9
+# For scripts/cam_cli.py (interactive `cnc.py cam` wizard):
+prompt_toolkit>=3.0
 # Optional for snapshot --camera mode (uses cv2, already pulled in above)

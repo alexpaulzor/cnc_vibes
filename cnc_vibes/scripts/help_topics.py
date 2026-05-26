@@ -784,6 +784,70 @@ Flags:
 See also: laser-materials, lesson-calibration, lesson-laser-cal
 """,
     ),
+    "cam-cli": (
+        "cnc.py cam — thin CLI + interactive shim over scripts/cam.py",
+        """
+Usage:
+  cnc.py cam <op> [--head spindle|laser] --material <id> --tool <id> [op-flags]
+  cnc.py cam                          # interactive wizard (prompt_toolkit)
+
+Ops (matrix):
+
+  spindle: profile  pocket  drill  engrave  chamfer  profile-tabs  slot  face
+  laser:   profile  engrave  slot               (others refuse with a hint)
+
+Shape primitives (for profile, pocket, chamfer, profile-tabs, face):
+  --shape rect    --width W --height H
+  --shape rrect   --width W --height H --radius R
+  --shape circle  --diameter D
+  --shape ellipse --width W --height H
+  --shape polygon --points "x1,y1 x2,y2 ..."
+  --shape svg     --svg-file path.svg     (reads via openscad_loader)
+  --shape scad    --scad-file path.scad   (compiles via OpenSCAD)
+  --center "x,y"  shift shape from origin (default 0,0)
+
+Hole patterns (for drill):
+  --pattern grid          --cols C --rows R --spacing S      [--origin x,y]
+  --pattern bolt-circle   --count N --radius R               [--origin x,y]
+  --pattern linear        --count N --spacing S [--angle A]  [--origin x,y]
+  --pattern explicit      --points "x1,y1 ..."
+
+Common flags:
+  --head spindle|laser     default: spindle
+  --material <id>          from profiles/materials.yaml or laser_materials.yaml
+  --tool <id>              from profiles/tools.yaml (spindle only)
+  --out path.gcode         default: build/cam_cli/<head>_<op>_<shape>_<ts>.gcode
+  --strict                 op-tool warnings become fatal
+  --no-validate            skip auto-validation after emit
+
+Op-specific:
+  profile        --depth (spindle) --side outside|inside|on
+  pocket         --depth --stepover (default 0.5)
+  drill          --depth --peck (optional, mm)
+  engrave        --text "..." --x --y --height [--depth] [--font path]
+  chamfer        --depth (V-bit recommended)
+  profile-tabs   --depth --tab-count --tab-width --tab-height --side
+  slot           --p1 "x,y" --p2 "x,y" --width [--depth]
+  face           --depth (skim depth) --stepover (default 0.7)
+
+Every emit auto-runs the validator; the command exits non-zero on failure.
+Use --no-validate to skip (useful when piping into a previewer).
+
+Examples:
+  cnc.py cam profile --shape rrect --width 60 --height 40 --radius 5 \\
+      --depth 6 --material plywood_baltic_birch_3mm --tool flat_3.175mm_2flute \\
+      --side outside
+  cnc.py cam drill --pattern grid --cols 3 --rows 3 --spacing 20 \\
+      --depth 5 --material plywood_baltic_birch_3mm --tool drill_3.2mm_m4_clearance
+  cnc.py cam engrave --text "BIN A" --x 5 --y 5 --height 6 --depth 0.3 \\
+      --material plywood_baltic_birch_3mm --tool vbit_60deg_6mm
+  cnc.py cam profile --head laser --shape circle --diameter 30 \\
+      --material cardboard_thin_1mm
+  cnc.py cam                          # interactive — walks every prompt
+
+See also: cam-library, openscad-loader
+""",
+    ),
     "cam-library": (
         "scripts/cam.py — parametric 2.5D CAM (no FreeCAD)",
         """

@@ -46,6 +46,8 @@ out_cut = profile_cut(my_polygon, depth_mm=6.0,
                       material=load_material("plywood_baltic_birch_6mm"))
 ```
 
+For one-off shell-driven cuts (rrect + holes, circle pocket, label engrave), use `cnc.py cam <op>` — a thin CLI/TUI shim over the library that handles common shape primitives (rect, rrect, circle, ellipse, polygon, svg, scad) and hole patterns (grid, bolt-circle, linear, explicit) without writing Python. Supports both `--head spindle` and `--head laser`. Run `cnc.py cam` with no arguments for an interactive prompt_toolkit wizard, or `cnc.py help cam-cli` for the full flag catalog.
+
 ## Plasma (future)
 
 [`plasma/`](plasma/) — the ArcFony Cut53M Pro as a third tool head. **Not for this iteration; requires mechanical fabrication** (outrigger mount, opto-isolated electrical interface). SPEC captures the full workstream design.

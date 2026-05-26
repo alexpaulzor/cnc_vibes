@@ -57,7 +57,9 @@ A code-first CAM library that produces validator-clean GCode for the common 2.5D
 - ✅ `face_mill` — zig-zag raster surfacing of a rectangular bounds polygon at a uniform Z (parallel scanlines for predictable chip evac, unlike `pocket_mill`'s spiral)
 - ✅ Worked example: `lessons/mill/05_generic_cam/` composes profile/pocket/drill into a mounting plate
 - ✅ `scripts/openscad_loader.py` — load 2D OpenSCAD designs into shapely polygons via `--export-format svg` → svgelements → shapely. Closes the loop between OpenSCAD authoring and the cam.py CAM library.
-- 📋 `cnc.py preview <gcode>` ✅ for CAMotics already; `cnc.py cam <op>` CLI shim is unstarted
+- ✅ `cnc.py preview <gcode>` opens CAMotics for 3D toolpath simulation
+- ✅ `cnc.py cam <op>` — thin CLI + interactive (prompt_toolkit) shim wrapping every cam.py op. 5 shape primitives, 4 hole patterns, spindle + laser heads, auto-validates emitted GCode. Run `cnc.py cam` with no args for the wizard, or `cnc.py help cam-cli` for the flag catalog.
+- ✅ `scripts/laser_cam.py` — laser-mode counterparts (`laser_profile`, `laser_engrave`) for the cam-cli shim; reuses `cam._text_to_contours` for glyph rasterization.
 - 📋 V-carve (medial-axis variable-depth) for `engrave_text` — bigger algorithmic problem; constant-depth handles most cases
 
 ## Suggested learning order

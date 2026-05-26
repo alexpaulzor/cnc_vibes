@@ -2,6 +2,7 @@
 examples/*/build/
 lessons/**/build/
 lessons/**/runs/
+/build/
 
 # Python
 __pycache__/

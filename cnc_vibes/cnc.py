@@ -579,6 +579,15 @@ def cmd_preview(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_cam(args: argparse.Namespace) -> None:
+    """Dispatch to scripts/cam_cli.py. All remaining args pass through."""
+    import cam_cli
+
+    rc = cam_cli.main(args.rest or None)
+    if rc:
+        sys.exit(rc)
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -739,6 +748,14 @@ def main() -> None:
         help="list topics whose title or body contains KEYWORD",
     )
     h.set_defaults(func=cmd_help)
+
+    cam = subs.add_parser(
+        "cam",
+        help="thin CLI + interactive shim over scripts/cam.py (run with --help for ops)",
+        add_help=False,
+    )
+    cam.add_argument("rest", nargs=argparse.REMAINDER)
+    cam.set_defaults(func=cmd_cam)
 
     args = p.parse_args()
     args.func(args)
