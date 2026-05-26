@@ -799,6 +799,16 @@ Operations shipped (use these from your own Python scripts):
   drill_array (holes, depth_mm, tool, material, peck_depth_mm, cfg)
   engrave_text(text, position, height_mm, depth_mm, tool, material,
                font_path, cfg)  -- constant-depth outline; NOT V-carve
+  chamfer_edge(polygon, chamfer_depth_mm, tool, material, cfg)
+               -- V-bit perimeter chamfer; width = depth * tan(angle/2)
+  profile_cut_with_tabs(polygon, depth_mm, tab_count, tab_width_mm,
+               tab_height_mm, tool, material, side, cfg)
+               -- profile cut leaving N small bridges to stock on final pass
+  slot_mill   (p1, p2, width_mm, depth_mm, tool, material, cfg)
+               -- stadium-shape oversized slot for mounting adjustment
+  face_mill   (bounds_polygon, depth_mm, tool, material,
+               stepover_factor, cfg)
+               -- zig-zag raster stock surfacing at uniform Z
 
 Each op:
   - Loads tool + material from profiles/{tools,materials}.yaml

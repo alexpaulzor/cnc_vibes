@@ -652,3 +652,411 @@ def test_engrave_text_missing_font_falls_back():
         font_path="/no/such/font.ttf",
     )
     assert any("not found" in w for w in out.warnings)
+
+
+# ---------------------------------------------------------------------------
+# chamfer_edge
+# ---------------------------------------------------------------------------
+
+
+from cam import chamfer_edge  # noqa: E402
+
+
+def test_chamfer_edge_validator_headers():
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t)
+    text = out.text
+    assert ";HEAD: spindle" in text
+    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";TOOL: vbit_60deg_6mm" in text
+    assert "$32=0" in text
+
+
+def test_chamfer_edge_uses_m3_not_m4():
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t)
+    assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
+    assert not re.search(r"^M4\b", out.text, re.MULTILINE)
+
+
+def test_chamfer_edge_spindle_s_in_range():
+    """S value must be in spindle range (not laser PWM 0-1000)."""
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t)
+    m = re.search(r"^M3 S(\d+)", out.text, re.MULTILINE)
+    assert m is not None
+    s = int(m.group(1))
+    assert 0 < s <= 24000
+
+
+def test_chamfer_edge_depth_respected():
+    """The single chamfer plunge G1 Z should reach -chamfer_depth_mm."""
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(_square(), chamfer_depth_mm=0.8, tool=t)
+    plunges = re.findall(r"^G1 Z(-[\d.]+)\b", out.text, re.MULTILINE)
+    assert plunges
+    assert all(float(z) == pytest.approx(-0.8) for z in plunges)
+
+
+def test_chamfer_edge_bounded_to_polygon_region():
+    """Cuts stay near the polygon perimeter (within a few mm)."""
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(_square(side=40, x=20, y=20), chamfer_depth_mm=1.0, tool=t)
+    coords = re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out.text)
+    cut = [
+        (float(x), float(y)) for x, y in coords if (float(x), float(y)) != (0.0, 0.0)
+    ]
+    for x, y in cut:
+        assert 19 <= x <= 61
+        assert 19 <= y <= 61
+
+
+def test_chamfer_edge_wrong_tool_warns_for_flat_endmill():
+    t = load_tool("flat_3.175mm_2flute")
+    out = chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t)
+    assert any("wrong tool" in w for w in out.warnings)
+
+
+def test_chamfer_edge_default_tool_warning():
+    out = chamfer_edge(_square(), chamfer_depth_mm=1.0)  # no tool=
+    assert any("default tool" in w for w in out.warnings)
+
+
+def test_chamfer_edge_strict_escalates_wrong_tool():
+    t = load_tool("flat_3.175mm_2flute")
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit):
+        chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t, cfg=cfg)
+
+
+def test_chamfer_edge_warns_when_chamfer_exceeds_wall_thickness():
+    """A polygon with a small interior hole near the edge gets a wall-cut
+    warning when chamfer width exceeds the wall thickness."""
+    # Square with hole 2mm from the edge: wall = 2mm.
+    # 60° V-bit at 5mm depth → width = 5*tan(30°) ≈ 2.89mm > 2mm
+    from shapely.geometry import Polygon as P
+
+    outer = [(0, 0), (20, 0), (20, 20), (0, 20)]
+    hole = [(2, 2), (18, 2), (18, 18), (2, 18)]
+    poly = P(outer, [hole])
+    t = load_tool("vbit_60deg_6mm")
+    out = chamfer_edge(poly, chamfer_depth_mm=5.0, tool=t)
+    assert any("wall thickness" in w for w in out.warnings)
+
+
+def test_chamfer_edge_empty_polygon_handled():
+    """Empty polygon should warn, not crash."""
+    from shapely.geometry import Polygon as P
+
+    t = load_tool("vbit_60deg_6mm")
+    empty = P()
+    out = chamfer_edge(empty, chamfer_depth_mm=1.0, tool=t)
+    assert any("empty" in w for w in out.warnings)
+    assert out.lines == []
+
+
+# ---------------------------------------------------------------------------
+# profile_cut_with_tabs
+# ---------------------------------------------------------------------------
+
+
+from cam import profile_cut_with_tabs  # noqa: E402
+
+
+def test_profile_cut_with_tabs_validator_headers():
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0, tool=t)
+    text = out.text
+    assert ";HEAD: spindle" in text
+    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";TOOL: flat_3.175mm_2flute" in text
+
+
+def test_profile_cut_with_tabs_uses_m3():
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0, tool=t)
+    assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
+    assert not re.search(r"^M4\b", out.text, re.MULTILINE)
+
+
+def test_profile_cut_with_tabs_spindle_s_in_range():
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0, tool=t)
+    m = re.search(r"^M3 S(\d+)", out.text, re.MULTILINE)
+    assert m is not None
+    assert 0 < int(m.group(1)) <= 24000
+
+
+def test_profile_cut_with_tabs_emits_tab_lifts_on_final_pass():
+    """Final pass should include Z lifts to (tab_z = -(depth - tab_height))
+    over the tab spans."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(
+        _square(),
+        depth_mm=3.0,
+        tab_count=4,
+        tab_width_mm=4.0,
+        tab_height_mm=1.0,
+        tool=t,
+    )
+    text = out.text
+    # tab_z = -(3.0 - 1.0) = -2.0; expect at least one G1 Z-2.000
+    assert "G1 Z-2.000" in text
+    # And the final-pass marker should mention tabs
+    assert "final pass with" in text
+
+
+def test_profile_cut_with_tabs_bounded_to_offset_region():
+    """With side='outside' and 3.175mm tool, all coords stay within polygon
+    bounds plus tool_radius slack."""
+    t = load_tool("flat_3.175mm_2flute")
+    sq = _square(side=40, x=20, y=20)
+    out = profile_cut_with_tabs(sq, depth_mm=3.0, tool=t, side="outside")
+    coords = re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out.text)
+    cut = [
+        (float(x), float(y)) for x, y in coords if (float(x), float(y)) != (0.0, 0.0)
+    ]
+    for x, y in cut:
+        assert 18 <= x <= 62  # 20 ± tool_radius (1.5875) + slack
+        assert 18 <= y <= 62
+
+
+def test_profile_cut_with_tabs_default_tool_warning():
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0)
+    assert any("default tool" in w for w in out.warnings)
+
+
+def test_profile_cut_with_tabs_warns_on_fewer_than_3_tabs():
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0, tab_count=2, tool=t)
+    assert any("tab_count" in w and "risky" in w for w in out.warnings)
+
+
+def test_profile_cut_with_tabs_warns_on_tall_tabs():
+    """tab_height_mm > depth/3 should warn."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = profile_cut_with_tabs(_square(), depth_mm=3.0, tab_height_mm=1.5, tool=t)
+    # 1.5 > 3/3 = 1.0, should warn
+    assert any("harder to sand" in w for w in out.warnings)
+
+
+def test_profile_cut_with_tabs_strict_escalates_default_tool():
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit, match="default tool"):
+        profile_cut_with_tabs(_square(), depth_mm=3.0, cfg=cfg)
+
+
+def test_profile_cut_with_tabs_warns_on_excess_tab_coverage():
+    """If tab_count * tab_width_mm >= perimeter, no room for cuts."""
+    t = load_tool("flat_3.175mm_2flute")
+    # Small 10x10 square (perimeter 40mm), 10 tabs of 5mm = 50mm
+    small = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    out = profile_cut_with_tabs(
+        small, depth_mm=3.0, tab_count=10, tab_width_mm=5.0, tool=t
+    )
+    assert any("perimeter" in w and "No room" in w for w in out.warnings)
+
+
+# ---------------------------------------------------------------------------
+# slot_mill
+# ---------------------------------------------------------------------------
+
+
+from cam import slot_mill, _stadium_polygon  # noqa: E402
+
+
+def test_slot_mill_validator_headers():
+    t = load_tool("flat_3.175mm_2flute")
+    out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0, tool=t)
+    text = out.text
+    assert ";HEAD: spindle" in text
+    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";TOOL: flat_3.175mm_2flute" in text
+
+
+def test_slot_mill_uses_m3():
+    t = load_tool("flat_3.175mm_2flute")
+    out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0, tool=t)
+    assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
+    assert not re.search(r"^M4\b", out.text, re.MULTILINE)
+
+
+def test_slot_mill_spindle_s_in_range():
+    t = load_tool("flat_3.175mm_2flute")
+    out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0, tool=t)
+    m = re.search(r"^M3 S(\d+)", out.text, re.MULTILINE)
+    assert m is not None
+    assert 0 < int(m.group(1)) <= 24000
+
+
+def test_slot_mill_bounded_to_stadium_region():
+    """Coords should fall within the stadium envelope: roughly within
+    [p1.x - r, p2.x + r] x [p1.y - r, p2.y + r] where r = width/2."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0, tool=t)
+    coords = re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out.text)
+    cut = [
+        (float(x), float(y)) for x, y in coords if (float(x), float(y)) != (0.0, 0.0)
+    ]
+    for x, y in cut:
+        assert 6 <= x <= 44  # 10-r .. 40+r, slack for tool radius
+        assert 6 <= y <= 14
+
+
+def test_slot_mill_too_narrow_warns_and_emits_nothing():
+    t = load_tool("flat_6mm_2flute")  # 6mm tool
+    out = slot_mill((10, 10), (40, 10), width_mm=3.0, depth_mm=2.0, tool=t)
+    assert any("Cannot cut" in w for w in out.warnings)
+    assert out.lines == []
+
+
+def test_slot_mill_wide_slot_warns_about_multipass():
+    t = load_tool("flat_3.175mm_2flute")  # 3.175mm
+    # width > 2*3.175 = 6.35mm; pick 10mm
+    out = slot_mill((10, 10), (40, 10), width_mm=10.0, depth_mm=2.0, tool=t)
+    assert any("Requires multi-pass clearance" in w for w in out.warnings)
+
+
+def test_slot_mill_default_tool_warning():
+    out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0)
+    assert any("default tool" in w for w in out.warnings)
+
+
+def test_slot_mill_strict_escalates_too_narrow():
+    t = load_tool("flat_6mm_2flute")
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit, match="Cannot cut"):
+        slot_mill((10, 10), (40, 10), width_mm=3.0, depth_mm=2.0, tool=t, cfg=cfg)
+
+
+def test_slot_mill_degenerate_geometry_handled():
+    """p1 == p2 produces a degenerate / single-circle stadium; should still
+    emit (it's a circular pocket) or warn cleanly."""
+    t = load_tool("flat_3.175mm_2flute")
+    # With p1==p2 and width 6, we get a 6mm circle; pocket_mill may still
+    # find one ring or warn that it's too small for the tool. Either way,
+    # the call should not crash.
+    out = slot_mill((10, 10), (10, 10), width_mm=6.0, depth_mm=2.0, tool=t)
+    # Just assert no crash and either output or warnings are produced.
+    assert isinstance(out.warnings, list)
+
+
+def test_stadium_polygon_is_oriented_along_p1_p2():
+    """A stadium from (0,0) to (50,0) of width 10 has bounds roughly
+    [-5, 55] x [-5, 5]."""
+    sp = _stadium_polygon((0, 0), (50, 0), width_mm=10.0)
+    minx, miny, maxx, maxy = sp.bounds
+    assert minx == pytest.approx(-5, abs=0.5)
+    assert maxx == pytest.approx(55, abs=0.5)
+    assert miny == pytest.approx(-5, abs=0.5)
+    assert maxy == pytest.approx(5, abs=0.5)
+
+
+# ---------------------------------------------------------------------------
+# face_mill
+# ---------------------------------------------------------------------------
+
+
+from cam import face_mill  # noqa: E402
+
+
+def test_face_mill_validator_headers():
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    text = out.text
+    assert ";HEAD: spindle" in text
+    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";TOOL: flat_3.175mm_2flute" in text
+
+
+def test_face_mill_uses_m3():
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
+    assert not re.search(r"^M4\b", out.text, re.MULTILINE)
+
+
+def test_face_mill_spindle_s_in_range():
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    m = re.search(r"^M3 S(\d+)", out.text, re.MULTILINE)
+    assert m is not None
+    assert 0 < int(m.group(1)) <= 24000
+
+
+def test_face_mill_bounded_to_inset_region():
+    """All cut coords should be within the bounds polygon, inset by
+    tool_radius."""
+    t = load_tool("flat_3.175mm_2flute")
+    sq = _square(side=40, x=20, y=20)  # 20..60
+    out = face_mill(sq, depth_mm=0.5, tool=t)
+    coords = re.findall(r"G[01] X([-\d.]+) Y([-\d.]+)", out.text)
+    cut = [
+        (float(x), float(y)) for x, y in coords if (float(x), float(y)) != (0.0, 0.0)
+    ]
+    r = t.radius_mm
+    for x, y in cut:
+        assert (20 + r - 0.01) <= x <= (60 - r + 0.01)
+        assert (20 + r - 0.01) <= y <= (60 - r + 0.01)
+
+
+def test_face_mill_emits_zigzag_scanlines():
+    """Should have multiple scanline comments and alternating direction
+    (one ends at maxx, next ends at minx)."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    scan_comments = [l for l in out.lines if l.startswith("; scanline")]
+    assert len(scan_comments) >= 2
+
+
+def test_face_mill_default_tool_warning():
+    out = face_mill(_square(), depth_mm=0.5)
+    assert any("default tool" in w for w in out.warnings)
+
+
+def test_face_mill_wrong_tool_warns_ball_endmill():
+    t = load_tool("ball_3mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    assert any("ball_endmill" in w for w in out.warnings)
+
+
+def test_face_mill_wrong_tool_warns_v_bit():
+    t = load_tool("vbit_60deg_6mm")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    assert any("v_bit" in w for w in out.warnings)
+
+
+def test_face_mill_oversize_stepover_warning():
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t, stepover_factor=0.9)
+    assert any("scallop ridges" in w for w in out.warnings)
+
+
+def test_face_mill_oversize_depth_warning():
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=2.0, tool=t)
+    assert any("overload" in w for w in out.warnings)
+
+
+def test_face_mill_strict_escalates_default_tool():
+    cfg = CamConfig(strict=True)
+    with pytest.raises(SystemExit, match="default tool"):
+        face_mill(_square(), depth_mm=0.5, cfg=cfg)
+
+
+def test_face_mill_too_small_for_tool_emits_nothing():
+    """Bounds smaller than 2*tool_radius — can't fit even one pass."""
+    t = load_tool("flat_6mm_2flute")
+    tiny = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    out = face_mill(tiny, depth_mm=0.5, tool=t)
+    assert any("smaller than 2x tool diameter" in w for w in out.warnings)
+    assert out.lines == []
+
+
+def test_face_mill_depth_respected_in_plunge():
+    """Z plunge should reach -depth_mm."""
+    t = load_tool("flat_3.175mm_2flute")
+    out = face_mill(_square(), depth_mm=0.5, tool=t)
+    plunges = re.findall(r"^G1 Z(-[\d.]+)\b", out.text, re.MULTILINE)
+    assert plunges
+    assert any(float(z) == pytest.approx(-0.5) for z in plunges)

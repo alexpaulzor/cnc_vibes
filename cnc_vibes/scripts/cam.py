@@ -176,6 +176,24 @@ _DEFAULT_TOOL_WARNING_IMPLICATIONS = {
         "Default flat endmill produces constant-width engraved lines. For "
         "variable-width letterforms (V-carve), use type=v_bit instead."
     ),
+    "chamfer_edge": (
+        "Default flat endmill cannot cut a chamfer — it makes a square-bottom "
+        "rabbet instead. Use type=v_bit so the cut walls match the chamfer "
+        "angle."
+    ),
+    "profile_cut_with_tabs": (
+        "Default flat endmill is generally fine for plywood ≤6mm. Tabs add "
+        "more holding strength but you'll still want clamps or vacuum hold-down."
+    ),
+    "slot_mill": (
+        "Default flat endmill is fine for shallow slots; for deep slots, "
+        "consider an upcut helical bit for chip evacuation."
+    ),
+    "face_mill": (
+        "Default flat endmill is fine for face-milling thin layers; for "
+        "production-quality flat surfaces use a dedicated insert face mill "
+        "(larger diameter, multiple inserts) — much faster and flatter."
+    ),
 }
 
 
@@ -978,6 +996,787 @@ def engrave_text(
         lines.append(f"G1 Z{-depth_mm:.3f} F{plunge_f}")
         for x, y in contour[1:]:
             lines.append(f"G1 X{x_origin + x:.3f} Y{y_origin + y:.3f} F{feed}")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: chamfer_edge (V-bit perimeter chamfer)
+# ---------------------------------------------------------------------------
+
+
+def chamfer_edge(
+    polygon: BaseGeometry,
+    chamfer_depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Cut a V-bit chamfer along the outer perimeter of a polygon.
+
+    The tool follows the polygon's exterior at the specified chamfer depth.
+    The chamfer's horizontal width is `chamfer_depth_mm * tan(angle/2)` for a
+    V-bit with the given included angle — so a 60° bit at 1mm depth produces
+    a ~0.577mm chamfer width on each side.
+
+    Geometry:
+      Tool centerline traces the polygon exterior (the tool's tip rides
+      along the edge, not offset). Because a V-bit's cutting flank widens
+      with depth, the resulting chamfer extends both INWARD into the part
+      AND OUTWARD into the surrounding stock by chamfer_width on each side.
+      Caller is responsible for having already cut the part free (or having
+      a profile_cut planned afterwards) so the outward portion isn't
+      cutting into adjacent stock you want to keep.
+
+    Warning categories:
+      - tool.type != v_bit (wrong tool — flat endmills make square-bottom
+        rabbets, not chamfers)
+      - chamfer_width > polygon's smallest wall thickness (cuts through
+        the part interior)
+      - tool.angle_deg missing on a v_bit (can't compute width)
+      - default-tool, chipload, flute-length warnings (shared)
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    # Tool-type check: must be a v_bit to actually produce a chamfer.
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool.id}' for chamfer_edge. "
+            f"{_DEFAULT_TOOL_WARNING_IMPLICATIONS['chamfer_edge']} "
+            f"Pass tool=... explicitly to suppress this warning.",
+            cfg,
+            warnings,
+        )
+    if tool.type != "v_bit":
+        _warn_or_fail(
+            f"chamfer_edge with type={tool.type}: wrong tool. A flat or ball "
+            f"endmill cuts a square / round rabbet, not a chamfer. Use "
+            f"type=v_bit for a true angled chamfer.",
+            cfg,
+            warnings,
+        )
+    # Width computation requires the bit angle. If missing, skip width-check
+    # and warn — the cut still proceeds at the requested depth.
+    chamfer_width_mm: float | None = None
+    if tool.type == "v_bit" and tool.angle_deg is not None:
+        import math
+
+        half_angle = math.radians(tool.angle_deg / 2.0)
+        chamfer_width_mm = chamfer_depth_mm * math.tan(half_angle)
+        # Wall-thickness check: if the polygon has interior holes, the
+        # chamfer mustn't exceed the smallest distance to any interior ring
+        # or the chamfer crosses into the hole. For convex outer-only
+        # polygons we can't easily bound "wall thickness", so this check
+        # only fires when there are interior rings (typical for parts with
+        # mounting holes near the edge).
+        if hasattr(polygon, "interiors") and list(polygon.interiors):
+            # Distance from each interior ring to the exterior boundary
+            from shapely.geometry import LineString
+
+            ext = LineString(polygon.exterior.coords)
+            for interior in polygon.interiors:
+                int_line = LineString(interior.coords)
+                wall = ext.distance(int_line)
+                if chamfer_width_mm >= wall:
+                    _warn_or_fail(
+                        f"chamfer_edge: chamfer width {chamfer_width_mm:.3f}mm "
+                        f"≥ wall thickness {wall:.3f}mm between exterior and "
+                        f"an interior hole. The chamfer will cut INTO the "
+                        f"hole. Reduce chamfer_depth_mm or pick a steeper "
+                        f"V-bit.",
+                        cfg,
+                        warnings,
+                    )
+                    break
+    elif tool.type == "v_bit" and tool.angle_deg is None:
+        _warn_or_fail(
+            f"chamfer_edge: tool '{tool.id}' is v_bit but has no angle_deg; "
+            f"cannot compute chamfer width. Add angle_deg to "
+            f"profiles/tools.yaml.",
+            cfg,
+            warnings,
+        )
+    if tool.flute_length_mm is not None and chamfer_depth_mm > tool.flute_length_mm:
+        _warn_or_fail(
+            f"chamfer depth {chamfer_depth_mm}mm exceeds tool flute length "
+            f"{tool.flute_length_mm}mm; shank will rub.",
+            cfg,
+            warnings,
+        )
+    if material.chipload_for(tool.id) is None:
+        _warn_or_fail(
+            f"material '{material.id}' has no chipload entry for tool "
+            f"'{tool.id}'; feed rate will fall back to a conservative default.",
+            cfg,
+            warnings,
+        )
+
+    # The path is the polygon's exterior: tool centerline rides the edge.
+    if polygon.is_empty:
+        _warn_or_fail(
+            "chamfer_edge: polygon is empty; no output emitted.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    if isinstance(polygon, MultiPolygon):
+        polys = list(polygon.geoms)
+    else:
+        polys = [polygon]
+
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+
+    lines = _spindle_header("chamfer_edge", tool, material, cfg, chamfer_depth_mm)
+    width_note = (
+        f"; chamfer width = {chamfer_width_mm:.3f}mm per side (angle={tool.angle_deg}°)"
+        if chamfer_width_mm is not None
+        else "; chamfer width unknown (tool.angle_deg missing)"
+    )
+    lines.append(width_note)
+    lines.append(
+        f"; single-pass at Z=-{chamfer_depth_mm:.3f}, feed={feed}, plunge={plunge_f}"
+    )
+    lines.append("")
+
+    for path_idx, poly in enumerate(polys, start=1):
+        coords = list(poly.exterior.coords)
+        if len(coords) < 3:
+            continue
+        x0, y0 = coords[0]
+        lines.append(f"; --- path {path_idx}/{len(polys)} ({len(coords)} pts) ---")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+        lines.append(f"G1 Z{-chamfer_depth_mm:.3f} F{plunge_f}")
+        for x, y in coords[1:]:
+            lines.append(f"G1 X{x:.3f} Y{y:.3f} F{feed}")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: profile_cut_with_tabs
+# ---------------------------------------------------------------------------
+
+
+def _perimeter_tab_spans(
+    perimeter_pts: list[tuple[float, float]],
+    tab_count: int,
+    tab_width_mm: float,
+) -> list[tuple[float, float]]:
+    """Compute (start_arclen, end_arclen) intervals along the perimeter where
+    tabs should sit. Tabs are distributed evenly: starting at offset
+    (perimeter_len / tab_count) / 2, then every (perimeter_len / tab_count)
+    after that. Each tab is tab_width_mm wide along the perimeter."""
+    if tab_count <= 0:
+        return []
+    # Compute cumulative arc length
+    cum = [0.0]
+    for i in range(1, len(perimeter_pts)):
+        x0, y0 = perimeter_pts[i - 1]
+        x1, y1 = perimeter_pts[i]
+        d = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        cum.append(cum[-1] + d)
+    total = cum[-1]
+    if total <= 0:
+        return []
+    spacing = total / tab_count
+    spans: list[tuple[float, float]] = []
+    for i in range(tab_count):
+        center = (i + 0.5) * spacing
+        start = (center - tab_width_mm / 2) % total
+        end = (center + tab_width_mm / 2) % total
+        spans.append((start, end))
+    return spans
+
+
+def _arclen_at_point(cum_arclens: list[float], idx: int, segment_t: float) -> float:
+    """Helper: arc length up to perimeter_pts[idx] + segment_t * length to
+    perimeter_pts[idx+1]. segment_t in [0, 1]."""
+    base = cum_arclens[idx]
+    if idx + 1 >= len(cum_arclens):
+        return base
+    seg = cum_arclens[idx + 1] - cum_arclens[idx]
+    return base + segment_t * seg
+
+
+def profile_cut_with_tabs(
+    polygon: BaseGeometry,
+    depth_mm: float,
+    tab_count: int = 4,
+    tab_width_mm: float = 4.0,
+    tab_height_mm: float = 1.0,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    side: Side = "outside",
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """profile_cut variant leaving N small bridges holding the part to stock.
+
+    All passes except the FINAL one cut the full perimeter normally. On the
+    final (deepest) pass, the tool lifts Z to -(depth - tab_height_mm) for
+    each tab span and descends back to -depth for the rest of the perimeter.
+    The result: tabs of height tab_height_mm holding the part in place after
+    cutting is complete.
+
+    Tabs are distributed evenly along the perimeter.
+
+    After cutting: snap the part free with a thin chisel or saw, then sand
+    the tab stubs flush with a sanding block.
+
+    Warning categories:
+      - tab_count * tab_width_mm >= perimeter (no room for the part itself)
+      - tab_height_mm > depth_mm / 3 (taller tabs are harder to clean up)
+      - tab_count < 3 (risky on large parts)
+      - shares warnings with profile_cut (default tool, ball/v/drill, depth>flute)
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    # Reuse the standard profile_cut tool checks but under our op name so
+    # the user knows which op is complaining.
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool.id}' for profile_cut_with_tabs. "
+            f"{_DEFAULT_TOOL_WARNING_IMPLICATIONS['profile_cut_with_tabs']} "
+            f"Pass tool=... explicitly to suppress this warning.",
+            cfg,
+            warnings,
+        )
+    if tool.type == "ball_endmill":
+        _warn_or_fail(
+            f"profile_cut_with_tabs with type=ball_endmill: rounded bottom "
+            f"means tabs won't have square shoulders. Use a flat endmill.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "v_bit":
+        _warn_or_fail(
+            f"profile_cut_with_tabs with type=v_bit: angled walls; tabs will "
+            f"be weak / asymmetric. Use a flat endmill.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "drill":
+        _warn_or_fail(
+            f"profile_cut_with_tabs with type=drill: drills don't side-cut. "
+            f"Use an endmill.",
+            cfg,
+            warnings,
+        )
+    if tool.flute_length_mm is not None and depth_mm > tool.flute_length_mm:
+        _warn_or_fail(
+            f"requested depth {depth_mm}mm exceeds tool flute length "
+            f"{tool.flute_length_mm}mm; shank will rub.",
+            cfg,
+            warnings,
+        )
+    if material.chipload_for(tool.id) is None:
+        _warn_or_fail(
+            f"material '{material.id}' has no chipload entry for tool "
+            f"'{tool.id}'; feed rate will fall back to a conservative default.",
+            cfg,
+            warnings,
+        )
+
+    # Tab-specific warnings
+    if tab_count < 3:
+        _warn_or_fail(
+            f"profile_cut_with_tabs: tab_count={tab_count} < 3 is risky on "
+            f"larger parts. The part can pivot around a single tab. Consider "
+            f"≥3 tabs unless the part is very small.",
+            cfg,
+            warnings,
+        )
+    if tab_height_mm > depth_mm / 3:
+        _warn_or_fail(
+            f"profile_cut_with_tabs: tab_height_mm={tab_height_mm} > depth/3="
+            f"{depth_mm / 3:.2f}. Taller tabs are stronger but much harder to "
+            f"sand flush after the part is released. Consider ≤depth/3.",
+            cfg,
+            warnings,
+        )
+    if tab_height_mm >= depth_mm:
+        _warn_or_fail(
+            f"profile_cut_with_tabs: tab_height_mm={tab_height_mm} >= "
+            f"depth_mm={depth_mm}. Tabs would be full-thickness; the part is "
+            f"not actually cut free. Reduce tab_height_mm.",
+            cfg,
+            warnings,
+        )
+
+    # Build toolpath polygon (same offset logic as profile_cut)
+    if side == "outside":
+        path_geom = polygon.buffer(tool.radius_mm)
+    elif side == "inside":
+        path_geom = polygon.buffer(-tool.radius_mm)
+    elif side == "on":
+        path_geom = polygon
+    else:
+        raise SystemExit(
+            f"profile_cut_with_tabs: side must be outside|inside|on, got {side!r}"
+        )
+
+    if path_geom.is_empty:
+        _warn_or_fail(
+            f"profile_cut_with_tabs produced empty toolpath; skipping.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    if isinstance(path_geom, MultiPolygon):
+        polys = list(path_geom.geoms)
+    else:
+        polys = [path_geom]
+
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+    step_down = _derive_step_down(tool, material, cfg)
+    n_passes = max(1, int(-(-depth_mm // step_down)))
+
+    lines = _spindle_header("profile_cut_with_tabs", tool, material, cfg, depth_mm)
+    lines.append(
+        f"; {n_passes} pass(es) at step_down={step_down}mm, feed={feed}, plunge={plunge_f}"
+    )
+    lines.append(
+        f"; side={side}, paths={len(polys)}, "
+        f"tabs={tab_count}x{tab_width_mm}mm wide x {tab_height_mm}mm tall"
+    )
+    lines.append("")
+
+    tab_z = -(depth_mm - tab_height_mm)  # Z at top of tab
+
+    for path_idx, poly in enumerate(polys, start=1):
+        coords = list(poly.exterior.coords)
+        if len(coords) < 3:
+            continue
+        # Tab-span check against perimeter length
+        total_perim = 0.0
+        for i in range(1, len(coords)):
+            x0, y0 = coords[i - 1]
+            x1, y1 = coords[i]
+            total_perim += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        if tab_count * tab_width_mm >= total_perim:
+            _warn_or_fail(
+                f"profile_cut_with_tabs path {path_idx}: total tab width "
+                f"{tab_count * tab_width_mm}mm >= perimeter {total_perim:.1f}mm. "
+                f"No room for actual cuts between tabs. Reduce tab_count or "
+                f"tab_width_mm.",
+                cfg,
+                warnings,
+            )
+
+        spans = _perimeter_tab_spans(coords, tab_count, tab_width_mm)
+
+        x0, y0 = coords[0]
+        lines.append(f"; --- path {path_idx}/{len(polys)} ({len(coords)} pts) ---")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+        for pass_n in range(1, n_passes + 1):
+            cur_z = -min(pass_n * step_down, depth_mm)
+            is_final = pass_n == n_passes
+            if n_passes > 1:
+                lines.append(f"; pass {pass_n} of {n_passes} (Z={cur_z:.3f})")
+            lines.append(f"G1 Z{cur_z:.3f} F{plunge_f}")
+
+            if not is_final or not spans:
+                # Normal full-perimeter pass.
+                for x, y in coords[1:]:
+                    lines.append(f"G1 X{x:.3f} Y{y:.3f} F{feed}")
+            else:
+                # Final pass: walk perimeter, lift Z to tab_z over tab spans.
+                # The perimeter has straight runs with no intermediate
+                # vertices, so we must interpolate XY points at tab span
+                # boundaries to actually emit the Z lifts where intended.
+                cum = [0.0]
+                for i in range(1, len(coords)):
+                    cx0, cy0 = coords[i - 1]
+                    cx1, cy1 = coords[i]
+                    cum.append(cum[-1] + ((cx1 - cx0) ** 2 + (cy1 - cy0) ** 2) ** 0.5)
+                total = cum[-1]
+
+                # Enrich the arc-length sequence with tab boundary
+                # arclens so every tab edge gets a vertex with the right Z.
+                breakpoints: set[float] = set(cum)
+                for s, e in spans:
+                    breakpoints.add(s % total)
+                    breakpoints.add(e % total)
+                ordered = sorted(breakpoints)
+
+                def point_at_arclen(a: float) -> tuple[float, float]:
+                    a = a % total
+                    # Binary search for segment idx
+                    lo, hi = 0, len(cum) - 1
+                    while lo < hi - 1:
+                        mid = (lo + hi) // 2
+                        if cum[mid] <= a:
+                            lo = mid
+                        else:
+                            hi = mid
+                    seg_len = cum[lo + 1] - cum[lo]
+                    if seg_len <= 0:
+                        return coords[lo]
+                    t = (a - cum[lo]) / seg_len
+                    x0, y0 = coords[lo]
+                    x1, y1 = coords[lo + 1]
+                    return (x0 + t * (x1 - x0), y0 + t * (y1 - y0))
+
+                def in_tab(arclen: float) -> bool:
+                    a = arclen % total
+                    for s, e in spans:
+                        if s <= e:
+                            if s <= a <= e:
+                                return True
+                        else:
+                            # span wraps around end
+                            if a >= s or a <= e:
+                                return True
+                    return False
+
+                lines.append(
+                    f"; final pass with {len(spans)} tab(s); "
+                    f"Z lifts to {tab_z:.3f} over each tab"
+                )
+                current_z = cur_z
+                for arclen in ordered:
+                    if arclen <= 0:
+                        continue  # starting point already plunged
+                    # in_tab on the MIDPOINT of [prev, this] arclen would be
+                    # the "right" answer for the segment we just traversed,
+                    # but emitting the lift at the boundary itself works
+                    # fine because the boundary is repeated as both
+                    # "end-of-cut" and "start-of-tab" arclens (they're equal
+                    # so visited once in the set). Lift Z just before
+                    # entering / exiting a tab span.
+                    target_z = tab_z if in_tab(arclen) else cur_z
+                    if target_z != current_z:
+                        lines.append(f"G1 Z{target_z:.3f} F{plunge_f}")
+                        current_z = target_z
+                    x, y = point_at_arclen(arclen)
+                    lines.append(f"G1 X{x:.3f} Y{y:.3f} F{feed}")
+                # End: leave Z at cut depth, will be lifted to safe Z next.
+
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: slot_mill (stadium-shape pocket from p1 → p2)
+# ---------------------------------------------------------------------------
+
+
+def _stadium_polygon(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    width_mm: float,
+    segments: int = 32,
+) -> Polygon:
+    """Build a stadium (rectangle with semicircular ends) of the given width
+    centered on the line from p1 to p2.
+
+    Implementation: buffer a LineString from p1→p2 by width/2 with round caps.
+    Shapely's LineString.buffer(cap_style='round', join_style='round') does
+    exactly this and produces a clean stadium shape.
+    """
+    from shapely.geometry import LineString
+
+    line = LineString([p1, p2])
+    radius = width_mm / 2
+    # cap_style=1 = round, quad_segs = quarter-circle subdivision count
+    return line.buffer(radius, cap_style=1, quad_segs=max(4, segments // 4))
+
+
+def slot_mill(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    width_mm: float,
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Cut an elongated stadium-shape slot (oversized hole for mounting-position
+    adjustment).
+
+    Geometry: rectangle of length |p2 - p1| and width `width_mm`, with
+    semicircular ends, centered on the line p1→p2. Built as a shapely Polygon
+    and dispatched to pocket_mill for the actual clearance.
+
+    Warning categories:
+      - width_mm < tool.diameter_mm (slot narrower than tool — impossible)
+      - width_mm > 2 * tool.diameter_mm (requires multi-pass clearance —
+        OK, pocket_mill handles it, but warn so caller knows)
+      - shares warnings with pocket_mill (default tool, deep+flat, ball/v/drill)
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool_resolved = tool or load_tool(DEFAULT_TOOL_ID)
+    material_resolved = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    # Width / tool relationship checks BEFORE delegating to pocket_mill
+    if width_mm < tool_resolved.diameter_mm:
+        _warn_or_fail(
+            f"slot_mill: width_mm={width_mm} < tool diameter "
+            f"{tool_resolved.diameter_mm}mm. Cannot cut a slot narrower than "
+            f"the tool. Pick a smaller tool or widen the slot.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+    if width_mm > 2 * tool_resolved.diameter_mm:
+        _warn_or_fail(
+            f"slot_mill: width_mm={width_mm} > 2x tool diameter "
+            f"{2 * tool_resolved.diameter_mm}mm. Requires multi-pass clearance "
+            f"(pocket_mill will handle it via offset rings, but expect multiple "
+            f"side-by-side passes per Z step).",
+            cfg,
+            warnings,
+        )
+
+    # Build stadium and delegate to pocket_mill, but we want our own header
+    # so the comment says "slot_mill" not "pocket_mill". Easiest: call
+    # pocket_mill, then patch the header line.
+    stadium = _stadium_polygon(p1, p2, width_mm)
+    if stadium.is_empty or stadium.area <= 0:
+        _warn_or_fail(
+            f"slot_mill: stadium geometry is degenerate (p1=p2? width=0?); no output.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    # Override the default-tool warning so the user sees the right op name.
+    # We pass the explicit tool/material to pocket_mill to suppress its own
+    # default-tool warning, then re-emit ours under slot_mill.
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool_resolved.id}' for slot_mill. "
+            f"{_DEFAULT_TOOL_WARNING_IMPLICATIONS['slot_mill']} "
+            f"Pass tool=... explicitly to suppress this warning.",
+            cfg,
+            warnings,
+        )
+
+    inner = pocket_mill(
+        stadium,
+        depth_mm=depth_mm,
+        tool=tool_resolved,
+        material=material_resolved,
+        cfg=cfg,
+    )
+
+    # Re-label the header so output advertises slot_mill.
+    patched_lines: list[str] = []
+    for ln in inner.lines:
+        if ln.startswith("; pocket_mill:"):
+            patched_lines.append(
+                ln.replace("; pocket_mill:", "; slot_mill:", 1)
+                + f"  [via pocket_mill, stadium p1={p1} p2={p2} width={width_mm}mm]"
+            )
+        else:
+            patched_lines.append(ln)
+
+    warnings.extend(inner.warnings)
+    return GcodeOutput(lines=patched_lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: face_mill (zig-zag raster surfacing)
+# ---------------------------------------------------------------------------
+
+
+def face_mill(
+    bounds_polygon: BaseGeometry,
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    stepover_factor: float = 0.7,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Clean the top surface of stock to a uniform Z via zig-zag raster.
+
+    Used to flatten warped material or skim a thin layer before precision
+    work. The tool covers `bounds_polygon` with parallel zigzag passes along
+    the X axis, spaced by `stepover_factor * tool.diameter_mm`.
+
+    Why zigzag instead of pocket_mill's spiral: face-milling wants
+    predictable parallel scanlines so chip evacuation is uniform across the
+    surface. Spirals leave a center-out chip pattern that's poor for
+    surface flatness.
+
+    Warning categories:
+      - tool.type != flat_endmill (ball/v leave non-flat surface)
+      - depth_mm > 1mm in single pass (chip load risk; auto multi-passes if
+        material doc_fraction yields that, but warn anyway)
+      - stepover_factor > 0.8 (visible scallop ridges)
+      - default-tool, chipload, flute-length warnings (shared)
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool.id}' for face_mill. "
+            f"{_DEFAULT_TOOL_WARNING_IMPLICATIONS['face_mill']} "
+            f"Pass tool=... explicitly to suppress this warning.",
+            cfg,
+            warnings,
+        )
+    if tool.type == "ball_endmill":
+        _warn_or_fail(
+            f"face_mill with type=ball_endmill: ball-end leaves curved "
+            f"scallops between passes (non-flat surface). Use a flat endmill.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "v_bit":
+        _warn_or_fail(
+            f"face_mill with type=v_bit: V-bit leaves a non-flat (grooved) "
+            f"surface. Use a flat endmill.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "drill":
+        _warn_or_fail(
+            f"face_mill with type=drill: drills don't side-cut. Use a flat endmill.",
+            cfg,
+            warnings,
+        )
+    if depth_mm > 1.0:
+        _warn_or_fail(
+            f"face_mill: depth_mm={depth_mm} > 1mm in single op. The op will "
+            f"multi-pass via material.doc_fraction, but for surfacing you "
+            f"usually want shallow skims (~0.3-0.5mm) and multiple separate "
+            f"face_mill calls. Heavy face cuts overload the tool laterally.",
+            cfg,
+            warnings,
+        )
+    if stepover_factor > 0.8:
+        _warn_or_fail(
+            f"face_mill: stepover_factor={stepover_factor} > 0.8. Visible "
+            f"scallop ridges will remain between passes. Use 0.5-0.7 for a "
+            f"clean surface.",
+            cfg,
+            warnings,
+        )
+    if not (0 < stepover_factor <= 1.0):
+        raise SystemExit(
+            f"face_mill: stepover_factor must be in (0, 1], got {stepover_factor}"
+        )
+    if tool.flute_length_mm is not None and depth_mm > tool.flute_length_mm:
+        _warn_or_fail(
+            f"face_mill depth {depth_mm}mm exceeds flute length "
+            f"{tool.flute_length_mm}mm; shank will rub.",
+            cfg,
+            warnings,
+        )
+    if material.chipload_for(tool.id) is None:
+        _warn_or_fail(
+            f"material '{material.id}' has no chipload entry for tool "
+            f"'{tool.id}'; feed rate will fall back to a conservative default.",
+            cfg,
+            warnings,
+        )
+
+    if bounds_polygon.is_empty:
+        _warn_or_fail(
+            "face_mill: bounds_polygon is empty; no output.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    # Inset bounds by tool_radius so the cutter EDGE stays within the
+    # requested region (otherwise the cutter overshoots outside the bounds
+    # by tool_radius on each side).
+    inset = bounds_polygon.buffer(-tool.radius_mm)
+    if inset.is_empty:
+        _warn_or_fail(
+            f"face_mill: bounds_polygon is smaller than 2x tool diameter "
+            f"({2 * tool.diameter_mm}mm); cannot fit even one pass. Use a "
+            f"smaller tool.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    minx, miny, maxx, maxy = inset.bounds
+    stepover = stepover_factor * tool.diameter_mm
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+    step_down = _derive_step_down(tool, material, cfg)
+    n_z_passes = max(1, int(-(-depth_mm // step_down)))
+
+    # Generate Y scanlines top→bottom (or bottom→top, doesn't matter).
+    # Each scanline runs left→right, then the next runs right→left, etc.
+    scanlines: list[tuple[float, float, float]] = []  # (y, x_start, x_end)
+    y = miny
+    direction = 1  # 1 = left→right, -1 = right→left
+    while y <= maxy + 1e-9:
+        if direction == 1:
+            scanlines.append((y, minx, maxx))
+        else:
+            scanlines.append((y, maxx, minx))
+        y += stepover
+        direction *= -1
+    if scanlines and abs(scanlines[-1][0] - maxy) > 1e-6:
+        # Ensure final pass at the far edge so we don't leave a strip uncut
+        if direction == 1:
+            scanlines.append((maxy, minx, maxx))
+        else:
+            scanlines.append((maxy, maxx, minx))
+
+    lines = _spindle_header("face_mill", tool, material, cfg, depth_mm)
+    lines.append(
+        f"; {n_z_passes} Z-pass(es) at step_down={step_down}mm, "
+        f"feed={feed}, plunge={plunge_f}"
+    )
+    lines.append(
+        f"; {len(scanlines)} scanline(s) per Z, stepover={stepover}mm "
+        f"({stepover_factor * 100:.0f}% of {tool.diameter_mm}mm dia)"
+    )
+    lines.append(
+        f"; bounds (inset by tool radius): X=[{minx:.3f}, {maxx:.3f}] "
+        f"Y=[{miny:.3f}, {maxy:.3f}]"
+    )
+    lines.append("")
+
+    for pass_n in range(1, n_z_passes + 1):
+        cur_z = -min(pass_n * step_down, depth_mm)
+        lines.append(f"; --- Z pass {pass_n}/{n_z_passes} at Z={cur_z:.3f} ---")
+        for i, (sy, sx, ex) in enumerate(scanlines, start=1):
+            lines.append(f"; scanline {i}/{len(scanlines)} y={sy:.3f}")
+            if i == 1:
+                # Initial: rapid to start, then plunge.
+                lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+                lines.append(f"G0 X{sx:.3f} Y{sy:.3f}")
+                lines.append(f"G1 Z{cur_z:.3f} F{plunge_f}")
+            else:
+                # Subsequent: G1 to next scanline start (still at cut depth)
+                lines.append(f"G1 Y{sy:.3f} F{feed}")
+            lines.append(f"G1 X{ex:.3f} F{feed}")
         lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
         lines.append("")
 
