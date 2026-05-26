@@ -37,3 +37,21 @@
   flutes: 2
   max_rpm: 24000
   max_plunge_mm_per_min: 200
+
+- id: drill_3.2mm_m4_clearance
+  type: drill
+  diameter_mm: 3.2  # M4 clearance fit
+  flutes: 2
+  flute_length_mm: 30
+  shank_mm: 3.2
+  max_rpm: 12000
+  max_plunge_mm_per_min: 150
+
+- id: drill_6.5mm_m6_clearance
+  type: drill
+  diameter_mm: 6.5  # M6 clearance fit
+  flutes: 2
+  flute_length_mm: 35
+  shank_mm: 6.5
+  max_rpm: 8000
+  max_plunge_mm_per_min: 100

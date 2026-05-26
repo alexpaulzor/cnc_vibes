@@ -784,6 +784,65 @@ Flags:
 See also: laser-materials, lesson-calibration, lesson-laser-cal
 """,
     ),
+    "cam-library": (
+        "scripts/cam.py — parametric 2.5D CAM (no FreeCAD)",
+        """
+Location: scripts/cam.py
+
+Pure-function library that produces validator-clean GCode for common
+2.5D operations from shapely shapes. Replaces the FreeCAD CAM GUI for
+parametric parts.
+
+Operations shipped (use these from your own Python scripts):
+  profile_cut(polygon, depth_mm, tool, material, side, cfg) -> GcodeOutput
+  pocket_mill (polygon, depth_mm, tool, material, stepover_factor, cfg)
+  drill_array (holes, depth_mm, tool, material, peck_depth_mm, cfg)
+
+Each op:
+  - Loads tool + material from profiles/{tools,materials}.yaml
+  - Multi-pass Z descent derived from material.doc_fraction
+  - Plunge feed capped by tool.max_plunge_mm_per_min
+  - Validator-clean header (;HEAD: spindle, ;MATERIAL, ;TOOL)
+  - Emits warnings for default-tool / op-tool mismatch / depth >
+    flute length / etc.
+  - CamConfig(strict=True) escalates all warnings to SystemExit
+
+Compose multiple ops into one part — see lesson 4e
+(lessons/mill/05_generic_cam/) for the canonical pattern.
+
+Full pipeline:
+  python my_part.py > build/part.gcode    # cam.py emits GCode
+  python cnc.py validate build/part.gcode # static lint
+  python cnc.py preview  build/part.gcode # CAMotics 3D simulation
+  python cnc.py preflight build/part.gcode # interactive safety
+  # ...load in your sender, swap tools at ;TOOL markers, cut...
+
+See also: lesson-mounting-plate, validator-rules
+""",
+    ),
+    "lesson-mounting-plate": (
+        "lesson 4e — generic 2.5D CAM (mounting plate worked example)",
+        """
+Location: lessons/mill/05_generic_cam/
+
+Worked example composing profile_cut + pocket_mill + drill_array from
+scripts/cam.py into one part: a 60x40mm mounting plate with 4 M4
+corner holes, a central 20x10mm pocket, and outer perimeter cut.
+
+Demonstrates the code-first CAM workflow end-to-end with no FreeCAD GUI.
+
+Usage:
+  python lessons/mill/05_generic_cam/mounting_plate.py
+  python cnc.py validate lessons/mill/05_generic_cam/build/mounting_plate.gcode
+  python cnc.py preview  lessons/mill/05_generic_cam/build/mounting_plate.gcode
+  python cnc.py preflight lessons/mill/05_generic_cam/build/mounting_plate.gcode
+
+CLI flags override every dimension + tool + material. --strict turns
+all CAM warnings into fatal errors (use in CI).
+
+See also: cam-library, validator-rules
+""",
+    ),
     "validator-rules": (
         "validator-rules — every rule gcode_validate enforces",
         """
@@ -902,6 +961,8 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-laser-cal",
         "lesson-jigsaw",
         "lesson-spoilboard",
+        "lesson-mounting-plate",
+        "cam-library",
     ],
 }
 

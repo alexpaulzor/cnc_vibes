@@ -2,6 +2,8 @@
 
 A guide for software engineers who already know OpenSCAD + FDM 3D printing and want to make their CNC router cut holes in things — not print plastic in the shape of "thing-with-holes."
 
+> **Read this if you're going Workflow B (FreeCAD CAM).** This guide is the conceptual deep-dive for the OpenSCAD → FreeCAD CAM workbench → GCode path. If you're going Workflow A (pure Python via `scripts/cam.py` or one of the parametric lessons in `lessons/`), most of this doesn't apply — go straight to the [top README's lesson list](README.md#lessons) and pick a starter. The vocabulary in §2 is useful regardless of workflow.
+>
 > **Status: v2.** Spindle-only this iteration. Laser and FDM are deferred but the architecture accommodates them as additional pipeline branches (see §3 and §4). CAM tool is **FreeCAD's CAM workbench**; geometry export + GCode validation are CLI; CAM setup itself is GUI.
 
 ---

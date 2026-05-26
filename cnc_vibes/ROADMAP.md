@@ -25,6 +25,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 | 4b | [PCB engraving (Excellon drill side)](lessons/mill/04_pcb/) | ✅ |
 | 4c | [Steel center-punch divets](lessons/mill/02_steel_center_punch/) | ✅ |
 | 4d | [Aluminum trochoidal slot](lessons/mill/03_aluminum/) | ✅ |
+| 4e | [Generic 2.5D CAM — no FreeCAD](lessons/mill/05_generic_cam/) | ✅ Composes `profile_cut` + `pocket_mill` + `drill_array` from `scripts/cam.py` into one mounting-plate part. Demonstrates the code-first CAM workflow end-to-end. |
 
 ## Integration (machine state + camera)
 
@@ -41,6 +42,17 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 5 | [ArcFony Cut53M Pro as third tool head](lessons/plasma/) | ⛔ blocked — requires mechanical fabrication (outrigger mount, opto-isolator) |
 
+## Active library — `scripts/cam.py` (parametric 2.5D CAM, no FreeCAD)
+
+A code-first CAM library that produces validator-clean GCode for the common 2.5D ops from shapely shapes. Pure-function ops, op-tool warning framework, `strict=True` mode escalates warnings to errors.
+
+- ✅ `profile_cut` — inside/outside/on cut around a polygon's perimeter (multi-pass Z)
+- ✅ `pocket_mill` — offset-spiral clearance of a polygon interior (multi-pass Z, configurable stepover)
+- ✅ `drill_array` — peck or single-plunge drill cycle at each (x, y)
+- ✅ Worked example: `lessons/mill/05_generic_cam/` composes all three into a mounting plate
+- 📋 `engrave_text` — constant-depth centerline trace (deferred; v-carve variant farther out)
+- 📋 `cnc.py preview <gcode>` ✅ for CAMotics already; `cnc.py cam <op>` CLI shim is unstarted
+
 ## Suggested learning order
 
 The lessons build on each other. Recommended sequence:
@@ -50,12 +62,14 @@ The lessons build on each other. Recommended sequence:
 4. **4c** (center-punch) — confirm spindle works on metal
 5. **4d** (aluminum) — hardest 3-axis; don't attempt before 4a is solid
 6. **4b** (PCB) — combines all prior lessons + FreeCAD CAM workflow
-7. **Int-01** (inspect) — first machine-talking tool; small scope, big preflight win
-8. **Int-03** (probe-corner) — automates per-job WCS ritual; depends on Int-01
-9. **Int-04** (laser cal) — interactive iteration; depends on Int-01
-10. **3c** (jigsaw) — aspirational; sub-roadmap below
-11. **Int-02** (snapshot) — useful but lower priority; defer until camera bracket exists
-12. **5** (plasma) — separate workstream
+7. **4e** (generic CAM) — code-first multi-op composition with the `scripts/cam.py` library; no FreeCAD
+8. **Int-01** (inspect) — first machine-talking tool; small scope, big preflight win
+9. **Int-03** (probe-corner) — automates per-job WCS ritual; depends on Int-01
+10. **Int-04** (laser cal) — interactive iteration; depends on Int-01
+11. **3c** (jigsaw) — the productionized end-to-end example: text + photo + cut
+12. **3d** (spoilboard) — generic auto-tiling pattern for designs larger than stock
+13. **Int-02** (snapshot) — useful but lower priority; defer until camera bracket exists
+14. **5** (plasma) — separate workstream
 
 ## Active work — Lesson 3c jigsaw sub-roadmap
 

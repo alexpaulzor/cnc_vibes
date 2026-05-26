@@ -25,6 +25,22 @@ python cnc.py preflight lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
 
 Both paths share the same downstream tooling (`validate`, `preflight`, `preview`, `params`) and the same machine/tool/material profiles.
 
+## Where to start (new reader)
+
+Pick the lesson that matches what you actually want to cut. Each link is a self-contained README with usage, dependencies, and "what's next" pointers.
+
+| Your situation | Start here | Why |
+|---|---|---|
+| **First time, want fastest path to a cut** | [3a laser spacer](lessons/laser/01_spacer/) | Smallest end-to-end lesson. Pure Python → laser GCode. Establishes the parametric pattern. Cuts in <2 minutes. |
+| **Have a CNC router (not laser) and want a 2.5D part** | [4e generic CAM](lessons/mill/05_generic_cam/) | Worked example: composes `profile_cut` + `pocket_mill` + `drill_array` into one mounting plate. The reference for the code-first router workflow. |
+| **Want to engrave a photo / make a jigsaw** | [3c jigsaw](lessons/laser/03_jigsaw/) | The productionized end-to-end example. Halftone + grayscale photo raster, multi-line per-letter fonts, optional wavy edges. |
+| **Need to characterize an unknown laser** | [3b laser calibration](lessons/laser/02_calibration/) and then [Int-04 interactive cal](lessons/integration/04_interactive_laser_cal/) | Static matrix first, interactive iteration for the focus/power sweet spot. |
+| **Want a 3D part you can't express as 2.5D shapely** | `cnc_for_the_scad.md` (Workflow B deep-dive) + [4a router spacer](lessons/mill/01_spacer/) (frustum case) | FreeCAD path. Slower setup, handles arbitrary 3D. |
+| **Cutting metal** | [4c steel center-punch](lessons/mill/02_steel_center_punch/), then [4d aluminum trochoidal](lessons/mill/03_aluminum/) | Sanity-check spindle on metal with no cutting first; then graduate to actual material removal. |
+| **Need to talk to the controller** (verify state, find IP, probe corners) | [Int-01 inspect](lessons/integration/01_inspect/), then [Int-03 probe-corner](lessons/integration/03_probe_corner/) | Same serial pattern, different scope. |
+
+If you don't know which workflow yet, **default to Workflow A** (code-first). The lessons under `lessons/laser/` and `lessons/mill/` mostly fit there, and you skip the FreeCAD learning curve until you genuinely need it.
+
 ## Install
 
 ### Windows 11
@@ -113,7 +129,7 @@ Progressive tutorials, each demonstrating a technique you can reuse on your own 
 
 **Implemented and tested**:
 - **Laser**: [3a spacer](lessons/laser/01_spacer/), [3b calibration matrix](lessons/laser/02_calibration/), [3c jigsaw](lessons/laser/03_jigsaw/) (productionized), [3d spoilboard](lessons/laser/04_spoilboard/)
-- **Mill**: [4a router spacer](lessons/mill/01_spacer/), [4b PCB drill](lessons/mill/04_pcb/), [4c steel center-punch](lessons/mill/02_steel_center_punch/), [4d aluminum trochoidal](lessons/mill/03_aluminum/)
+- **Mill**: [4a router spacer](lessons/mill/01_spacer/), [4b PCB drill](lessons/mill/04_pcb/), [4c steel center-punch](lessons/mill/02_steel_center_punch/), [4d aluminum trochoidal](lessons/mill/03_aluminum/), [4e generic 2.5D CAM](lessons/mill/05_generic_cam/)
 - **Integration** (talk to the machine): [Int-01 inspect](lessons/integration/01_inspect/), [Int-02 snapshot](lessons/integration/02_snapshot/), [Int-03 probe-corner](lessons/integration/03_probe_corner/), [Int-04 interactive laser cal](lessons/integration/04_interactive_laser_cal/)
 
 **Specced for future**:

@@ -21,6 +21,7 @@ Each lesson directory has its own `README.md` (user-facing: goal, prereqs, usage
 | 4b | [PCB engraving on copper-clad blanks](mill/04_pcb/) | ✅ (drill side) | KiCAD → FlatCAM (isolation) + `excellon_to_gcode.py` (drilling) → `cnc.py validate`. No chemicals. |
 | 4c | [Steel center-punch divets](mill/02_steel_center_punch/) | ✅ | Fully automated. Pure Python → GCode. CSV/YAML/grid input. Precision marking for follow-up drilling. |
 | 4d | [Aluminum trochoidal slot](mill/03_aluminum/) | ✅ | Low-engagement clearing for the 500W spindle. WD-40 / kerosene + chip evacuation are first-class concerns. |
+| 4e | [Generic 2.5D CAM — no FreeCAD](mill/05_generic_cam/) | ✅ | Worked example composing `profile_cut` + `pocket_mill` + `drill_array` from `scripts/cam.py` into one mounting-plate part. The reference for the code-first CAM workflow. |
 
 ## Integration (talk to the machine, see what's happening)
 
@@ -35,13 +36,13 @@ Standalone Python tools — any human (or other CLI) can run them without an LLM
 
 ## Library — `scripts/cam.py`
 
-Not a lesson per se, but the foundation for code-first 2.5D milling. Pure-function library: shapely shape + tool + material → validator-clean GCode, no FreeCAD GUI. Currently ships `profile_cut`; `pocket_mill`, `drill_array`, `engrave_text` on the roadmap. Each op emits clear warnings for default-pick / op-tool mismatch and supports `CamConfig(strict=True)` to escalate warnings to errors.
+Not a lesson per se, but the foundation for code-first 2.5D milling. Pure-function library: shapely shape + tool + material → validator-clean GCode, no FreeCAD GUI. Ships `profile_cut`, `pocket_mill`, `drill_array` (51 tests); `engrave_text` still on the roadmap. Each op emits clear warnings for default-pick / op-tool mismatch and supports `CamConfig(strict=True)` to escalate warnings to errors. The worked example at **[4e generic CAM](mill/05_generic_cam/)** composes all three ops into one part — read its README for the full pipeline (generate → validate → CAMotics preview → preflight → cut).
 
 ```python
-from cam import profile_cut, load_tool, load_material
-out = profile_cut(my_shapely_polygon, depth_mm=6.0,
-                  tool=load_tool("flat_6mm_2flute"),
-                  material=load_material("plywood_baltic_birch_6mm"))
+from cam import profile_cut, pocket_mill, drill_array, load_tool, load_material
+out_cut = profile_cut(my_polygon, depth_mm=6.0,
+                      tool=load_tool("flat_6mm_2flute"),
+                      material=load_material("plywood_baltic_birch_6mm"))
 ```
 
 ## Plasma (future)
@@ -58,13 +59,14 @@ Lessons build on each other. Recommended sequence for a new reader:
 4. **4c (steel center-punch)** — natural extension of 4a; confirms spindle path works on metal even if only superficially.
 5. **4d (aluminum trochoidal)** — hardest 3-axis lesson; don't attempt before 4a is solid.
 6. **4b (PCB drill)** — combines prior lessons + FlatCAM for isolation routing.
-7. **Int-01 (inspect)** — first machine-talking tool; small scope, big preflight win. Builds the serial pattern Int-03 + Int-04 depend on.
-8. **Int-03 (probe-corner)** — automates the per-job WCS ritual.
-9. **Int-04 (interactive laser cal)** — interactive iteration for focus/power/feed dialing.
-10. **3c (jigsaw)** — the productionized end-to-end example: text + photo + cut, full lesson layout to mirror.
-11. **3d (spoilboard)** — generic auto-tiling pattern for designs larger than stock.
-12. **Int-02 (snapshot)** — lower priority; useful once a camera bracket exists.
-13. **5 (plasma)** — separate workstream, hardware-blocked.
+7. **4e (generic CAM)** — composes `profile_cut` + `pocket_mill` + `drill_array` from `scripts/cam.py` into one part. The canonical example for the code-first CAM workflow (no FreeCAD).
+8. **Int-01 (inspect)** — first machine-talking tool; small scope, big preflight win. Builds the serial pattern Int-03 + Int-04 depend on.
+9. **Int-03 (probe-corner)** — automates the per-job WCS ritual.
+10. **Int-04 (interactive laser cal)** — interactive iteration for focus/power/feed dialing.
+11. **3c (jigsaw)** — the productionized end-to-end example: text + photo + cut, full lesson layout to mirror.
+12. **3d (spoilboard)** — generic auto-tiling pattern for designs larger than stock.
+13. **Int-02 (snapshot)** — lower priority; useful once a camera bracket exists.
+14. **5 (plasma)** — separate workstream, hardware-blocked.
 
 ## Adding a new lesson
 

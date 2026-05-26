@@ -39,7 +39,7 @@ def test_tools_schema():
     for t in tools:
         assert t["id"] not in seen_ids, f"duplicate tool id: {t['id']}"
         seen_ids.add(t["id"])
-        assert t["type"] in {"flat_endmill", "ball_endmill", "v_bit"}
+        assert t["type"] in {"flat_endmill", "ball_endmill", "v_bit", "drill"}
         assert t["diameter_mm"] > 0
         assert t["max_rpm"] > 0
         assert t["max_plunge_mm_per_min"] > 0

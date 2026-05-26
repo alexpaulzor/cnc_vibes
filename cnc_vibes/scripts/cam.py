@@ -407,6 +407,259 @@ def profile_cut(
 
 
 # ---------------------------------------------------------------------------
+# Operation: pocket_mill (offset-spiral clearance)
+# ---------------------------------------------------------------------------
+
+
+def _offset_rings(
+    polygon: BaseGeometry, tool_radius_mm: float, stepover_factor: float
+) -> list[Polygon]:
+    """Repeatedly inset polygon by stepover until the result is empty.
+    Returns the list of rings (outermost first, innermost last). The
+    outermost ring is the polygon inset by exactly tool_radius (so the
+    tool's cutter edge tangent the polygon boundary)."""
+    if not (0 < stepover_factor < 1):
+        raise SystemExit(f"stepover_factor must be in (0, 1), got {stepover_factor}")
+    stepover = stepover_factor * (2 * tool_radius_mm)  # fraction of tool dia
+    rings: list[Polygon] = []
+    # First ring: inset by tool_radius so cutter edge tangent polygon
+    current = polygon.buffer(-tool_radius_mm)
+    if current.is_empty:
+        return rings
+    while not current.is_empty:
+        # Decompose MultiPolygon → individual rings
+        if isinstance(current, MultiPolygon):
+            rings.extend(g for g in current.geoms if isinstance(g, Polygon))
+        elif isinstance(current, Polygon):
+            rings.append(current)
+        # Next inset
+        current = current.buffer(-stepover)
+    return rings
+
+
+def pocket_mill(
+    polygon: BaseGeometry,
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    stepover_factor: float = 0.5,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Clear the interior of a polygon to the given depth using offset-spiral
+    rings. Each Z step traverses every ring outermost-first to evacuate
+    chips outward; depth is reached over multiple Z passes per cfg.step_down_mm.
+
+    stepover_factor: fraction of tool diameter to advance between rings
+    (default 0.5 = 50% stepover, conservative for wood). Smaller is
+    finer; bigger gambles on chip evacuation.
+
+    Warning categories specific to pockets:
+    - Pocket too small to fit even one ring (polygon < 2*tool_radius)
+    - Deep pocket + flat endmill (chip-evac concern)
+    - Ball / V-bit / drill misuse
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+    _check_tool_for_op(
+        tool, material, "pocket_mill", depth_mm, is_default_tool, cfg, warnings
+    )
+
+    # Deep-pocket + flat endmill chip-evacuation check
+    if tool.type == "flat_endmill" and depth_mm > tool.diameter_mm * 3:
+        _warn_or_fail(
+            f"pocket depth {depth_mm}mm exceeds 3x tool diameter "
+            f"({tool.diameter_mm}mm); flat-endmill chip evacuation degrades "
+            f"sharply with depth. Consider an upcut helical bit or reduce "
+            f"step_down via CamConfig(step_down_mm=...).",
+            cfg,
+            warnings,
+        )
+
+    rings = _offset_rings(polygon, tool.radius_mm, stepover_factor)
+    if not rings:
+        _warn_or_fail(
+            f"pocket polygon is smaller than 2x tool diameter "
+            f"({2 * tool.diameter_mm}mm); cannot fit even one ring. "
+            f"Use a smaller tool or skip pocketing this region.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+    step_down = _derive_step_down(tool, material, cfg)
+    n_z_passes = max(1, int(-(-depth_mm // step_down)))
+
+    lines = _spindle_header("pocket_mill", tool, material, cfg, depth_mm)
+    lines.append(
+        f"; {n_z_passes} Z-pass(es) at step_down={step_down}mm, "
+        f"feed={feed}, plunge={plunge_f}"
+    )
+    lines.append(
+        f"; {len(rings)} ring(s) per Z-pass at stepover_factor={stepover_factor} "
+        f"(= {stepover_factor * 2 * tool.radius_mm:.2f}mm)"
+    )
+    lines.append("")
+
+    for pass_n in range(1, n_z_passes + 1):
+        cur_z = -min(pass_n * step_down, depth_mm)
+        lines.append(f"; --- Z pass {pass_n}/{n_z_passes} at Z={cur_z:.3f} ---")
+        for ring_idx, ring in enumerate(rings, start=1):
+            coords = list(ring.exterior.coords)
+            if len(coords) < 3:
+                continue
+            x0, y0 = coords[0]
+            lines.append(f"; ring {ring_idx}/{len(rings)}")
+            lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+            lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+            lines.append(f"G1 Z{cur_z:.3f} F{plunge_f}")
+            for x, y in coords[1:]:
+                lines.append(f"G1 X{x:.3f} Y{y:.3f} F{feed}")
+        lines.append("")
+    lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+    lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Operation: drill_array
+# ---------------------------------------------------------------------------
+
+
+def drill_array(
+    holes: list[tuple[float, float]],
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    peck_depth_mm: float | None = None,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Drill a hole at each (x, y) coordinate to the given depth.
+
+    Pure G0+G1+G0 implementation (no G81 cycle). Works on every GRBL
+    controller without modal-state surprises. Each hole: rapid to XY at
+    safe Z, slow plunge to -depth, rapid retract to safe Z.
+
+    peck_depth_mm (optional): peck drilling — plunge by peck_depth, retract
+    to safe Z for chip clear, plunge to peck_depth * 2, retract, ... until
+    target depth. Use for deep holes in wood / plastic where chip evac
+    matters. None (default) = single continuous plunge per hole.
+
+    Warning categories:
+    - Default tool is not a drill (warned + still emits)
+    - tool.type != "drill" (probably wrong but might be intentional for
+      plunge-milling with a flat endmill in wood)
+    - V-bit or ball-end (almost always wrong)
+    - depth > flute_length (shank rubbing)
+    - Drilling metal without coolant comment (hard to enforce, just warn)
+    """
+    cfg = cfg or CamConfig()
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    warnings: list[str] = []
+
+    # Op-specific tool checks (don't reuse profile_cut's list — drill is
+    # very different)
+    if is_default_tool:
+        _warn_or_fail(
+            f"using default tool '{tool.id}' for drill_array — NOT a drill bit. "
+            f"Flat endmills can plunge-drill in wood (with slow plunge feed) "
+            f"but for precision holes use a real drill bit (type=drill) "
+            f"defined in profiles/tools.yaml.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "v_bit":
+        _warn_or_fail(
+            f"drill_array with type=v_bit produces conical holes, not "
+            f"cylindrical. Wrong tool for through-holes; OK for chamfering "
+            f"if intentional.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "ball_endmill":
+        _warn_or_fail(
+            f"drill_array with type=ball_endmill produces hemispherical "
+            f"holes. Almost always wrong unless you specifically want "
+            f"that profile.",
+            cfg,
+            warnings,
+        )
+    elif tool.type == "flat_endmill":
+        _warn_or_fail(
+            f"drill_array with type=flat_endmill plunge-drills (not "
+            f"twist-drills). Tolerable in wood at slow plunge; risky in "
+            f"metal. For precision use type=drill.",
+            cfg,
+            warnings,
+        )
+    if tool.flute_length_mm is not None and depth_mm > tool.flute_length_mm:
+        _warn_or_fail(
+            f"depth {depth_mm}mm exceeds tool flute length "
+            f"{tool.flute_length_mm}mm; shank will rub at full depth.",
+            cfg,
+            warnings,
+        )
+    if material.family in ("aluminum", "steel") and peck_depth_mm is None:
+        _warn_or_fail(
+            f"drilling {material.family} without peck cycle (peck_depth_mm=None) "
+            f"risks chip-pack and tool snap. Consider peck_depth_mm = "
+            f"{tool.diameter_mm:.1f}mm (one diameter) with WD-40 or coolant.",
+            cfg,
+            warnings,
+        )
+    if not holes:
+        _warn_or_fail(
+            "drill_array called with empty holes list; no output emitted.",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    feed = _derive_feed(tool, material, cfg)
+    plunge_f = _plunge_feed(feed, tool, cfg)
+
+    lines = _spindle_header("drill_array", tool, material, cfg, depth_mm)
+    lines.append(
+        f"; {len(holes)} hole(s), depth={depth_mm}mm, plunge={plunge_f}"
+        + (f", peck={peck_depth_mm}mm" if peck_depth_mm else " (single plunge)")
+    )
+    lines.append("")
+
+    for hi, (hx, hy) in enumerate(holes, start=1):
+        lines.append(f"; --- hole {hi}/{len(holes)} at ({hx:.3f}, {hy:.3f}) ---")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append(f"G0 X{hx:.3f} Y{hy:.3f}")
+        if peck_depth_mm is None or peck_depth_mm >= depth_mm:
+            # Single plunge
+            lines.append(f"G1 Z{-depth_mm:.3f} F{plunge_f}")
+        else:
+            # Peck loop
+            cur_depth = 0.0
+            peck_n = 0
+            while cur_depth < depth_mm:
+                peck_n += 1
+                cur_depth = min(cur_depth + peck_depth_mm, depth_mm)
+                lines.append(f"; peck {peck_n} → Z={-cur_depth:.3f}")
+                lines.append(f"G1 Z{-cur_depth:.3f} F{plunge_f}")
+                if cur_depth < depth_mm:
+                    lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+                    lines.append(f"G0 X{hx:.3f} Y{hy:.3f}")
+        lines.append(f"G0 Z{cfg.safe_z_mm:.3f}")
+        lines.append("")
+
+    lines.extend(_spindle_footer(cfg))
+    return GcodeOutput(lines=lines, warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
 # Public CLI (light) — `python scripts/cam.py demo` produces a sample part
 # so you can validate end-to-end before composing your own jobs.
 # ---------------------------------------------------------------------------

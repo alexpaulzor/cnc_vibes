@@ -208,3 +208,73 @@ Test count: 254 → 290 (+36 new tests). All passing.
 ### Pattern reinforced
 
 Every safety-relevant change in Int-04 has a regression test. The audit caught what humans tend to miss in code review (the slot-dim bug ran silently for who-knows-how-long). When I add safety features without tests, future me will not know if they still work.
+
+---
+
+## 2026-05-25 — Code-first CAM library (`scripts/cam.py`) + worked example
+
+After the jigsaw productionization made the value of "shapely shape → validator-clean GCode in pure Python" obvious, generalized the pattern from puzzles to common 2.5D ops.
+
+### `scripts/cam.py` shipped (Tier 1)
+
+Pure-function library: `Tool` + `Material` + `CamConfig` dataclasses load
+from existing `profiles/{tools,materials}.yaml`; three ops compose:
+
+- **profile_cut** — cut around a polygon perimeter, side=inside/outside/on,
+  multi-pass Z descent from material.doc_fraction.
+- **pocket_mill** — offset-spiral clearance of polygon interior; ring count
+  derived from stepover_factor (default 0.5 = 50% stepover).
+- **drill_array** — list-of-points peck or single-plunge; per-hole G0+G1+G0
+  emission (no G81 modal cycle, works on any GRBL).
+
+Plus the warning-with-strict pattern the user asked for: every default-pick
+or sketchy combination emits a warning explaining the implication; CamConfig
+strict=True escalates to SystemExit. Catches: default-tool-not-explicit,
+ball-end for profile cut, V-bit for drill, depth > flute_length, missing
+chipload entry, deep pocket + flat endmill chip evacuation, drilling metal
+without peck cycle.
+
+Plunge feed cap by tool.max_plunge_mm_per_min (discovered via validator
+flagging the initial demo output — added test for it).
+
+51 tests in tests/test_cam.py. All three ops produce validator-clean
+GCode against profiles/anolex_4030_evo_ultra2.yaml.
+
+### CAMotics integration (Tier 3)
+
+`cnc.py preview <gcode>` opens the file in CAMotics for 3D toolpath +
+material-simulation inspection. macOS: `open -a CAMotics`; Linux/Windows:
+`camotics` via PATH. The bundled standalone CLI tools (camsim, gcodetool)
+are x86_64 only and link against Intel libcairo that doesn't load on
+Apple Silicon homebrew — GUI launch via the .app + Rosetta works fine and
+that's the integration path until upstream ships arm64 builds.
+
+### Lesson 4e — generic CAM worked example
+
+`lessons/mill/05_generic_cam/mounting_plate.py` composes all three cam.py
+ops into one part: 60×40mm plate with 4 M4 corner holes, 20×10mm center
+pocket, outer perimeter cut. Three sections in one GCode file, operator
+swaps tools at the `; =====` section markers.
+
+Demonstrates the no-FreeCAD pipeline end-to-end:
+  generate (Python) → validate → preview (CAMotics) → preflight → cut.
+
+8 lesson tests + the 51 cam.py tests = 59 new tests this session, 524
+total in the repo.
+
+### Tools.yaml — first real drill bits
+
+Added `drill_3.2mm_m4_clearance` and `drill_6.5mm_m6_clearance` (type=drill).
+Existing test_profiles.py was asserting `type ∈ {flat_endmill, ball_endmill,
+v_bit}` — extended to include `drill`. Caught immediately by `cnc.py test`
+after the additions; small reminder that the schema test needs updating
+whenever a new tool family appears.
+
+### Docs cleanup
+
+- ROADMAP.md: marks 4e ✅, adds the cam.py library section
+- lessons/README.md: 4e row, cam.py library description, suggested reading
+  order includes 4e
+- Top-level README.md: 4e in the mill bullet list
+- scripts/help_topics.py: `cam-library` + `lesson-mounting-plate` topics so
+  `cnc.py help` discovers them
