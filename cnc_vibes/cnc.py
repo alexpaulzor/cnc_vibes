@@ -588,6 +588,16 @@ def cmd_cam(args: argparse.Namespace) -> None:
         sys.exit(rc)
 
 
+def cmd_cal_laser(args: argparse.Namespace) -> None:
+    """Dispatch to lessons/laser/06_spiral_cal/spiral_cal.py."""
+    sys.path.insert(0, str(ROOT / "lessons" / "laser" / "06_spiral_cal"))
+    import spiral_cal  # noqa: E402
+
+    rc = spiral_cal.main(args.rest or None)
+    if rc:
+        sys.exit(rc)
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -609,6 +619,20 @@ def cmd_help(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Pre-dispatch: subcommands that take their own argparse (cam, cal-laser)
+    # bypass our top-level parser entirely, because argparse REMAINDER in
+    # 3.12+ doesn't pass through leading-dash args cleanly to subparsers.
+    if len(sys.argv) >= 2 and sys.argv[1] in ("cam", "cal-laser"):
+        sub_argv = sys.argv[2:]
+        if sys.argv[1] == "cam":
+            import cam_cli
+
+            sys.exit(cam_cli.main(sub_argv) or 0)
+        sys.path.insert(0, str(ROOT / "lessons" / "laser" / "06_spiral_cal"))
+        import spiral_cal  # noqa: E402
+
+        sys.exit(spiral_cal.main(sub_argv) or 0)
+
     p = argparse.ArgumentParser(prog="cnc", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="cmd", required=True)
 
@@ -756,6 +780,15 @@ def main() -> None:
     )
     cam.add_argument("rest", nargs=argparse.REMAINDER)
     cam.set_defaults(func=cmd_cam)
+
+    cal = subs.add_parser(
+        "cal-laser",
+        help="spiral laser calibration card (hex spiral of double-spiral "
+        "patches from origin); run with --help or 'interactive' for guided setup",
+        add_help=False,
+    )
+    cal.add_argument("rest", nargs=argparse.REMAINDER)
+    cal.set_defaults(func=cmd_cal_laser)
 
     args = p.parse_args()
     args.func(args)

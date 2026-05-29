@@ -17,6 +17,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 | 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | ✅ Productionized 2026-05. Single CLI (`jigsaw.py`) with `preview` / `cut` / `raster` / `mockup` subcommands; parametric geometry / encoder / emitter modules at lesson root; tests + regression locks vs scratch. |
 | 3d | [Laser-cut spoilboard with M6 hole grid](lessons/laser/04_spoilboard/) | ✅ Parametric grid + auto-tiling for stock larger than design. Default matches Anolex 4030 bed (400×500mm, 9×10 holes @ 45mm). |
 | 3e | [Laser test card (kerf / tram / dimensional)](lessons/laser/05_test_card/) | ✅ Small square-in-square cut centered on WCS origin. Quick pre-flight before any real cut — measure outer + inner with calipers to back out kerf and confirm tram. |
+| 3f | [Spiral laser calibration card](lessons/laser/06_spiral_cal/) | ✅ Hex spiral of 15mm double-spiral patches starting at WCS origin. Sweeps power, feed, or passes on a scrap material; through-cut visually confirmed by pieces falling out. Exposed as `cnc.py cal-laser`. |
 
 ## Mill
 
