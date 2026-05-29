@@ -886,7 +886,12 @@ Sweep options:
   power   — laser power S-value as percent
   feed    — cut feedrate in mm/min
   passes  — number of times each ring is re-traced
-  (Z / focus is NOT swept — manually change the spacer between runs)
+  z       — absolute WCS Z (mm); each patch emits G0 Z<value> first.
+            Use --values=-2,-1,0,1,2 (= form) since argparse rejects
+            bare leading-dash lists. CRASH RISK if Z too low.
+
+--z <mm>: set a fixed absolute Z for ALL patches (use when NOT
+sweeping Z but you want every patch to set the same focal height).
 
 Layout:
   Ring 0:        1 patch (origin)

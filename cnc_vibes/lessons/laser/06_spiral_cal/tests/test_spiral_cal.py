@@ -177,3 +177,49 @@ def test_cnc_py_predispatch_passes_through_flags(tmp_path):
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Z (focus) sweep — CNC Z axis moves carriage, changing focal distance
+# ---------------------------------------------------------------------------
+
+
+def test_z_sweep_emits_g0_z_per_patch():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(), "z", [-2.0, -1.0, 0.0, 1.0, 2.0], mode="static",
+    )
+    g0_z = [l for l in out.gcode.splitlines() if l.startswith("G0 Z")]
+    assert g0_z == ["G0 Z-2.000", "G0 Z-1.000", "G0 Z0.000", "G0 Z1.000", "G0 Z2.000"]
+
+
+def test_z_sweep_keeps_constant_power_across_patches():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(), "z", [0.0, 1.0], mode="static", power_percent=60.0,
+    )
+    s_values = {
+        l.split("S")[1] for l in out.gcode.splitlines() if l.startswith("M3 S")
+    }
+    assert s_values == {"600"}
+
+
+def test_fixed_z_applies_to_all_patches_when_not_sweeping_z():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(), "power", [30, 50], mode="static", z_mm=-78.5,
+    )
+    g0_z = [l for l in out.gcode.splitlines() if l.startswith("G0 Z")]
+    assert g0_z == ["G0 Z-78.500", "G0 Z-78.500"]
+
+
+def test_no_z_emitted_when_neither_swept_nor_fixed():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(), "power", [30, 50], mode="static",
+    )
+    assert "G0 Z" not in out.gcode
+
+
+def test_z_sweep_emits_safety_header():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(), "z", [0.0], mode="static",
+    )
+    assert "Z SWEEP" in out.gcode
+    assert "crash" in out.gcode.lower()

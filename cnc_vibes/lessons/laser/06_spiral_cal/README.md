@@ -16,13 +16,15 @@ You pick ONE variable to sweep:
 - **power** — the laser power S value (as % of $30 max)
 - **feed** — the cut feedrate (mm/min)
 - **passes** — number of times each ring is re-traced
+- **z** — the carriage Z (absolute WCS mm). The Anolex is a 3-axis CNC
+  with the laser mounted to the Z carriage, so moving Z up/down
+  changes the focal distance between laser and material — same effect
+  as swapping spacers but per-patch, automatically. **Going too low
+  CRASHES the head into stock.** Park clear before sending; pick
+  conservative values; verify in CAMotics if unsure.
 
-The other two parameters stay at the material default (or you override
-with `--power` / `--feed` / `--passes`).
-
-**Z (focus) is NOT swept** here — the diode laser has no Z control. To
-compare focus distances, swap the spacer manually between runs and re-
-cut a sweep.
+The other parameters stay at the material default (or you override
+with `--power` / `--feed` / `--passes` / `--z`).
 
 ## Layout math
 
@@ -47,6 +49,12 @@ python lessons/laser/06_spiral_cal/spiral_cal.py \
     --material plywood_baltic_birch_3mm \
     --sweep feed --values 1500,2000,2500,3000,3500 \
     --power 80 --laser-mode static --laser-warmup-ms 300
+
+# Focal-distance (Z) sweep — emits G0 Z<value> before each patch.
+# NOTE: use --values=-2,-1,0,1,2 (= form) to keep argparse from
+# interpreting the leading dash as a flag.
+python cnc.py cal-laser --material cardboard_thin_1mm \
+    --sweep z --values=-2,-1,0,1,2 --power 50 --feed 2500
 
 # Guided interactive mode (prompts walk through all the choices)
 python cnc.py cal-laser interactive
@@ -90,7 +98,6 @@ So you can identify which patch was which setting after cutting.
 
 ## What it doesn't do (yet)
 
-- No Z sweep (manual spacer change required)
 - No automatic best-pick — you eyeball results
 - No mid-sweep stop-and-adjust — the whole sweep emits as one GCode
   file. Send it, then evaluate.

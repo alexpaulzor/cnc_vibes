@@ -143,12 +143,27 @@ def _spiral_points(
 
 
 def _emit_patch(
-    cx: float, cy: float, s: int, feed: int, passes: int, mode: str, warmup_ms: int
+    cx: float,
+    cy: float,
+    s: int,
+    feed: int,
+    passes: int,
+    mode: str,
+    warmup_ms: int,
+    z_mm: float | None = None,
 ) -> list[str]:
-    """Emit GCode for a single test patch at (cx, cy)."""
+    """Emit GCode for a single test patch at (cx, cy).
+
+    z_mm: if not None, prepends a G0 Z<z_mm> rapid before any XY motion
+    in this patch — for sweeping focal distance via the CNC's Z axis.
+    """
     on = _power_code(mode)
     warmup_s = max(0, warmup_ms) / 1000.0
     r_outer = PATCH_OUTER_DIAMETER_MM / 2
+
+    prologue: list[str] = []
+    if z_mm is not None:
+        prologue.append(f"G0 Z{z_mm:.3f}")
 
     def _trace(name: str, pts: list[tuple[float, float]]) -> list[str]:
         if len(pts) < 2:
@@ -173,7 +188,7 @@ def _emit_patch(
 
     spiral_r_max = r_outer - 0.5  # leave 0.5mm gap inside the boundary
 
-    lines: list[str] = []
+    lines: list[str] = list(prologue)
     lines.extend(_trace("outer circle", _circle_points(cx, cy, r_outer)))
     lines.extend(
         _trace(
@@ -212,7 +227,7 @@ class SweepResult:
 
 
 def _coerce(values: list, sweep_var: str) -> list:
-    cast = float if sweep_var in ("power", "feed") else int
+    cast = float if sweep_var in ("power", "feed", "z") else int
     return [cast(v) for v in values]
 
 
@@ -225,10 +240,22 @@ def generate_sweep(
     power_percent: float | None = None,
     feed_mm_per_min: int | None = None,
     passes: int | None = None,
+    z_mm: float | None = None,
 ) -> SweepResult:
-    """Emit one GCode file containing N patches, one per swept value."""
-    if sweep_var not in ("power", "feed", "passes"):
-        raise SystemExit(f"--sweep must be power|feed|passes, got {sweep_var!r}")
+    """Emit one GCode file containing N patches, one per swept value.
+
+    sweep_var="z" treats `values` as absolute Z coordinates in WCS mm
+    and emits G0 Z<value> before each patch's first cut. Useful for
+    finding the focal plane via the CNC's Z axis (the carriage moves;
+    the laser spacer doesn't). Park at a known-safe Z first, then
+    pick sweep values within reachable range — going too low CRASHES
+    the laser head into the stock.
+
+    z_mm: if set (and sweep_var != "z"), all patches use this absolute
+    Z. Default None = leave Z wherever the user parked.
+    """
+    if sweep_var not in ("power", "feed", "passes", "z"):
+        raise SystemExit(f"--sweep must be power|feed|passes|z, got {sweep_var!r}")
     if not values:
         raise SystemExit("--values must list at least one value")
     values = _coerce(values, sweep_var)
@@ -247,6 +274,13 @@ def generate_sweep(
     header.append(
         f"; base: power={base['power']}%  feed={base['feed']}mm/min  passes={base['passes']}"
     )
+    if sweep_var == "z":
+        header.append(
+            "; Z SWEEP: values are absolute WCS Z (mm). "
+            "Park clear of stock before sending; crash risk if Z too low."
+        )
+    elif z_mm is not None:
+        header.append(f"; All patches set Z={z_mm:.3f}mm before cutting.")
     header.append(
         f"; {len(values)} patch(es), {PATCH_OUTER_DIAMETER_MM}mm OD, "
         f"{PATCH_GAP_MM}mm gap, hex-spiral from origin"
@@ -265,7 +299,11 @@ def generate_sweep(
     body: list[str] = []
     for i, ((cx, cy), val) in enumerate(zip(centers, values), start=1):
         params = dict(base)
-        params[sweep_var] = val
+        patch_z = z_mm
+        if sweep_var == "z":
+            patch_z = float(val)
+        else:
+            params[sweep_var] = val
         s = _power_s(params["power"])
         body.append(
             f"; ===== patch {i}/{len(values)}: {sweep_var}={val} at ({cx:+.2f}, {cy:+.2f}) ====="
@@ -279,6 +317,7 @@ def generate_sweep(
                 passes=max(1, int(params["passes"])),
                 mode=mode,
                 warmup_ms=warmup_ms,
+                z_mm=patch_z,
             )
         )
 
@@ -326,16 +365,22 @@ def interactive() -> argparse.Namespace:
     args.material = _ask(
         "Material id (from profiles/laser_materials.yaml)", "cardboard_thin_1mm"
     )
-    args.sweep = _ask("Sweep what? (power|feed|passes)", "power")
-    if args.sweep not in ("power", "feed", "passes"):
+    args.sweep = _ask("Sweep what? (power|feed|passes|z)", "power")
+    if args.sweep not in ("power", "feed", "passes", "z"):
         sys.exit(f"invalid sweep {args.sweep!r}")
 
-    units = {"power": "%", "feed": "mm/min", "passes": "passes"}[args.sweep]
+    units = {"power": "%", "feed": "mm/min", "passes": "passes", "z": "mm (WCS Z)"}[
+        args.sweep
+    ]
     print(f"Enter the {args.sweep} values to test in {units}, comma-separated.")
     if args.sweep == "power":
         ex = "30,40,50,60,70"
     elif args.sweep == "feed":
         ex = "1500,2000,2500,3000,3500"
+    elif args.sweep == "z":
+        ex = "-2,-1,0,1,2"
+        print("  NOTE: values are ABSOLUTE WCS Z (mm). Park at a safe Z first.")
+        print("  Going too low will crash the laser head into the stock.")
     else:
         ex = "1,2,3,4"
     args.values = _ask(f"Values (e.g. {ex})")
@@ -344,6 +389,15 @@ def interactive() -> argparse.Namespace:
     args.power = None if args.sweep == "power" else _ask_float("Power %", 50.0)
     args.feed = None if args.sweep == "feed" else _ask_int("Feed mm/min", 2500)
     args.passes = None if args.sweep == "passes" else _ask_int("Passes", 1)
+    args.z = (
+        None
+        if args.sweep == "z"
+        else _ask("Z mm (absolute WCS; blank = leave Z where parked)", "")
+    )
+    if args.z == "":
+        args.z = None
+    elif args.z is not None:
+        args.z = float(args.z)
 
     args.laser_mode = _ask("Laser mode (dynamic|static)", "static")
     args.laser_warmup_ms = _ask_int(
@@ -369,18 +423,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--material", help="id from profiles/laser_materials.yaml")
     p.add_argument(
         "--sweep",
-        choices=("power", "feed", "passes"),
+        choices=("power", "feed", "passes", "z"),
         help="which variable to vary across patches",
     )
     p.add_argument(
         "--values",
-        help='comma-separated values for the swept variable (e.g. "30,40,50,60,70")',
+        help="comma-separated values for the swept variable. For --sweep z "
+        "these are ABSOLUTE WCS Z (mm); going too low crashes the head.",
     )
     p.add_argument(
         "--power", type=float, help="override power_percent (non-swept axis)"
     )
     p.add_argument("--feed", type=int, help="override feed_mm_per_min (non-swept axis)")
     p.add_argument("--passes", type=int, help="override passes (non-swept axis)")
+    p.add_argument(
+        "--z",
+        type=float,
+        default=None,
+        help="absolute WCS Z (mm) for all patches when NOT sweeping z. "
+        "Default: leave Z wherever the user parked. Ignored if --sweep z.",
+    )
     p.add_argument(
         "--laser-mode",
         choices=("dynamic", "static"),
@@ -441,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
         power_percent=args.power,
         feed_mm_per_min=args.feed,
         passes=args.passes,
+        z_mm=getattr(args, "z", None),
     )
 
     out = args.out or _default_out_path(args)
