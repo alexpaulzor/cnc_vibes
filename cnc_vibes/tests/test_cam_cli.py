@@ -298,6 +298,20 @@ LASER = ["--head", "laser", "--material", "cardboard_thin_1mm"]
         ["profile", *LASER, "--shape", "circle", "--diameter", "20"],
         ["slot", *LASER, "--p1", "0,0", "--p2", "20,0", "--width", "4"],
         ["engrave", *LASER, "--text", "TEST", "--height", "5"],
+        ["text-profile", *LASER, "--text", "OK", "--height", "15"],
+        # Spindle text-profile (cut letters out of plywood)
+        [
+            "text-profile",
+            *SPINDLE,
+            "--text",
+            "OK",
+            "--height",
+            "20",
+            "--depth",
+            "3",
+            "--side",
+            "outside",
+        ],
     ],
 )
 def test_emits_validator_clean(args, tmp_path):

@@ -51,6 +51,7 @@ A code-first CAM library that produces validator-clean GCode for the common 2.5D
 - ✅ `pocket_mill` — offset-spiral clearance of a polygon interior (multi-pass Z, configurable stepover)
 - ✅ `drill_array` — peck or single-plunge drill cycle at each (x, y)
 - ✅ `engrave_text` — constant-depth outline trace of glyph contours (PIL+cv2 rasterize → findContours → per-contour G-code). NOT V-carve; variable-depth medial-axis variant still on the roadmap.
+- ✅ `text_profile` (spindle) + `laser_cam.text_profile` — cut each glyph's silhouette OUT of stock, with interior counters (O, A, P, etc.) preserved as holes. Reuses `text_to_polygons` (cv2 RETR_CCOMP hierarchy → shapely Polygon with holes) for both heads.
 - ✅ `chamfer_edge` — V-bit single-pass chamfer along a polygon's outer perimeter; computes chamfer width from tool angle + depth and warns when it would cross into an adjacent interior hole's wall
 - ✅ `profile_cut_with_tabs` — `profile_cut` variant that leaves N small bridges holding the part to stock on the final pass; tab boundary arclens are interpolated into the toolpath even on straight runs so Z lifts emit at the right XY
 - ✅ `slot_mill` — stadium-shape pocket (rectangle with semicircular ends) from p1 → p2 at the given width; dispatches to `pocket_mill` for the actual clearance

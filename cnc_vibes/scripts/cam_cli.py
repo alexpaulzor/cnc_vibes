@@ -247,7 +247,16 @@ def _emit_spindle(args: argparse.Namespace) -> str:
         cfg.safe_z_mm = args.safe_z
 
     op = args.op
-    if op in ("profile", "pocket", "drill", "chamfer", "profile-tabs", "slot", "face"):
+    if op in (
+        "profile",
+        "pocket",
+        "drill",
+        "chamfer",
+        "profile-tabs",
+        "slot",
+        "face",
+        "text-profile",
+    ):
         if getattr(args, "depth", None) is None:
             raise SystemExit(f"--depth is required for {op} (spindle)")
     if op == "profile":
@@ -286,6 +295,18 @@ def _emit_spindle(args: argparse.Namespace) -> str:
             tool=tool,
             material=material,
             font_path=args.font,
+            cfg=cfg,
+        )
+    elif op == "text-profile":
+        out = cam.text_profile(
+            args.text,
+            (args.x, args.y),
+            args.height,
+            args.depth,
+            tool=tool,
+            material=material,
+            font_path=args.font,
+            side=args.side,
             cfg=cfg,
         )
     elif op == "chamfer":
@@ -380,6 +401,19 @@ def _emit_laser(args: argparse.Namespace) -> str:
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
+    if op == "text-profile":
+        material = laser_cam.load_laser_material(args.material)
+        out = laser_cam.text_profile(
+            args.text,
+            (args.x, args.y),
+            args.height,
+            material,
+            font_path=args.font,
+            mode=mode,
+            simplify_tolerance_mm=simplify,
+            cfg=cam.CamConfig(strict=args.strict),
+        )
+        return out.text
     raise SystemExit(f"unknown op {op!r} for --head laser")
 
 
@@ -395,6 +429,8 @@ def _default_out_path(args: argparse.Namespace) -> Path:
         tag = getattr(args, "pattern", "drill")
     elif op == "engrave":
         tag = "engrave"
+    elif op == "text-profile":
+        tag = "textprofile"
     elif op == "slot":
         tag = "slot"
     else:
@@ -493,6 +529,27 @@ def build_parser() -> argparse.ArgumentParser:
     en.add_argument("--height", type=float, required=True, help="cap height (mm)")
     en.add_argument("--depth", type=float, default=0.3, help="(spindle only)")
     en.add_argument("--font", help="path to .ttf/.otf (default: system font)")
+
+    tp = subs.add_parser(
+        "text-profile",
+        help="cut each glyph's silhouette out of stock (counters of O/A "
+        "preserved as holes)",
+    )
+    _add_common(tp)
+    _add_spindle_common(tp)
+    tp.add_argument("--text", required=True)
+    tp.add_argument("--x", type=float, default=0.0)
+    tp.add_argument("--y", type=float, default=0.0)
+    tp.add_argument("--height", type=float, required=True, help="cap height (mm)")
+    tp.add_argument("--depth", type=float, help="(spindle only) cut depth")
+    tp.add_argument("--font", help="path to .ttf/.otf (default: system font)")
+    tp.add_argument(
+        "--side",
+        default="outside",
+        choices=("outside", "inside", "on"),
+        help="spindle only — outside (default) cuts the letter OUT of stock; "
+        "inside cuts a letter-shaped hole; on is centerline.",
+    )
 
     ch = subs.add_parser("chamfer", help="V-bit chamfer around perimeter")
     _add_common(ch)
@@ -616,12 +673,13 @@ _OPS_FOR_HEAD = {
         "pocket",
         "drill",
         "engrave",
+        "text-profile",
         "chamfer",
         "profile-tabs",
         "slot",
         "face",
     ],
-    "laser": ["profile", "engrave", "slot"],
+    "laser": ["profile", "engrave", "text-profile", "slot"],
 }
 
 
@@ -729,6 +787,21 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
         args.height = _ask_float("height mm", 6.0)
         if args.head == "spindle":
             args.depth = _ask_float("depth mm", 0.3)
+    elif args.op == "text-profile":
+        args.text = _ask("text to cut out")
+        args.x = _ask_float("x mm", 0.0)
+        args.y = _ask_float("y mm", 0.0)
+        args.height = _ask_float("cap height mm", 25.0)
+        args.depth = _ask_float("depth mm (full thickness for cut-through)")
+        if args.head == "spindle":
+            args.side = _pick(
+                "Side (spindle)",
+                [
+                    ("outside", "outside — cut the letter OUT (default)"),
+                    ("inside", "inside — cut a letter-shaped HOLE"),
+                    ("on", "on — centerline (laser-like)"),
+                ],
+            )
     elif args.op == "slot":
         args.p1 = _ask('p1 "x,y"', "0,0")
         args.p2 = _ask('p2 "x,y"', "20,0")

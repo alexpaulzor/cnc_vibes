@@ -793,8 +793,8 @@ Usage:
 
 Ops (matrix):
 
-  spindle: profile  pocket  drill  engrave  chamfer  profile-tabs  slot  face
-  laser:   profile  engrave  slot               (others refuse with a hint)
+  spindle: profile  pocket  drill  engrave  text-profile  chamfer  profile-tabs  slot  face
+  laser:   profile  engrave  text-profile  slot       (others refuse with a hint)
 
 Shape primitives (for profile, pocket, chamfer, profile-tabs, face):
   --shape rect    --width W --height H
@@ -832,6 +832,8 @@ Op-specific:
   pocket         --depth --stepover (default 0.5)
   drill          --depth --peck (optional, mm)
   engrave        --text "..." --x --y --height [--depth] [--font path]
+  text-profile   --text "..." --x --y --height --depth [--side outside|inside|on]
+                 (cuts letter silhouettes OUT of stock; counters preserved as holes)
   chamfer        --depth (V-bit recommended)
   profile-tabs   --depth --tab-count --tab-width --tab-height --side
   slot           --p1 "x,y" --p2 "x,y" --width [--depth]

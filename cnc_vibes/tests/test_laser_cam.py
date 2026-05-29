@@ -140,3 +140,40 @@ def test_profile_simplification_drops_circle_vertices():
     g1_default = sum(1 for l in default if l.startswith("G1 "))
     g1_raw = sum(1 for l in raw if l.startswith("G1 "))
     assert g1_default < g1_raw
+
+
+# ---------------------------------------------------------------------------
+# text_profile (cut glyph silhouettes out of stock)
+# ---------------------------------------------------------------------------
+
+
+def test_text_profile_emits_ring_per_glyph_and_counter():
+    """'OAK' = O (outer+counter) + A (outer+counter) + K (outer only) = 5 rings."""
+    out = laser_cam.text_profile("OAK", (0, 0), 25, _mat())
+    rings = sum(1 for l in out.lines if l.startswith("; --- ring "))
+    assert rings == 5, f"expected 5 rings for OAK, got {rings}\n{out.text}"
+
+
+def test_text_profile_static_mode_header_and_m3():
+    out = laser_cam.text_profile("OK", (0, 0), 20, _mat(), mode="static")
+    text = out.text
+    assert ";LASER_MODE: static" in text
+    assert "M3 S500" in text
+    assert "M4" not in text
+
+
+def test_text_profile_empty_text_warns():
+    out = laser_cam.text_profile("", (0, 0), 20, _mat())
+    assert out.lines == []
+    assert out.warnings
+
+
+def test_text_profile_position_offsets_coords():
+    out = laser_cam.text_profile("I", (50, 50), 20, _mat())
+    text = out.text
+    # All G1 cuts should be in the +X +Y quadrant near (50,50)
+    g1_lines = [l for l in out.lines if l.startswith("G1 X")]
+    for line in g1_lines:
+        # parse "G1 X.. Y.."
+        x = float(line.split("X")[1].split()[0])
+        assert x > 30, f"text_profile didn't translate by position: {line}"

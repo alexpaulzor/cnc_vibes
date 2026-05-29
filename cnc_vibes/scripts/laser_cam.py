@@ -310,3 +310,98 @@ def laser_engrave(
 
     lines.extend(_laser_footer())
     return GcodeOutput(lines=lines, warnings=warnings)
+
+
+def text_profile(
+    text: str,
+    position: tuple[float, float],
+    height_mm: float,
+    material: LaserMaterial,
+    font_path: str | None = None,
+    mode: LaserMode = "dynamic",
+    simplify_tolerance_mm: float = 0.05,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Cut each glyph's silhouette out of stock.
+
+    Builds glyph polygons (with counters as holes via cam.text_to_polygons),
+    translates them to `position`, unions into a MultiPolygon, and hands
+    off to laser_profile — which already walks every exterior + interior
+    ring, so 'O' and 'A' get their counters cut as well.
+
+    Laser kerf width = the beam itself, so the toolpath is centerline
+    (no offset). Pre-shrink/grow the text height if you need kerf-
+    accurate finished dimensions.
+    """
+    cfg = cfg or CamConfig()
+    warnings: list[str] = []
+
+    if not text:
+        _warn_or_fail("text_profile: empty text; no output", cfg, warnings)
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    if font_path is not None and not Path(font_path).exists():
+        _warn_or_fail(
+            f"font_path {font_path!r} not found; using platform default",
+            cfg,
+            warnings,
+        )
+        font_path = None
+    if font_path is None:
+        font_path = _find_default_font_path()
+        if font_path is None:
+            _warn_or_fail(
+                "no system font found; pass font_path=... to a .ttf/.ttc/.otf",
+                cfg,
+                warnings,
+            )
+            return GcodeOutput(lines=[], warnings=warnings)
+
+    # Import lazily so scripts/cam.py's text_to_polygons stays the single
+    # source of truth for glyph polygonization (no duplicated cv2 code).
+    from shapely.affinity import translate as _translate
+    from shapely.geometry import MultiPolygon
+
+    from cam import text_to_polygons
+
+    glyphs = text_to_polygons(
+        text,
+        font_path,
+        height_mm,
+        _ENGRAVE_PX_PER_MM,
+        simplify_tolerance_mm=simplify_tolerance_mm,
+    )
+    if not glyphs:
+        _warn_or_fail(
+            f"text_profile: text={text!r} at height={height_mm}mm produced no glyph polygons",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    x0, y0 = position
+    moved = [_translate(g, xoff=x0, yoff=y0) for g in glyphs]
+    geom = moved[0] if len(moved) == 1 else MultiPolygon(moved)
+
+    # Hand off to laser_profile (which already handles MultiPolygon +
+    # holes); we've already simplified, so skip the second pass.
+    out = laser_profile(
+        geom,
+        material,
+        mode=mode,
+        simplify_tolerance_mm=0,
+        cfg=cfg,
+    )
+    # Tweak the header comment so the file is self-describing.
+    if out.lines and out.lines[0].startswith("; laser_profile"):
+        out.lines[0] = (
+            f"; text_profile (laser, {mode}) — cuts each glyph silhouette out of stock"
+        )
+        # Insert text metadata after the existing material line so it stays
+        # near the other header comments.
+        out.lines.insert(
+            3,
+            f"; text={text!r}  height={height_mm}mm  font={Path(font_path).name}",
+        )
+    out.warnings.extend(warnings)
+    return out

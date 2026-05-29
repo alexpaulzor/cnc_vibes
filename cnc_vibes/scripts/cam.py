@@ -1030,6 +1030,248 @@ def engrave_text(
 
 
 # ---------------------------------------------------------------------------
+# Operation: text_profile (cut glyph silhouettes out of stock)
+# ---------------------------------------------------------------------------
+
+
+def text_to_polygons(
+    text: str,
+    font_path: str,
+    height_mm: float,
+    px_per_mm: int = _ENGRAVE_PX_PER_MM,
+    simplify_tolerance_mm: float = 0.05,
+) -> list[Polygon]:
+    """Rasterize text and return one shapely Polygon per glyph, with
+    interior counters (the inside of O, A, P, etc.) preserved as holes.
+
+    Unlike _text_to_contours which returns a flat list of closed
+    polylines, this groups each outer ring with its child holes using
+    cv2.findContours RETR_CCOMP hierarchy (level 0 = outer rings; level
+    1 = immediate children = holes). The result feeds straight into
+    laser_profile or per-ring profile_cut for cutting glyph silhouettes
+    out of stock.
+
+    Returns polygons in mm with Y-up, anchored at the text's baseline-
+    left (consistent with _text_to_contours).
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    target_cap_px = max(8, int(round(height_mm * px_per_mm)))
+    sample = next((c for c in text if c.isupper() and c.isascii()), None) or "H"
+    font = _load_font_at_cap_height(font_path, sample, target_cap_px)
+
+    tmp = Image.new("L", (1, 1), 0)
+    bbox = ImageDraw.Draw(tmp).textbbox((0, 0), text, font=font)
+    pad = 4
+    canvas_w = bbox[2] - bbox[0] + 2 * pad
+    canvas_h = bbox[3] - bbox[1] + 2 * pad
+
+    mask = Image.new("L", (canvas_w, canvas_h), 0)
+    ImageDraw.Draw(mask).text((pad - bbox[0], pad - bbox[1]), text, fill=255, font=font)
+
+    ascent, _ = font.getmetrics()
+    baseline_y_mask = (pad - bbox[1]) + ascent
+
+    arr = np.array(mask)
+    if arr.max() == 0:
+        return []
+
+    contours, hierarchy = cv2.findContours(arr, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+    if not contours or hierarchy is None:
+        return []
+
+    tol_px = max(0.0, simplify_tolerance_mm * px_per_mm)
+
+    def _to_mm(contour) -> list[tuple[float, float]]:
+        if tol_px > 0:
+            contour = cv2.approxPolyDP(contour, tol_px, True)
+        pts = []
+        for p in contour:
+            x_mm = (float(p[0][0]) - pad) / px_per_mm
+            y_mm = (baseline_y_mask - float(p[0][1])) / px_per_mm
+            pts.append((x_mm, y_mm))
+        return pts
+
+    # RETR_CCOMP hierarchy: hierarchy[0][i] = [next, prev, first_child, parent]
+    # Outer rings have parent = -1; holes have parent >= 0.
+    h = hierarchy[0]
+    polygons: list[Polygon] = []
+    for i, contour in enumerate(contours):
+        if h[i][3] != -1:
+            continue  # this is a hole; will be picked up by its parent
+        if len(contour) < 3:
+            continue
+        outer = _to_mm(contour)
+        if len(outer) < 3:
+            continue
+        holes: list[list[tuple[float, float]]] = []
+        # Walk children: first_child + sibling chain via [0] = next
+        child = h[i][2]
+        while child != -1:
+            child_contour = contours[child]
+            if len(child_contour) >= 3:
+                hole_pts = _to_mm(child_contour)
+                if len(hole_pts) >= 3:
+                    holes.append(hole_pts)
+            child = h[child][0]
+        try:
+            poly = Polygon(outer, holes=holes)
+            if poly.is_valid and not poly.is_empty:
+                polygons.append(poly)
+        except Exception:
+            # If shapely rejects the glyph (rare; usually a self-intersecting
+            # contour from extreme tolerance), skip it.
+            continue
+    return polygons
+
+
+def text_profile(
+    text: str,
+    position: tuple[float, float],
+    height_mm: float,
+    depth_mm: float,
+    tool: Tool | None = None,
+    material: Material | None = None,
+    font_path: str | None = None,
+    side: Side = "outside",
+    simplify_tolerance_mm: float = 0.05,
+    cfg: CamConfig | None = None,
+) -> GcodeOutput:
+    """Cut each glyph's silhouette out of stock at the requested depth.
+
+    side="outside" (default): tool offsets OUTSIDE the outer ring and
+    INSIDE each counter, so the glyph piece falls out of the stock as a
+    clean letter shape. Use this to make hanging letters.
+
+    side="inside": cuts holes in the shape of glyphs (toolpath OFFSETS
+    inward on the outer ring, outward on the counter). Useful for inlay
+    pockets where you want a letter-shaped recess in a surface.
+
+    side="on": centerline trace — only useful when the kerf is small
+    relative to glyph stroke width.
+
+    Internally: build glyph polygons (with counters as holes), then for
+    each glyph call profile_cut on the outer ring + each interior ring
+    with the side flipped appropriately. One header per emit; sub-calls
+    are stitched together with their per-ring path-section comments
+    intact.
+    """
+    cfg = cfg or CamConfig()
+    warnings: list[str] = []
+
+    if not text:
+        _warn_or_fail("text_profile: empty text; no output", cfg, warnings)
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    if font_path is not None and not Path(font_path).exists():
+        _warn_or_fail(
+            f"font_path {font_path!r} not found; using platform default",
+            cfg,
+            warnings,
+        )
+        font_path = None
+    if font_path is None:
+        font_path = _find_default_font_path()
+        if font_path is None:
+            _warn_or_fail(
+                "no system font found; pass font_path=... to a .ttf/.ttc/.otf",
+                cfg,
+                warnings,
+            )
+            return GcodeOutput(lines=[], warnings=warnings)
+
+    glyphs = text_to_polygons(
+        text,
+        font_path,
+        height_mm,
+        simplify_tolerance_mm=simplify_tolerance_mm,
+    )
+    if not glyphs:
+        _warn_or_fail(
+            f"text_profile: text={text!r} at height={height_mm}mm produced no glyph polygons",
+            cfg,
+            warnings,
+        )
+        return GcodeOutput(lines=[], warnings=warnings)
+
+    from shapely.affinity import translate as _translate
+
+    x0, y0 = position
+    glyphs = [_translate(g, xoff=x0, yoff=y0) for g in glyphs]
+
+    is_default_tool = tool is None
+    tool = tool or load_tool(DEFAULT_TOOL_ID)
+    material = material or load_material(DEFAULT_MATERIAL_ID)
+    _check_tool_for_op(
+        tool, material, "profile_cut", depth_mm, is_default_tool, cfg, warnings
+    )
+
+    opposite: Side = (
+        "inside" if side == "outside" else ("outside" if side == "inside" else "on")
+    )
+
+    # One header for the whole job; per-ring profile_cut calls have their
+    # own headers which we strip (keep their motion + section comments).
+    header = _spindle_header("text_profile", tool, material, cfg, depth_mm)
+    header.append(f"; text={text!r}  height={height_mm}mm  font={Path(font_path).name}")
+    header.append(
+        f"; {len(glyphs)} glyph polygon(s), side={side}, font_path={font_path}"
+    )
+    header.append("")
+
+    body: list[str] = []
+    for gi, glyph in enumerate(glyphs, start=1):
+        body.append(f"; ===== glyph {gi}/{len(glyphs)} =====")
+        outer_poly = Polygon(glyph.exterior)
+        out = profile_cut(
+            outer_poly, depth_mm, tool=tool, material=material, side=side, cfg=cfg
+        )
+        body.extend(_strip_spindle_wrappers(out.lines))
+        warnings.extend(out.warnings)
+        for hi, interior in enumerate(glyph.interiors, start=1):
+            body.append(f"; --- glyph {gi} counter {hi}/{len(glyph.interiors)} ---")
+            inner_poly = Polygon(interior)
+            out = profile_cut(
+                inner_poly,
+                depth_mm,
+                tool=tool,
+                material=material,
+                side=opposite,
+                cfg=cfg,
+            )
+            body.extend(_strip_spindle_wrappers(out.lines))
+            warnings.extend(out.warnings)
+
+    return GcodeOutput(
+        lines=header + body + _spindle_footer(cfg),
+        warnings=warnings,
+    )
+
+
+def _strip_spindle_wrappers(lines: list[str]) -> list[str]:
+    """Drop the per-op _spindle_header/footer wrapper from a sub-call's
+    output, keeping only the motion + section comments. We rely on a
+    blank line separating the header block from the toolpath, and on
+    _spindle_footer being a small known suffix."""
+    # Find first blank line — header ends right before the motion starts.
+    try:
+        start = lines.index("", 0) + 1
+    except ValueError:
+        start = 0
+    # Trim the footer: _spindle_footer emits "M5", "G0 Z<safe>", "M30"
+    # (or similar). Conservatively drop anything from the LAST M5 onward
+    # if it's near the end of the output.
+    end = len(lines)
+    for i in range(len(lines) - 1, max(start, len(lines) - 5), -1):
+        if lines[i].startswith("M5"):
+            end = i
+            break
+    return lines[start:end]
+
+
+# ---------------------------------------------------------------------------
 # Operation: chamfer_edge (V-bit perimeter chamfer)
 # ---------------------------------------------------------------------------
 
