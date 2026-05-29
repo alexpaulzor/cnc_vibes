@@ -826,6 +826,10 @@ Common flags:
   --simplify-mm 0.05       laser only: Douglas-Peucker tolerance for shape /
                            glyph simplification (0 disables). Default 0.05mm
                            drops sub-pixel vertices so M4 doesn't starve.
+  --laser-warmup-ms 0      laser only: G4 P<sec> dwell inserted after each
+                           M3/M4 and before first G1 cut. Try 200-300ms if
+                           cut starts fade in from cold laser. Costs a small
+                           burn dot at each ring's start point.
 
 Op-specific:
   profile        --depth (spindle) --side outside|inside|on

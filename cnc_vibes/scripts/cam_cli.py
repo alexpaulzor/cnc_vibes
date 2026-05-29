@@ -361,6 +361,7 @@ def _emit_laser(args: argparse.Namespace) -> str:
     simplify = getattr(args, "simplify_mm", None)
     if simplify is None:
         simplify = 0.05
+    warmup_ms = int(getattr(args, "laser_warmup_ms", 0) or 0)
     if op == "slot":
         # Build the stadium polygon ourselves and laser_profile it.
         from shapely.geometry import LineString
@@ -375,6 +376,7 @@ def _emit_laser(args: argparse.Namespace) -> str:
             material,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -385,6 +387,7 @@ def _emit_laser(args: argparse.Namespace) -> str:
             material,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -398,6 +401,7 @@ def _emit_laser(args: argparse.Namespace) -> str:
             font_path=args.font,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -411,6 +415,7 @@ def _emit_laser(args: argparse.Namespace) -> str:
             font_path=args.font,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -484,6 +489,15 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="laser ops only: Douglas-Peucker tolerance for shape/glyph "
         "simplification (default 0.05mm; 0 disables). Drop sub-pixel "
         "vertices so M4 dynamic-power doesn't starve on micro-segments.",
+    )
+    p.add_argument(
+        "--laser-warmup-ms",
+        type=int,
+        default=0,
+        help="laser ops only: dwell (G4 P<sec>) inserted after each "
+        "M3/M4 and before the first G1 cut. Try 200-300ms if cut starts "
+        "fade in from cold-start. Costs a small burn dot at each ring's "
+        "start point. Default 0 (disabled).",
     )
 
 
@@ -745,6 +759,7 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
     args.out = None
     args.laser_mode = "dynamic"
     args.simplify_mm = None
+    args.laser_warmup_ms = 0
 
     if args.head == "laser":
         args.laser_mode = _pick(
@@ -757,6 +772,14 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
                 ),
             ],
         )
+        warmup = _ask(
+            "warmup dwell per contour (ms; 0 = none, try 200-300 if cuts fade-in)",
+            "0",
+        )
+        try:
+            args.laser_warmup_ms = int(warmup)
+        except ValueError:
+            args.laser_warmup_ms = 0
 
     if args.op == "drill":
         args.pattern = _pick(
@@ -874,6 +897,7 @@ def _argv_for(args: argparse.Namespace) -> list[str]:
         "p2",
         "laser_mode",
         "simplify_mm",
+        "laser_warmup_ms",
     ):
         v = getattr(args, k, None)
         if v is None or v is False:

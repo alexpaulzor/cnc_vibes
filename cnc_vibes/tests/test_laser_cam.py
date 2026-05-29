@@ -177,3 +177,38 @@ def test_text_profile_position_offsets_coords():
         # parse "G1 X.. Y.."
         x = float(line.split("X")[1].split()[0])
         assert x > 30, f"text_profile didn't translate by position: {line}"
+
+
+# ---------------------------------------------------------------------------
+# Warmup dwell (laser fade-in mitigation)
+# ---------------------------------------------------------------------------
+
+
+def test_warmup_emits_g4_per_ring_in_laser_profile():
+    out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat(), warmup_ms=300)
+    g4_lines = [l for l in out.lines if l.startswith("G4 P0.300")]
+    assert len(g4_lines) == 1
+
+
+def test_warmup_emits_g4_per_contour_in_laser_engrave():
+    out = laser_cam.laser_engrave("OK", (0, 0), 8, _mat(), warmup_ms=200)
+    g4_lines = [l for l in out.lines if l.startswith("G4 P0.200")]
+    # 'O' has 2 contours, 'K' has 1 -> 3 G4 dwells
+    assert len(g4_lines) == 3
+
+
+def test_warmup_threads_through_text_profile():
+    out = laser_cam.text_profile("OAK", (0, 0), 25, _mat(), warmup_ms=150)
+    g4_lines = [l for l in out.lines if l.startswith("G4 P0.150")]
+    # OAK = 5 rings (O:2, A:2, K:1) -> 5 warmup dwells
+    assert len(g4_lines) == 5
+
+
+def test_warmup_zero_emits_no_dwell():
+    out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat())
+    assert "G4 " not in out.text
+
+
+def test_warmup_negative_treated_as_zero():
+    out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat(), warmup_ms=-100)
+    assert "G4 " not in out.text

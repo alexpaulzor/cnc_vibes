@@ -151,6 +151,7 @@ def laser_profile(
     material: LaserMaterial,
     mode: LaserMode = "dynamic",
     simplify_tolerance_mm: float = 0.05,
+    warmup_ms: int = 0,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Centerline cut around every ring of a polygon (exterior + holes).
@@ -170,6 +171,13 @@ def laser_profile(
     collinear vertices. Default 0.05mm keeps geometry visually identical
     but makes M4 dynamic mode practical even on circles/arcs that would
     otherwise emit hundreds of micro-segments.
+
+    warmup_ms > 0 inserts a G4 P<sec> dwell after each ring's M3/M4 and
+    before its first G1 cut. Diode lasers have ~100-500ms thermal lag
+    from cold to steady output, so the first part of every cut fades in
+    if the laser was just turned on. Cost: a small burn dot at each
+    ring's start point (typically at a glyph corner where it's hidden).
+    Try 200-300ms if you see fade-in on letter starts.
     """
     cfg = cfg or CamConfig()
     warnings: list[str] = []
@@ -186,11 +194,16 @@ def laser_profile(
     feed = material.feed_mm_per_min
     passes = max(1, material.passes)
     on = _power_code(mode)
+    warmup_s = max(0, warmup_ms) / 1000.0
 
     lines = _laser_header("laser_profile", material, mode)
     lines.append(
         f"; {len(rings)} ring(s), {passes} pass(es) per ring at S{s} F{feed} ({on})"
     )
+    if warmup_ms > 0:
+        lines.append(
+            f"; warmup dwell {warmup_ms}ms (G4 P{warmup_s:.3f}) per ring start"
+        )
     lines.append("")
 
     for ri, ring in enumerate(rings, start=1):
@@ -202,6 +215,8 @@ def laser_profile(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
+        if warmup_ms > 0:
+            lines.append(f"G4 P{warmup_s:.3f}  ; warmup")
         for p in range(passes):
             if passes > 1:
                 lines.append(f"; pass {p + 1}/{passes}")
@@ -222,6 +237,7 @@ def laser_engrave(
     font_path: str | None = None,
     mode: LaserMode = "dynamic",
     simplify_tolerance_mm: float = 0.05,
+    warmup_ms: int = 0,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Outline-trace a text label at constant power.
@@ -230,10 +246,11 @@ def laser_engrave(
     spindle engrave_text op. Each closed contour becomes one M3/M4 ... M5
     cycle. material.passes is respected.
 
-    See laser_profile for mode + simplify_tolerance_mm semantics. The
-    defaults (mode="dynamic", simplify=0.05mm) keep M4 working on glyph
-    contours that would otherwise have ~1000 over-sampled points per
-    letter — at 0.05mm tolerance, ~50 points per letter is plenty.
+    See laser_profile for mode, simplify_tolerance_mm, and warmup_ms
+    semantics. The defaults (mode="dynamic", simplify=0.05mm) keep M4
+    working on glyph contours that would otherwise have ~1000 over-
+    sampled points per letter — at 0.05mm tolerance, ~50 points per
+    letter is plenty.
     """
     cfg = cfg or CamConfig()
     warnings: list[str] = []
@@ -282,6 +299,7 @@ def laser_engrave(
     feed = material.feed_mm_per_min
     passes = max(1, material.passes)
     on = _power_code(mode)
+    warmup_s = max(0, warmup_ms) / 1000.0
     x_origin, y_origin = position
 
     lines = _laser_header("laser_engrave", material, mode)
@@ -289,6 +307,10 @@ def laser_engrave(
     lines.append(
         f"; {len(contours)} closed contour(s), {passes} pass(es), S{s} F{feed} ({on})"
     )
+    if warmup_ms > 0:
+        lines.append(
+            f"; warmup dwell {warmup_ms}ms (G4 P{warmup_s:.3f}) per contour start"
+        )
     lines.append("")
 
     for ci, contour in enumerate(contours, start=1):
@@ -300,6 +322,8 @@ def laser_engrave(
         lines.append(f"G0 X{x_origin + x0:.3f} Y{y_origin + y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
+        if warmup_ms > 0:
+            lines.append(f"G4 P{warmup_s:.3f}  ; warmup")
         for p in range(passes):
             if passes > 1:
                 lines.append(f"; pass {p + 1}/{passes}")
@@ -320,6 +344,7 @@ def text_profile(
     font_path: str | None = None,
     mode: LaserMode = "dynamic",
     simplify_tolerance_mm: float = 0.05,
+    warmup_ms: int = 0,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Cut each glyph's silhouette out of stock.
@@ -390,6 +415,7 @@ def text_profile(
         material,
         mode=mode,
         simplify_tolerance_mm=0,
+        warmup_ms=warmup_ms,
         cfg=cfg,
     )
     # Tweak the header comment so the file is self-describing.
