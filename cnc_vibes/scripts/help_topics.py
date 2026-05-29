@@ -819,6 +819,13 @@ Common flags:
   --out path.gcode         default: build/cam_cli/<head>_<op>_<shape>_<ts>.gcode
   --strict                 op-tool warnings become fatal
   --no-validate            skip auto-validation after emit
+  --laser-mode dynamic|static     laser only: M4 (default) or M3 (constant).
+                                  static emits ;LASER_MODE: static so the
+                                  validator accepts M3. Use when M4 starves
+                                  on very short segments.
+  --simplify-mm 0.05       laser only: Douglas-Peucker tolerance for shape /
+                           glyph simplification (0 disables). Default 0.05mm
+                           drops sub-pixel vertices so M4 doesn't starve.
 
 Op-specific:
   profile        --depth (spindle) --side outside|inside|on
@@ -1071,6 +1078,7 @@ CATEGORIES: dict[str, list[str]] = {
         "lesson-spoilboard",
         "lesson-mounting-plate",
         "cam-library",
+        "cam-cli",
         "openscad-loader",
     ],
 }

@@ -734,7 +734,11 @@ def _load_font_at_cap_height(font_path: str, sample_char: str, target_cap_px: in
 
 
 def _text_to_contours(
-    text: str, font_path: str, height_mm: float, px_per_mm: int
+    text: str,
+    font_path: str,
+    height_mm: float,
+    px_per_mm: int,
+    simplify_tolerance_mm: float = 0.05,
 ) -> list[list[tuple[float, float]]]:
     """Rasterize text to a high-resolution mask, then extract outer + inner
     glyph contours with cv2.findContours(RETR_CCOMP).
@@ -743,6 +747,13 @@ def _text_to_contours(
     (0, 0) at the text's baseline-left. Y axis is FLIPPED relative to the
     image (image Y is top-down; CNC Y is bottom-up). Caller adds the final
     translation to the requested baseline position.
+
+    simplify_tolerance_mm > 0 runs Douglas-Peucker (cv2.approxPolyDP) on
+    each contour. cv2.findContours over-samples — a typical 8mm glyph
+    yields ~1000+ near-collinear points spaced ~0.03mm apart, which is
+    invisible quality but starves laser M4 dynamic power (segments are
+    too short to reach programmed feed). 0.05mm collapses to ~50 points
+    per glyph with no visible difference. Set to 0 to disable.
 
     Each contour is a tuple of (x, y) points in mm, closed (first point
     repeated at end). Both outer and inner contours (e.g. O's counter) are
@@ -796,9 +807,17 @@ def _text_to_contours(
         return []
 
     polylines: list[list[tuple[float, float]]] = []
+    tol_px = max(0.0, simplify_tolerance_mm * px_per_mm)
     for contour in contours:
         if len(contour) < 3:
             continue
+        if tol_px > 0:
+            # Douglas-Peucker in image space. approxPolyDP is closed-aware
+            # when given closed=True; the result keeps the contour rings
+            # closed and visually identical at this tolerance.
+            contour = cv2.approxPolyDP(contour, tol_px, True)
+            if len(contour) < 3:
+                continue
         # Convert pixel coords -> mm, with Y flipped (mask Y is top-down,
         # CNC Y is bottom-up). Anchor at the text baseline-left.
         path = []
@@ -825,6 +844,7 @@ def engrave_text(
     tool: Tool | None = None,
     material: Material | None = None,
     font_path: str | None = None,
+    simplify_tolerance_mm: float = 0.05,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Engrave text as a constant-depth outline trace of glyph contours.
@@ -965,7 +985,13 @@ def engrave_text(
             )
             return GcodeOutput(lines=[], warnings=warnings)
 
-    contours = _text_to_contours(text, font_path, height_mm, _ENGRAVE_PX_PER_MM)
+    contours = _text_to_contours(
+        text,
+        font_path,
+        height_mm,
+        _ENGRAVE_PX_PER_MM,
+        simplify_tolerance_mm=simplify_tolerance_mm,
+    )
     if not contours:
         _warn_or_fail(
             f"engrave_text: rasterizing text={text!r} at height={height_mm}mm "

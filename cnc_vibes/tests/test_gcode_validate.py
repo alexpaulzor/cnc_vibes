@@ -142,6 +142,14 @@ def test_laser_job_using_m3_flagged():
     assert "laser_m4_required" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
+def test_laser_m3_allowed_when_laser_mode_static_declared():
+    gcode = (
+        ";HEAD: laser\n;LASER_MODE: static\n$32=1\nG21\nG90\nM5\n"
+        "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\n"
+    )
+    assert "laser_m4_required" not in _rules(validate(gcode, PROFILE, TOOLS))
+
+
 def test_laser_s_value_above_1000_flagged():
     gcode = LASER_HEADER + "G0 X10 Y10\nM4 S2000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
     assert "laser_power_range" in _rules(validate(gcode, PROFILE, TOOLS))

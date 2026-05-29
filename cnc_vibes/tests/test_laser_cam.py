@@ -82,3 +82,61 @@ def test_laser_engrave_empty_text_warns():
     out = laser_cam.laser_engrave("", (0, 0), 6, _mat())
     assert out.lines == []
     assert out.warnings
+
+
+# ---------------------------------------------------------------------------
+# Static (M3) mode
+# ---------------------------------------------------------------------------
+
+
+def test_laser_profile_static_emits_m3_and_header():
+    out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat(), mode="static")
+    text = out.text
+    assert ";LASER_MODE: static" in text
+    assert "M3 S500" in text
+    assert "M4" not in text
+
+
+def test_laser_engrave_static_emits_m3():
+    out = laser_cam.laser_engrave("OK", (0, 0), 8, _mat(), mode="static")
+    text = out.text
+    assert ";LASER_MODE: static" in text
+    assert "M3 S500" in text
+    assert "M4" not in text
+
+
+def test_default_dynamic_emits_m4_no_static_header():
+    out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat())
+    text = out.text
+    assert ";LASER_MODE: static" not in text
+    assert "M4 S500" in text
+    assert "M3 " not in text
+
+
+# ---------------------------------------------------------------------------
+# Simplification: short-segment starvation mitigation
+# ---------------------------------------------------------------------------
+
+
+def test_engrave_simplification_drops_point_count():
+    """The whole point of simplification — M4 dynamic mode starves on
+    sub-mm segments. At 0.05mm tolerance (default) we expect orders-of-
+    magnitude fewer G1 lines than at tolerance=0."""
+    default = laser_cam.laser_engrave("SAMPLE", (0, 0), 8, _mat()).lines
+    raw = laser_cam.laser_engrave(
+        "SAMPLE", (0, 0), 8, _mat(), simplify_tolerance_mm=0
+    ).lines
+    g1_default = sum(1 for l in default if l.startswith("G1 "))
+    g1_raw = sum(1 for l in raw if l.startswith("G1 "))
+    assert g1_default * 10 < g1_raw, (
+        f"simplification underwhelmed: default={g1_default} raw={g1_raw}"
+    )
+
+
+def test_profile_simplification_drops_circle_vertices():
+    geom = Point(0, 0).buffer(20, resolution=128)  # very over-sampled circle
+    default = laser_cam.laser_profile(geom, _mat()).lines
+    raw = laser_cam.laser_profile(geom, _mat(), simplify_tolerance_mm=0).lines
+    g1_default = sum(1 for l in default if l.startswith("G1 "))
+    g1_raw = sum(1 for l in raw if l.startswith("G1 "))
+    assert g1_default < g1_raw

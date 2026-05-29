@@ -336,6 +336,10 @@ def _emit_laser(args: argparse.Namespace) -> str:
     op = args.op
     if op in _LASER_REFUSALS:
         raise SystemExit(f"refusing: {_LASER_REFUSALS[op]}")
+    mode = getattr(args, "laser_mode", None) or "dynamic"
+    simplify = getattr(args, "simplify_mm", None)
+    if simplify is None:
+        simplify = 0.05
     if op == "slot":
         # Build the stadium polygon ourselves and laser_profile it.
         from shapely.geometry import LineString
@@ -346,7 +350,11 @@ def _emit_laser(args: argparse.Namespace) -> str:
         )
         material = laser_cam.load_laser_material(args.material)
         out = laser_cam.laser_profile(
-            stadium, material, cfg=cam.CamConfig(strict=args.strict)
+            stadium,
+            material,
+            mode=mode,
+            simplify_tolerance_mm=simplify,
+            cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
     if op == "profile":
@@ -354,6 +362,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
         out = laser_cam.laser_profile(
             build_shape(args),
             material,
+            mode=mode,
+            simplify_tolerance_mm=simplify,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -365,6 +375,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
             args.height,
             material,
             font_path=args.font,
+            mode=mode,
+            simplify_tolerance_mm=simplify,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -421,6 +433,22 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--strict", action="store_true", help="warnings become errors")
     p.add_argument("--no-validate", action="store_true", help="skip auto-validation")
+    p.add_argument(
+        "--laser-mode",
+        choices=("dynamic", "static"),
+        default="dynamic",
+        help="laser ops only: dynamic=M4 (default, corner-safe but starves "
+        "on very short segments); static=M3 (constant power; emits "
+        ";LASER_MODE: static so the validator accepts M3)",
+    )
+    p.add_argument(
+        "--simplify-mm",
+        type=float,
+        default=None,
+        help="laser ops only: Douglas-Peucker tolerance for shape/glyph "
+        "simplification (default 0.05mm; 0 disables). Drop sub-pixel "
+        "vertices so M4 dynamic-power doesn't starve on micro-segments.",
+    )
 
 
 def _add_spindle_common(p: argparse.ArgumentParser) -> None:
@@ -657,6 +685,20 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
     args.strict = False
     args.no_validate = False
     args.out = None
+    args.laser_mode = "dynamic"
+    args.simplify_mm = None
+
+    if args.head == "laser":
+        args.laser_mode = _pick(
+            "Laser power mode",
+            [
+                ("dynamic", "dynamic — M4 (default, corner-safe)"),
+                (
+                    "static",
+                    "static — M3 (constant S; use if M4 starves on short segments)",
+                ),
+            ],
+        )
 
     if args.op == "drill":
         args.pattern = _pick(
@@ -757,6 +799,8 @@ def _argv_for(args: argparse.Namespace) -> list[str]:
         "tab_height",
         "p1",
         "p2",
+        "laser_mode",
+        "simplify_mm",
     ):
         v = getattr(args, k, None)
         if v is None or v is False:

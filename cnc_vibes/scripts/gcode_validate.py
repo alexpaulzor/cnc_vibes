@@ -97,6 +97,17 @@ def detect_head(gcode_text: str, scan_lines: int = 20) -> str:
     return "spindle"
 
 
+def detect_laser_mode(gcode_text: str, scan_lines: int = 20) -> str:
+    """Return 'static' if ;LASER_MODE: static is declared near the top
+    of the file, else 'dynamic'. Static mode opts the file into M3
+    emission (the dwell-burn-through risk is acknowledged)."""
+    for line in gcode_text.splitlines()[:scan_lines]:
+        m = re.search(r";\s*LASER_MODE:\s*(\w+)", line)
+        if m and m.group(1).lower() == "static":
+            return "static"
+    return "dynamic"
+
+
 def _load_yaml(path: Path):
     with path.open() as f:
         return yaml.safe_load(f)
@@ -108,6 +119,7 @@ def _tool_by_id(tools: list[dict], tool_id: str) -> dict | None:
 
 def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violation]:
     head = detect_head(gcode_text)
+    laser_mode = detect_laser_mode(gcode_text) if head == "laser" else "dynamic"
     envelope = profile["envelope_mm"]
     max_feed_xy = profile["max_feed_mm_per_min"]["xy"]
     max_feed_z = profile["max_feed_mm_per_min"]["z"]
@@ -201,12 +213,13 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
         # ---- Laser-specific per-line checks (run only for laser jobs) ----
         if head == "laser":
             for letter, value in words:
-                if letter == "M" and value == 3:
+                if letter == "M" and value == 3 and laser_mode != "static":
                     violations.append(
                         Violation(
                             line_no,
                             "laser_m4_required",
-                            "M3 (static power) used; laser jobs must use M4 (dynamic)",
+                            "M3 (static power) used; laser jobs must use M4 "
+                            "(dynamic) unless ;LASER_MODE: static is declared",
                         )
                     )
                 elif letter == "S" and not (0 <= value <= 1000):
