@@ -1102,6 +1102,60 @@ preflight refuses to start                     A safety check failed
 See also: doctor, params, validate, preflight
 """,
     ),
+    "jog": (
+        "cnc.py jog — xbox + keyboard jogger with inline Z-probe",
+        """
+Usage:
+  cnc.py jog --print-map                       # button map only (no machine)
+  cnc.py jog --auto                            # mDNS-discover + go
+  cnc.py jog --telnet HOST[:port]              # raw TCP (Grbl_ESP32)
+  cnc.py jog --port /dev/cu.usbserial-X        # USB serial
+  cnc.py jog --auto --no-controller            # keyboard only
+
+Drive the Anolex 4030-Evo from the operator's chair. Reads an xbox
+controller (preferred) or the keyboard (fallback) and translates inputs
+into GRBL $J= jog commands. One button (A / 'p') runs an auto Z-probe
+inline with a configurable max travel (default 250mm, well past the
+50mm Candle limit). Another (B / Esc) cancels in-flight motion or probe.
+
+Button map (also via --print-map):
+  Motion         left stick / D-pad        WASD       X/Y
+                 right stick Y / RB+dpad   arrows     Z
+  Modifiers      LB held = slow ×0.1       UPPERCASE letter = slow
+                 RT analog = fast (×N)     (no kb equivalent)
+  Actions        A=probe  B=cancel  X=zero-WCS  Y(hold 1s)=home
+                 p=probe  Esc=cancel  0=zero-WCS  H(capital)=home
+  Session        Back=exit  Start=reprint-map
+                 q=exit     ?=reprint-map
+
+Keyboard motion is tap-to-step (one --step-mm per press) — most
+terminals don't deliver key-release events. Controller supports
+continuous analog jog.
+
+Probe flags:
+  --probe-max-mm 250        max Z travel during fast approach
+  --probe-feed-fast 200     fast-approach feedrate (mm/min)
+  --probe-feed-slow 25      slow-touch feedrate (mm/min)
+  --probe-retract-mm 2      retract between fast and slow touch
+  --probe-plate-mm 0        touch-plate thickness (written as WCS Z)
+  --probe-no-set-wcs        probe but skip the G10 L20 P1 Z write
+  --probe-one-stage         skip the slow re-touch
+
+Jog flags:
+  --step-mm 1.0             D-pad / keyboard step distance
+  --feed 1500               base jog feed mm/min
+  --fast-mult 5.0           max RT multiplier
+  --slow-mult 0.1           LB / SHIFT multiplier
+  --deadzone 0.15           stick deadzone
+
+Why this exists: Candle's Z-probe errors past 50mm of travel, but the
+Anolex's home position is ~200mm above the working surface, making the
+existing path unusable. This replaces the round-trip to Candle for the
+most common operator workflows.
+
+See also: probe-corner, interactive-cal, find-machine
+""",
+    ),
 }
 
 
@@ -1111,6 +1165,7 @@ CATEGORIES: dict[str, list[str]] = {
         "validate",
         "params",
         "preflight",
+        "jog",
         "doctor",
         "test",
         "clean",

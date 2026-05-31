@@ -598,6 +598,16 @@ def cmd_cal_laser(args: argparse.Namespace) -> None:
         sys.exit(rc)
 
 
+def cmd_jog(args: argparse.Namespace) -> None:
+    """Dispatch to lessons/integration/05_jog/jog.py."""
+    sys.path.insert(0, str(ROOT / "lessons" / "integration" / "05_jog"))
+    import jog  # noqa: E402
+
+    rc = jog.main(args.rest or None)
+    if rc:
+        sys.exit(rc)
+
+
 def cmd_help(args: argparse.Namespace) -> None:
     if args.search:
         matches = search(args.search)
@@ -619,15 +629,20 @@ def cmd_help(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # Pre-dispatch: subcommands that take their own argparse (cam, cal-laser)
+    # Pre-dispatch: subcommands that take their own argparse (cam, cal-laser, jog)
     # bypass our top-level parser entirely, because argparse REMAINDER in
     # 3.12+ doesn't pass through leading-dash args cleanly to subparsers.
-    if len(sys.argv) >= 2 and sys.argv[1] in ("cam", "cal-laser"):
+    if len(sys.argv) >= 2 and sys.argv[1] in ("cam", "cal-laser", "jog"):
         sub_argv = sys.argv[2:]
         if sys.argv[1] == "cam":
             import cam_cli
 
             sys.exit(cam_cli.main(sub_argv) or 0)
+        if sys.argv[1] == "jog":
+            sys.path.insert(0, str(ROOT / "lessons" / "integration" / "05_jog"))
+            import jog  # noqa: E402
+
+            sys.exit(jog.main(sub_argv) or 0)
         sys.path.insert(0, str(ROOT / "lessons" / "laser" / "06_spiral_cal"))
         import spiral_cal  # noqa: E402
 
@@ -789,6 +804,15 @@ def main() -> None:
     )
     cal.add_argument("rest", nargs=argparse.REMAINDER)
     cal.set_defaults(func=cmd_cal_laser)
+
+    jog_p = subs.add_parser(
+        "jog",
+        help="xbox + keyboard jogger with inline Z-probe (Anolex 4030); "
+        "run with --print-map to see button mapping, --help for flags",
+        add_help=False,
+    )
+    jog_p.add_argument("rest", nargs=argparse.REMAINDER)
+    jog_p.set_defaults(func=cmd_jog)
 
     args = p.parse_args()
     args.func(args)

@@ -13,4 +13,6 @@ shapely>=2.0
 svgelements>=1.9
 # For scripts/cam_cli.py (interactive `cnc.py cam` wizard):
 prompt_toolkit>=3.0
+# For lessons/integration/05_jog (xbox controller input via SDL):
+pygame>=2.5
 # Optional for snapshot --camera mode (uses cv2, already pulled in above)

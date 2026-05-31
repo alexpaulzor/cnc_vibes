@@ -17,6 +17,7 @@ The rest of the repo treats the machine as a write-only target: generate `.gcode
 | Int-02 | [`snapshot`](02_snapshot/) | ✅ | One-shot webcam image, written to disk with a timestamp. Useful for before/after-cut records attached to a job log. |
 | Int-03 | [`probe-corner`](03_probe_corner/) | ✅ | Drive the spindle through a touch-plate routine to find the front-left corner of stock and set the WCS. Saves 2-3 minutes per job. |
 | Int-04 | [interactive laser cal](04_interactive_laser_cal/) | ✅ | Drives the laser to cut one test target per iteration; operator evaluates and adjusts params per cycle. Supports `--mode cut` (circle for kerf/cut tuning), `--mode engrave` (raster patch for grayscale-engrave power tuning), and `--telnet` for raw-TCP transport on Grbl_ESP32. |
+| Int-05 | [`jog`](05_jog/) | ✅ | Xbox controller + keyboard jogger with inline Z-probe. Default Z-probe travel is 250mm (Candle errors past 50mm); A button (or `P` key) starts probe, B (or `Esc`) cancels any motion. Reuses the `interactive_cal` transport layer. |
 
 ## Design constraints (carried forward)
 
@@ -39,9 +40,10 @@ Today, each Integration tool runs standalone. Wiring them into `preflight` is a 
 
 ## Dependencies these tools add (in `requirements.txt`)
 
-- **`pyserial`** — `inspect`, `probe-corner`, `interactive_cal` for talking to GRBL over USB.
+- **`pyserial`** — `inspect`, `probe-corner`, `interactive_cal`, `jog` for talking to GRBL over USB.
 - **`zeroconf`** — `cnc.py find-machine` for mDNS discovery on Grbl_ESP32.
 - **`opencv-python-headless`** — `snapshot` for webcam capture (also pulled in by 3c jigsaw for letter contour tracing).
 - **`Pillow`** — `snapshot` image writing.
+- **`pygame`** — `jog` for xbox controller input via SDL.
 
 All installed by the standard `pip install -r requirements.txt`.
