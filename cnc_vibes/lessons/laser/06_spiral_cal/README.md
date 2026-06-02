@@ -16,6 +16,11 @@ You pick ONE variable to sweep:
 - **power** — the laser power S value (as % of $30 max)
 - **feed** — the cut feedrate (mm/min)
 - **passes** — number of times each ring is re-traced
+- **warmup** — the per-patch G4 cold-start dwell in milliseconds.
+  Diode lasers fade in from cold, so a too-short dwell under-cuts the
+  start of each ring. Sweep this at a deliberately low power so a short
+  dwell visibly fails, then pick the shortest dwell that still cuts
+  cleanly. Values are dwell ms (e.g. `0,100,200,300,400`).
 - **z** — the carriage Z (absolute WCS mm). The Anolex is a 3-axis CNC
   with the laser mounted to the Z carriage, so moving Z up/down
   changes the focal distance between laser and material — same effect
@@ -55,6 +60,12 @@ python lessons/laser/06_spiral_cal/spiral_cal.py \
 # interpreting the leading dash as a flag.
 python cnc.py cal-laser --material cardboard_thin_1mm \
     --sweep z --values=-2,-1,0,1,2 --power 50 --feed 2500
+
+# Cold-start dwell sweep — varies the per-patch G4 warmup. Run at a low
+# power so a too-short dwell visibly under-cuts the start of each ring.
+python cnc.py cal-laser --material cardboard_corrugated_3mm \
+    --sweep warmup --values 0,100,200,300,400 \
+    --power 40 --feed 1400 --laser-mode static
 
 # Guided interactive mode (prompts walk through all the choices)
 python cnc.py cal-laser interactive

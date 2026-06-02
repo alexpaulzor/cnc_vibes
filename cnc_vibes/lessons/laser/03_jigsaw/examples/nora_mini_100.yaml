@@ -1,0 +1,26 @@
+# Mini NORA puzzle — 100x100mm, 4x4 grid, cut only (no raster).
+# Sized for a test cut on a 3mm corrugated cardboard scrap.
+#
+# Run:
+#   python cnc.py jigsaw lessons/laser/03_jigsaw/examples/nora_mini_100.yaml
+#   python cnc.py validate lessons/laser/03_jigsaw/build/cut_mini_nora_seed7.gcode
+#
+# BEFORE the real cut: dial in the cold-start dwell on a scrap with
+#   python cnc.py cal-laser --material cardboard_corrugated_3mm \
+#       --sweep warmup --values 0,100,200,300,400 --power 40 --feed 1400
+# then set warmup_ms below to the shortest dwell that cut cleanly.
+#
+# FIRE RISK: corrugated cardboard. Air assist non-negotiable; never
+# leave the machine unattended.
+
+head: laser
+material: cardboard_corrugated_3mm
+gcode: lessons/laser/03_jigsaw/build/cut_mini_nora_seed7.gcode
+
+jigsaw:
+  mode: cut
+  size: mini
+  word: NORA
+  seed: 7
+  laser_mode: static
+  warmup_ms: 250

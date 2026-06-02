@@ -7,9 +7,13 @@ subprocesses.
 
 Schema, jigsaw-specific block (under `jigsaw:`):
   mode:                  preview | cut | raster   (required)
-  size:                  small | full              (default: full for cut/preview, small for raster)
+  size:                  small | mini | micro | full  (default: full for cut/preview, small for raster)
   word:                  e.g. NORA                 (default: NORA)
   seed:                  int                       (default: 7)
+
+  # cut-only:
+  laser_mode:            dynamic | static          (default: dynamic / M4)
+  warmup_ms:             int                       (default: 0; G4 cold-start dwell per path)
 
   # raster-only:
   image:                 path to source image      (required for raster)
@@ -30,7 +34,7 @@ from typing import Any
 
 
 VALID_MODES = ("preview", "cut", "raster")
-VALID_SIZES = ("small", "full")
+VALID_SIZES = ("small", "mini", "micro", "full")
 VALID_RASTER_MODES = ("halftone", "grayscale")
 
 
@@ -85,6 +89,10 @@ def jigsaw_argv(data: dict) -> list[str]:
 
     if mode == "cut":
         argv += ["--material", material]
+        if "laser_mode" in jig:
+            argv += ["--laser-mode", str(jig["laser_mode"])]
+        if "warmup_ms" in jig:
+            argv += ["--warmup-ms", str(int(jig["warmup_ms"]))]
     elif mode == "raster":
         argv += ["--material", material]
         if jig.get("test_pattern"):

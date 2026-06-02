@@ -50,9 +50,14 @@ def test_examples_dir_exists():
     assert EXAMPLES_DIR.is_dir(), f"missing examples dir: {EXAMPLES_DIR}"
 
 
-def test_three_example_yamls_present():
+def test_example_yamls_present():
     names = {p.name for p in EXAMPLE_FILES}
-    assert names == {"small_n.yaml", "nora_300.yaml", "nora_with_photo.yaml"}
+    assert names == {
+        "small_n.yaml",
+        "nora_300.yaml",
+        "nora_with_photo.yaml",
+        "nora_mini_100.yaml",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -102,15 +107,24 @@ def _build_jigsaw_parser():
     subs = p.add_subparsers(dest="command", required=True)
 
     pv = subs.add_parser("preview")
-    pv.add_argument("--size", default="full", choices=("small", "full"))
+    pv.add_argument(
+        "--size", default="full", choices=("small", "mini", "micro", "full")
+    )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
 
     cu = subs.add_parser("cut")
-    cu.add_argument("--size", default="full", choices=("small", "full"))
+    cu.add_argument("--size", default="full", choices=("small", "mini", "micro", "full"))
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
     cu.add_argument("--material", default="mdf_3mm")
+    cu.add_argument(
+        "--laser-mode",
+        dest="laser_mode",
+        default="dynamic",
+        choices=("dynamic", "static"),
+    )
+    cu.add_argument("--warmup-ms", dest="warmup_ms", type=int, default=0)
 
     ra = subs.add_parser("raster")
     ra.add_argument("--size", default="small", choices=("small", "full"))

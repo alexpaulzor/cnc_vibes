@@ -156,6 +156,13 @@ def micro_puzzle_config() -> PuzzleConfig:
     return PuzzleConfig(panel_mm=150, piece_mm=50, tab_circle_r_px=22)
 
 
+def mini_puzzle_config() -> PuzzleConfig:
+    """100x100mm panel with 25mm cells (4x4 grid). Tab radius scaled to
+    half the full-size bulb to suit the smaller cells. Sized for a mini
+    NORA test cut on a 100mm cardboard scrap."""
+    return PuzzleConfig(panel_mm=100, piece_mm=25, tab_circle_r_px=11)
+
+
 # ---------------------------------------------------------------------------
 # Wavy segment helper (used when cfg.wave_amplitude_px > 0)
 # ---------------------------------------------------------------------------

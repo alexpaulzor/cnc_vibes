@@ -223,3 +223,46 @@ def test_z_sweep_emits_safety_header():
     )
     assert "Z SWEEP" in out.gcode
     assert "crash" in out.gcode.lower()
+
+
+# ---------------------------------------------------------------------------
+# Warmup (cold-start dwell) sweep — G4 dwell varies per patch
+# ---------------------------------------------------------------------------
+
+
+def test_warmup_sweep_emits_per_value_dwell():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(),
+        "warmup",
+        [0, 200, 400],
+        mode="static",
+    )
+    # patch 1 = 0ms -> no dwell; patches 2 and 3 -> 3 rings each at their value
+    dwells = [l for l in out.gcode.splitlines() if l.startswith("G4 P")]
+    assert sum(1 for l in dwells if l.startswith("G4 P0.200")) == 3
+    assert sum(1 for l in dwells if l.startswith("G4 P0.400")) == 3
+    # the 0ms patch contributes nothing
+    assert not any(l.startswith("G4 P0.000") for l in dwells)
+
+
+def test_warmup_sweep_keeps_constant_power_and_feed():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(),
+        "warmup",
+        [100, 300],
+        mode="static",
+        power_percent=40.0,
+    )
+    s_values = {l.split("S")[1] for l in out.gcode.splitlines() if l.startswith("M3 S")}
+    assert s_values == {"400"}
+
+
+def test_warmup_sweep_labels_patches():
+    out = spiral_cal.generate_sweep(
+        _laser_mat(),
+        "warmup",
+        [0, 250],
+        mode="static",
+    )
+    assert "; ===== patch 1/2: warmup=0" in out.gcode
+    assert "; ===== patch 2/2: warmup=250" in out.gcode

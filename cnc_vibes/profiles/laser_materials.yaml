@@ -121,6 +121,23 @@
       Single-wall corrugated. FIRE RISK — air assist non-negotiable;
       do not dwell. Cuts at very low power; bump only if not through.
 
+- id: cardboard_corrugated_3mm
+  family: paper
+  thickness_mm: 3.0
+  laser:
+    power_percent: 70
+    feed_mm_per_min: 1400
+    passes: 1
+    notes: |
+      Single-wall corrugated, ~3mm. FIRE RISK — air assist
+      non-negotiable; never dwell over a stationary spot. The
+      air gap inside the flutes means a single fast pass usually
+      cuts through; if the bottom liner survives, prefer a second
+      pass over raising power (high power chars + flares the
+      kerf). Good cheap stock for puzzle-fit tolerance tests.
+      Verify dwell/min-power with lesson 06 (cal-laser) before a
+      real cut on this stock.
+
 - id: cardstock_0.3mm
   family: paper
   thickness_mm: 0.3

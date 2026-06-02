@@ -33,7 +33,18 @@ python cnc.py validate lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
 | `--size` | Panel | Cells | Default `--word` | Pieces (typical) | When to use |
 |---|---|---|---|---|---|
 | `small` | 80×80mm | 2×2 @ 40mm | `N` | 5 (4 cell + 1 letter) | Calibration / test cuts; many fit on one piece of stock |
+| `mini` | 100×100mm | 4×4 @ 25mm | `NORA` | 23 (20 cell + 3 letter) | Mini NORA test cut on a small scrap (e.g. cardboard) |
+| `micro` | 150×150mm | 3×3 @ 50mm | `NORA` | varies | Tram / tolerance test cuts |
 | `full` | 300×300mm | 6×6 @ 50mm | `NORA` | 44 (40 cell + 4 letter) | The actual deliverable puzzle |
+
+### Cold-start dwell (`cut`)
+
+Diode lasers fade in from cold, so the start of each cut path can under-burn. The `cut` subcommand exposes two flags for this:
+
+- `--laser-mode dynamic|static` — `dynamic` (default) emits M4 (power scales with feed); `static` emits M3 constant power with a `;LASER_MODE: static` header. Static is easier to reason about on thin stock.
+- `--warmup-ms N` — inserts a `G4 P<sec>` dwell after the laser turns on at the start of each path (default 0 = off).
+
+Dial in the right dwell value first with the spiral calibration card: `cnc.py cal-laser --sweep warmup --values 0,100,200,300,400 ...` (see [lesson 06](../06_spiral_cal/)). Pick the shortest dwell that cuts cleanly, then pass it to `cut --warmup-ms`.
 
 ### Cut emission strategy
 
@@ -54,6 +65,7 @@ For a curated invocation that survives outside your shell history, drop a `job.y
 | File | What it cuts | Use when |
 |---|---|---|
 | [`examples/small_n.yaml`](examples/small_n.yaml) | 80x80mm N, cut only | Calibration / first cut on a new material |
+| [`examples/nora_mini_100.yaml`](examples/nora_mini_100.yaml) | 100x100mm NORA on 3mm corrugated, static M3 + 250ms dwell | Mini test cut; dial dwell in via lesson 06 first |
 | [`examples/nora_300.yaml`](examples/nora_300.yaml) | Full 300x300mm NORA, cut only | The canonical deliverable |
 | [`examples/nora_with_photo.yaml`](examples/nora_with_photo.yaml) | Full NORA + halftone photo raster | When you want the kitten-on-NORA effect |
 

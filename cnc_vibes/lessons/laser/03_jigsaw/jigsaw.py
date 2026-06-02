@@ -50,6 +50,7 @@ from geometry import (  # noqa: E402
     full_puzzle_config,
     generate_pieces,
     micro_puzzle_config,
+    mini_puzzle_config,
     small_puzzle_config,
 )
 
@@ -65,7 +66,11 @@ def _config_for_size(size: str):
         return full_puzzle_config()
     if size == "micro":
         return micro_puzzle_config()
-    raise SystemExit(f"unknown --size {size!r} (expected 'small', 'micro', or 'full')")
+    if size == "mini":
+        return mini_puzzle_config()
+    raise SystemExit(
+        f"unknown --size {size!r} (expected 'small', 'mini', 'micro', or 'full')"
+    )
 
 
 def _apply_origin(cfg, origin: str):
@@ -78,10 +83,14 @@ def _apply_origin(cfg, origin: str):
     raise SystemExit(f"unknown --origin {origin!r} (expected 'corner' or 'center')")
 
 
-def _emit_cut_for(pieces, material, cfg, word, size):
+def _emit_cut_for(pieces, material, cfg, word, size, mode="dynamic", warmup_ms=0):
     if size == "small":
-        return emit_cut_gcode_simple(pieces, material, cfg, word)
-    return emit_cut_gcode_full(pieces, material, cfg, word)
+        return emit_cut_gcode_simple(
+            pieces, material, cfg, word, mode=mode, warmup_ms=warmup_ms
+        )
+    return emit_cut_gcode_full(
+        pieces, material, cfg, word, mode=mode, warmup_ms=warmup_ms
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,13 +222,22 @@ def cmd_cut(args):
     word = args.word.upper()
     pieces, stats = generate_pieces(word, args.seed, cfg)
     material = load_material(args.material)
-    gcode = _emit_cut_for(pieces, material, cfg, word, args.size)
+    gcode = _emit_cut_for(
+        pieces,
+        material,
+        cfg,
+        word,
+        args.size,
+        mode=args.laser_mode,
+        warmup_ms=args.warmup_ms,
+    )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
     out = BUILD_DIR / f"cut_{args.size}_{word.lower()}_seed{args.seed}{suffix}.gcode"
     out.write_text(gcode)
     print(f"pieces: {len(pieces)}  tabs: {stats}")
     print(f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm")
+    print(f"laser: {args.laser_mode}  warmup: {args.warmup_ms}ms")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
     print(f"\nValidate with:")
     print(f"  python cnc.py validate {out.relative_to(REPO_ROOT)}")
@@ -316,14 +334,18 @@ def main():
 
     # preview
     pv = subs.add_parser("preview", help="render a verification diagram only")
-    pv.add_argument("--size", default="full", choices=("small", "micro", "full"))
+    pv.add_argument(
+        "--size", default="full", choices=("small", "mini", "micro", "full")
+    )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
     pv.set_defaults(func=cmd_preview)
 
     # cut
     cu = subs.add_parser("cut", help="emit cut GCode")
-    cu.add_argument("--size", default="full", choices=("small", "micro", "full"))
+    cu.add_argument(
+        "--size", default="full", choices=("small", "mini", "micro", "full")
+    )
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
     cu.add_argument("--material", default="mdf_3mm")
@@ -333,6 +355,22 @@ def main():
         choices=("corner", "center"),
         help="WCS origin placement: 'corner' = panel bottom-left at (0,0) "
         "(default); 'center' = panel center at (0,0), coords symmetric around 0",
+    )
+    cu.add_argument(
+        "--laser-mode",
+        dest="laser_mode",
+        default="dynamic",
+        choices=("dynamic", "static"),
+        help="M4 dynamic (default) vs M3 static constant-power",
+    )
+    cu.add_argument(
+        "--warmup-ms",
+        dest="warmup_ms",
+        type=int,
+        default=0,
+        help="G4 dwell (ms) after laser-on per path to defeat diode "
+        "cold-start fade-in; dial in with `cnc.py cal-laser --sweep warmup` "
+        "(default 0 = off)",
     )
     cu.set_defaults(func=cmd_cut)
 
