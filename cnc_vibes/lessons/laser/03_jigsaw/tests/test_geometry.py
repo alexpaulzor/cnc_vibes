@@ -174,13 +174,14 @@ def test_letter_shifts_some_tabs_in_full_config():
 # ---------------------------------------------------------------------------
 
 
-def test_generate_pieces_full_nora_produces_44_pieces():
+def test_generate_pieces_full_nora_produces_43_pieces():
     cfg = full_puzzle_config()
     pieces, stats = generate_pieces("NORA", seed=7, cfg=cfg)
-    assert len(pieces) == 44
+    # 43 not 44: the O's split center counter is fused into one disc.
+    assert len(pieces) == 43
     cells = [p for p in pieces if p["kind"] == "cell"]
     letters = [p for p in pieces if p["kind"] == "letter"]
-    assert len(cells) == 40
+    assert len(cells) == 39
     assert len(letters) == 4  # N, O, R, A
 
 
@@ -218,13 +219,15 @@ def _run_scratch(script: str, *args: str) -> str:
 
 
 def test_regression_full_nora_matches_phase8():
-    """generate_pieces(full_config, NORA, 7) must produce the same piece
-    count and tab stats as phase8_full_puzzle.py."""
+    """generate_pieces(full_config, NORA, 7) piece count + tab stats.
+
+    Tab stats are still pinned to phase8's known-good output. Piece count
+    is 43 (not phase8's 44): the O's center counter straddles a grid line
+    and is carved into two half-discs, which fuse_counter_fragments now
+    fuses into a single disc piece so it seats cleanly in the O pocket."""
     cfg = full_puzzle_config()
     pieces, stats = generate_pieces("NORA", seed=7, cfg=cfg)
-    # Hard-coded from scratch phase8's known good output. If phase8 ever
-    # changes, this test will catch a regression in geometry.py too.
-    assert len(pieces) == 44
+    assert len(pieces) == 43
     assert stats == {"total": 120, "centered": 88, "shifted": 20, "dropped": 12}
 
 

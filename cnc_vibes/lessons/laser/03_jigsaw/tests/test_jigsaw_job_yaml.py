@@ -125,6 +125,9 @@ def _build_jigsaw_parser():
         choices=("dynamic", "static"),
     )
     cu.add_argument("--warmup-ms", dest="warmup_ms", type=int, default=0)
+    cu.add_argument("--feed", type=int, default=None)
+    cu.add_argument("--min-segment-mm", dest="min_segment_mm", type=float, default=0.0)
+    cu.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
 
     ra = subs.add_parser("raster")
     ra.add_argument("--size", default="small", choices=("small", "full"))

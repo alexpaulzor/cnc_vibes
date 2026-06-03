@@ -83,13 +83,40 @@ def _apply_origin(cfg, origin: str):
     raise SystemExit(f"unknown --origin {origin!r} (expected 'corner' or 'center')")
 
 
-def _emit_cut_for(pieces, material, cfg, word, size, mode="dynamic", warmup_ms=0):
+def _emit_cut_for(
+    pieces,
+    material,
+    cfg,
+    word,
+    size,
+    mode="dynamic",
+    warmup_ms=0,
+    feed_override=None,
+    min_segment_mm=0.0,
+    power_percent=None,
+):
     if size == "small":
         return emit_cut_gcode_simple(
-            pieces, material, cfg, word, mode=mode, warmup_ms=warmup_ms
+            pieces,
+            material,
+            cfg,
+            word,
+            mode=mode,
+            warmup_ms=warmup_ms,
+            feed_override=feed_override,
+            min_segment_mm=min_segment_mm,
+            power_percent=power_percent,
         )
     return emit_cut_gcode_full(
-        pieces, material, cfg, word, mode=mode, warmup_ms=warmup_ms
+        pieces,
+        material,
+        cfg,
+        word,
+        mode=mode,
+        warmup_ms=warmup_ms,
+        feed_override=feed_override,
+        min_segment_mm=min_segment_mm,
+        power_percent=power_percent,
     )
 
 
@@ -194,8 +221,107 @@ def render_preview(pieces, cfg, title: str, out_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand handlers
+# Cut-path previews rendered FROM the emitted GCode (PNG + SVG)
 # ---------------------------------------------------------------------------
+
+
+def _parse_gcode_paths(gcode: str) -> list[list[tuple[float, float]]]:
+    """Extract continuous cut paths (in machine mm) from emitted GCode.
+
+    Each path is the run of points from a G0 rapid through its following
+    G1 cut moves, up to the next G0 / M5. This is exactly what the laser
+    traces, so the preview shows the real toolpath — including any orphan
+    fragments or fragmented segments."""
+    import re
+
+    paths: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+
+    def _xy(line: str) -> tuple[float, float]:
+        x = re.search(r"X(-?\d+\.?\d*)", line)
+        y = re.search(r"Y(-?\d+\.?\d*)", line)
+        return (float(x.group(1)) if x else 0.0, float(y.group(1)) if y else 0.0)
+
+    for ln in gcode.splitlines():
+        if ln.startswith("G0 X"):
+            if len(cur) > 1:
+                paths.append(cur)
+            cur = [_xy(ln)]
+        elif ln.startswith("G1 X"):
+            cur.append(_xy(ln))
+        elif ln.startswith("M5"):
+            if len(cur) > 1:
+                paths.append(cur)
+            cur = []
+    if len(cur) > 1:
+        paths.append(cur)
+    return paths
+
+
+def render_gcode_previews(
+    gcode: str, cfg, out_stem: Path, title: str
+) -> tuple[Path, Path]:
+    """Write a PNG and an SVG of the actual toolpath next to the gcode.
+
+    Returns (png_path, svg_path). Lines are the cut paths; G0 rapids
+    between paths are drawn faintly so re-positioning is visible."""
+    paths = _parse_gcode_paths(gcode)
+    pad = 10.0
+    side = cfg.panel_mm + 2 * pad
+    png_path = out_stem.with_suffix(".png")
+    svg_path = out_stem.with_suffix(".svg")
+
+    # --- SVG (mm units; Y flipped so up is +Y like the machine) ---
+    def fy(y: float) -> float:
+        return cfg.panel_mm - y + pad
+
+    svg = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{side}mm" '
+        f'height="{side}mm" viewBox="0 0 {side} {side}">',
+        f'<rect x="0" y="0" width="{side}" height="{side}" fill="white"/>',
+        f'<rect x="{pad}" y="{pad}" width="{cfg.panel_mm}" '
+        f'height="{cfg.panel_mm}" fill="none" stroke="#ccc" stroke-width="0.2"/>',
+        f"<title>{title}</title>",
+    ]
+    prev_end = None
+    for p in paths:
+        if prev_end is not None:
+            svg.append(
+                f'<line x1="{prev_end[0] + pad:.3f}" y1="{fy(prev_end[1]):.3f}" '
+                f'x2="{p[0][0] + pad:.3f}" y2="{fy(p[0][1]):.3f}" '
+                f'stroke="#e0e0e0" stroke-width="0.1" stroke-dasharray="0.5,0.5"/>'
+            )
+        pts = " ".join(f"{x + pad:.3f},{fy(y):.3f}" for x, y in p)
+        svg.append(
+            f'<polyline points="{pts}" fill="none" stroke="#b03020" '
+            f'stroke-width="0.3"/>'
+        )
+        prev_end = p[-1]
+    svg.append("</svg>")
+    svg_path.write_text("\n".join(svg))
+
+    # --- PNG (raster, same geometry) ---
+    scale = max(4, int(900 / side))
+    W = H = int(side * scale)
+    img = Image.new("RGB", (W, H), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+
+    def px(x: float, y: float) -> tuple[float, float]:
+        return ((x + pad) * scale, (cfg.panel_mm - y + pad) * scale)
+
+    d.rectangle(
+        [px(0, cfg.panel_mm), px(cfg.panel_mm, 0)], outline=(200, 200, 200), width=1
+    )
+    prev_end = None
+    for p in paths:
+        if prev_end is not None:
+            d.line([px(*prev_end), px(*p[0])], fill=(225, 225, 225), width=1)
+        d.line([px(x, y) for x, y in p], fill=(176, 48, 32), width=2)
+        prev_end = p[-1]
+    title_font = _load_font(max(12, scale * 3))
+    d.text((pad * scale, 2), title, fill=(20, 20, 20), font=title_font)
+    img.save(png_path, "PNG", optimize=True)
+    return png_path, svg_path
 
 
 def cmd_preview(args):
@@ -230,15 +356,43 @@ def cmd_cut(args):
         args.size,
         mode=args.laser_mode,
         warmup_ms=args.warmup_ms,
+        feed_override=args.feed,
+        min_segment_mm=args.min_segment_mm,
+        power_percent=args.power_percent,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
     out = BUILD_DIR / f"cut_{args.size}_{word.lower()}_seed{args.seed}{suffix}.gcode"
     out.write_text(gcode)
+    feed_note = (
+        f"{args.feed} (override)"
+        if args.feed
+        else f"{material['laser']['feed_mm_per_min']} (material)"
+    )
+    pct = (
+        args.power_percent
+        if args.power_percent is not None
+        else material["laser"]["power_percent"]
+    )
+    pwr_note = (
+        f"{pct}% (override)" if args.power_percent is not None else f"{pct}% (material)"
+    )
     print(f"pieces: {len(pieces)}  tabs: {stats}")
     print(f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm")
-    print(f"laser: {args.laser_mode}  warmup: {args.warmup_ms}ms")
+    print(f"laser: {args.laser_mode}  power: {pwr_note}  warmup: {args.warmup_ms}ms")
+    print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
+
+    # Always emit visual previews of the actual toolpath (PNG + SVG) so
+    # issues are spottable without reading GCode.
+    png_path, svg_path = render_gcode_previews(
+        gcode,
+        cfg,
+        out.with_suffix(""),
+        title=f"{word} {args.size} cut — {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm",
+    )
+    print(f"-> {png_path}")
+    print(f"-> {svg_path}")
     print(f"\nValidate with:")
     print(f"  python cnc.py validate {out.relative_to(REPO_ROOT)}")
 
@@ -371,6 +525,30 @@ def main():
         help="G4 dwell (ms) after laser-on per path to defeat diode "
         "cold-start fade-in; dial in with `cnc.py cal-laser --sweep warmup` "
         "(default 0 = off)",
+    )
+    cu.add_argument(
+        "--feed",
+        type=int,
+        default=None,
+        help="override cut feedrate mm/min (default: use the material's "
+        "feed_mm_per_min)",
+    )
+    cu.add_argument(
+        "--min-segment-mm",
+        dest="min_segment_mm",
+        type=float,
+        default=0.0,
+        help="decimate so no emitted G1 chord is shorter than this (mm); "
+        "trims tiny segments that stall M4 planning (default 0 = off)",
+    )
+    cu.add_argument(
+        "--power-percent",
+        dest="power_percent",
+        type=float,
+        default=100.0,
+        help="cut power as %% of $30 max (default 100 — this laser is weak "
+        "and only cuts reliably at full power; pass a lower value to use "
+        "the material profile's value instead via e.g. --power-percent <n>)",
     )
     cu.set_defaults(func=cmd_cut)
 

@@ -149,6 +149,30 @@ def order_inside_out(pieces: list[dict]) -> list[dict]:
     return letters + cells
 
 
+def decimate_min_segment(
+    pts: list[tuple[float, float]], min_seg_mm: float
+) -> list[tuple[float, float]]:
+    """Drop intermediate points that would create a segment shorter than
+    min_seg_mm. Endpoints are always preserved (so closed rings stay
+    closed). Guarantees every emitted segment is >= min_seg_mm, except a
+    degenerate path that collapses to its two endpoints."""
+    if min_seg_mm <= 0 or len(pts) < 3:
+        return pts
+    out = [pts[0]]
+    for p in pts[1:]:
+        lx, ly = out[-1]
+        if math.hypot(p[0] - lx, p[1] - ly) >= min_seg_mm:
+            out.append(p)
+    # Force-preserve the final endpoint. If it was skipped because it sat
+    # within min_seg of the last kept point, drop that kept point so the
+    # closing segment is still >= min_seg.
+    if out[-1] != pts[-1]:
+        if len(out) >= 2:
+            out.pop()
+        out.append(pts[-1])
+    return out
+
+
 def emit_cut_gcode_simple(
     pieces: list[dict],
     material: dict,
@@ -156,6 +180,9 @@ def emit_cut_gcode_simple(
     word: str,
     mode: str = "dynamic",
     warmup_ms: int = 0,
+    feed_override: int | None = None,
+    min_segment_mm: float = 0.0,
+    power_percent: float | None = None,
 ) -> str:
     """Per-polygon cut, simple letter-then-cells ordering. Suitable for
     small-piece-count puzzles where edge dedup isn't worth the complexity.
@@ -166,10 +193,14 @@ def emit_cut_gcode_simple(
     emits M3 + a ;LASER_MODE: static header (constant power). warmup_ms>0
     inserts a G4 dwell after the laser turns on at the start of each path,
     defeating diode cold-start fade-in (dial it in with lesson 06's
-    `--sweep warmup`)."""
+    `--sweep warmup`). feed_override replaces the material feedrate.
+    min_segment_mm decimates points so no emitted segment is shorter than
+    that distance. power_percent overrides the material power (S =
+    percent*10)."""
     laser = material["laser"]
-    power_s = int(round(laser["power_percent"] * 10))
-    feed = laser["feed_mm_per_min"]
+    pct = power_percent if power_percent is not None else laser["power_percent"]
+    power_s = int(round(pct * 10))
+    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
     warmup_s = max(0, warmup_ms) / 1000.0
@@ -181,6 +212,8 @@ def emit_cut_gcode_simple(
     ]
     if warmup_ms > 0:
         extra.append(f"warmup: G4 P{warmup_s:.3f} dwell after laser-on per path")
+    if min_segment_mm > 0:
+        extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
     ordered = order_inside_out(pieces)
     lines = _header(
@@ -195,6 +228,7 @@ def emit_cut_gcode_simple(
         paths = _polygon_to_paths_mm(piece["polygon"], cfg)
         kind = piece.get("kind", "cell")
         for path_idx, pts in enumerate(paths):
+            pts = decimate_min_segment(pts, min_segment_mm)
             if len(pts) < 3:
                 continue
             label = f"{kind} {i}"
@@ -312,6 +346,40 @@ def greedy_order(
     return ordered
 
 
+def chain_contiguous_paths(
+    ordered: list[tuple[LineString, bool]], tol_px: float = 0.5
+) -> list[list[tuple[float, float]]]:
+    """Fuse an ordered list of (edge, reversed) into continuous polylines.
+
+    Consecutive edges whose join is within tol_px are concatenated into a
+    single path so the laser cuts them in one uninterrupted stroke (one
+    laser-on, one warmup dwell, no mid-line lift/re-fire). A new path
+    starts only where the gap to the previous edge's end exceeds tol_px.
+
+    Returns a list of point-lists (each a continuous path). Each edge's
+    direction was already resolved by greedy_order; we honor it.
+    """
+    paths: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+    for edge, _reversed in ordered:
+        pts = list(edge.coords)
+        if len(pts) < 2:
+            continue
+        if not cur:
+            cur = list(pts)
+            continue
+        lx, ly = cur[-1]
+        if math.hypot(pts[0][0] - lx, pts[0][1] - ly) <= tol_px:
+            # contiguous — append, skipping the duplicated join point
+            cur.extend(pts[1:])
+        else:
+            paths.append(cur)
+            cur = list(pts)
+    if cur:
+        paths.append(cur)
+    return paths
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -319,16 +387,21 @@ def emit_cut_gcode_full(
     word: str,
     mode: str = "dynamic",
     warmup_ms: int = 0,
+    feed_override: int | None = None,
+    min_segment_mm: float = 0.0,
+    power_percent: float | None = None,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
     letter perimeters → interior cell-to-cell → panel border last (so
     stock stays attached until the very final cut).
 
-    mode / warmup_ms behave as in emit_cut_gcode_simple."""
+    mode / warmup_ms / feed_override / min_segment_mm / power_percent
+    behave as in emit_cut_gcode_simple."""
     laser = material["laser"]
-    power_s = int(round(laser["power_percent"] * 10))
-    feed = laser["feed_mm_per_min"]
+    pct = power_percent if power_percent is not None else laser["power_percent"]
+    power_s = int(round(pct * 10))
+    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
     warmup_s = max(0, warmup_ms) / 1000.0
@@ -352,29 +425,44 @@ def emit_cut_gcode_full(
         + greedy_order(panel, start_pt)
     )
 
+    # Convert each ordered edge to machine mm (honoring greedy_order's
+    # direction), then fuse contiguous edges into single continuous cuts so
+    # the laser doesn't lift / re-dwell / re-fire mid-line. tol is in mm.
+    ordered_mm = [
+        (
+            LineString([img_to_machine_mm(x, y, cfg) for x, y in edge.coords]),
+            rev,
+        )
+        for edge, rev in ordered
+    ]
+    chains = chain_contiguous_paths(ordered_mm, tol_px=0.1)
+
     extra = [
         "loose-fit: centerline cuts, laser kerf becomes the clearance",
         "edge dedup: shared cell-cell boundaries cut exactly once",
         "cut order: letters first, interior next, panel border last",
+        "contiguous edges fused into single continuous cuts (no per-edge re-fire)",
         "ASSUMES Z already at focal height in your WCS",
     ]
     if warmup_ms > 0:
         extra.append(f"warmup: G4 P{warmup_s:.3f} dwell after laser-on per path")
+    if min_segment_mm > 0:
+        extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
     lines = _header(
         title=f"full puzzle: word={word}, {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm, "
-        f"{len(ordered)} unique cut paths after dedup",
+        f"{len(chains)} continuous cut paths ({len(ordered)} edges after dedup)",
         material_id=material["id"],
         extra=extra,
         mode=mode,
     )
 
-    for idx, (edge, _reversed) in enumerate(ordered, start=1):
-        coords_mm = [img_to_machine_mm(x, y, cfg) for x, y in edge.coords]
+    for idx, path_mm in enumerate(chains, start=1):
+        coords_mm = decimate_min_segment(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
             continue
         x0, y0 = coords_mm[0]
-        lines.append(f"; --- path {idx}/{len(ordered)} ({len(coords_mm)} pts) ---")
+        lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")

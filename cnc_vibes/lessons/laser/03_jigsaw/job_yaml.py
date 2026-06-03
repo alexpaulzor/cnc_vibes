@@ -14,6 +14,9 @@ Schema, jigsaw-specific block (under `jigsaw:`):
   # cut-only:
   laser_mode:            dynamic | static          (default: dynamic / M4)
   warmup_ms:             int                       (default: 0; G4 cold-start dwell per path)
+  feed:                  int                       (default: material feed; override mm/min)
+  min_segment_mm:        float                     (default: 0; decimate chords shorter than this)
+  power_percent:         float                     (default: 100 via CLI; override cut power %)
 
   # raster-only:
   image:                 path to source image      (required for raster)
@@ -93,6 +96,12 @@ def jigsaw_argv(data: dict) -> list[str]:
             argv += ["--laser-mode", str(jig["laser_mode"])]
         if "warmup_ms" in jig:
             argv += ["--warmup-ms", str(int(jig["warmup_ms"]))]
+        if "feed" in jig:
+            argv += ["--feed", str(int(jig["feed"]))]
+        if "min_segment_mm" in jig:
+            argv += ["--min-segment-mm", str(float(jig["min_segment_mm"]))]
+        if "power_percent" in jig:
+            argv += ["--power-percent", str(float(jig["power_percent"]))]
     elif mode == "raster":
         argv += ["--material", material]
         if jig.get("test_pattern"):

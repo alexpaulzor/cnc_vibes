@@ -649,10 +649,56 @@ def merge_small_fragments(
 # ---------------------------------------------------------------------------
 
 
+def fuse_counter_fragments(
+    pieces: list[dict], letter_union, cfg: PuzzleConfig
+) -> list[dict]:
+    """Fuse cell fragments that fall inside the SAME letter counter (a
+    glyph interior hole, e.g. the center of an O) into one piece.
+
+    Without this, a counter that straddles a cell-grid line gets carved
+    into two half-discs that won't seat cleanly in the letter's pocket.
+    We only merge fragments sharing a hole; fragments in different holes,
+    or normal cells, are untouched. Counters bordering only the letter
+    (R/A inner pockets) are single fragments already and pass through
+    unchanged."""
+    if letter_union is None:
+        return pieces
+    glyphs = (
+        list(letter_union.geoms)
+        if isinstance(letter_union, MultiPolygon)
+        else [letter_union]
+    )
+    holes = [Polygon(r) for g in glyphs for r in g.interiors]
+    if not holes:
+        return pieces
+
+    result = list(pieces)
+    for hole in holes:
+        members = [
+            i
+            for i, p in enumerate(result)
+            if p.get("kind") == "cell"
+            and p["polygon"].intersection(hole).area > 0.2 * p["polygon"].area
+        ]
+        if len(members) < 2:
+            continue  # 0 or 1 fragment in this hole — nothing to fuse
+        merged = unary_union([result[i]["polygon"] for i in members])
+        if isinstance(merged, (MultiPolygon, GeometryCollection)):
+            polys = [g for g in merged.geoms if isinstance(g, Polygon)]
+            if not polys:
+                continue
+            merged = max(polys, key=lambda g: g.area)
+        keep = members[0]
+        result[keep] = {**result[keep], "polygon": merged}
+        for i in sorted(members[1:], reverse=True):
+            result.pop(i)
+    return result
+
+
 def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict], dict]:
     """Full pipeline: render letter polygons, build cell pieces with
-    shifted tabs, carve letter pockets, merge slivers, append letters as
-    intact pieces.
+    shifted tabs, carve letter pockets, merge slivers, fuse split letter
+    counters, append letters as intact pieces.
 
     Returns (pieces, stats). pieces is a list of dicts each with
     'parent', 'polygon' (shapely), 'kind' ('cell' or 'letter'), 'serial'
@@ -663,6 +709,7 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
     piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
     cell_fragments = carve_letter_pockets(piece_polys, letter_union)
     cell_fragments = merge_small_fragments(cell_fragments, cfg)
+    cell_fragments = fuse_counter_fragments(cell_fragments, letter_union, cfg)
 
     letter_polys: list[Polygon] = []
     if letter_union is not None:

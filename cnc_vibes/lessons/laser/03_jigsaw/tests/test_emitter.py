@@ -10,6 +10,7 @@ Validates:
 - Combined (raster + cut) emission deduplicates headers
 """
 
+import math
 import re
 import sys
 from pathlib import Path
@@ -28,8 +29,10 @@ from encoder import (  # noqa: E402
     load_and_preprocess,
 )
 from emitter import (  # noqa: E402
+    chain_contiguous_paths,
     classify_edge,
     combined_raster_and_cut,
+    decimate_min_segment,
     emit_cut_gcode_full,
     emit_cut_gcode_simple,
     emit_raster_gcode,
@@ -40,7 +43,11 @@ from emitter import (  # noqa: E402
     raster_only_gcode,
     runs_in_row,
 )
-from geometry import full_puzzle_config, small_puzzle_config  # noqa: E402
+from geometry import (  # noqa: E402
+    full_puzzle_config,
+    generate_pieces,
+    small_puzzle_config,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +225,174 @@ def test_full_cut_warmup_and_static_mode():
     assert any(l.startswith("G4 P0.250") for l in g.splitlines())
 
 
+# ---------------------------------------------------------------------------
+# Feed override + min-segment decimation
+# ---------------------------------------------------------------------------
+
+
+def test_decimate_drops_short_segments_keeps_endpoints():
+    pts = [(0.0, 0.0), (0.01, 0.0), (0.02, 0.0), (1.0, 0.0)]
+    out = decimate_min_segment(pts, 0.05)
+    # the two 0.01 hops collapse; endpoints preserved
+    assert out[0] == (0.0, 0.0)
+    assert out[-1] == (1.0, 0.0)
+    # every surviving segment >= 0.05
+    for a, b in zip(out, out[1:]):
+        assert math.hypot(b[0] - a[0], b[1] - a[1]) >= 0.05 - 1e-9
+
+
+def test_decimate_noop_when_zero():
+    pts = [(0.0, 0.0), (0.01, 0.0), (1.0, 0.0)]
+    assert decimate_min_segment(pts, 0.0) == pts
+
+
+def test_decimate_preserves_closed_ring_endpoint():
+    # closed ring with a tiny final hop back to start
+    pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.001, 0.0), (0.0, 0.0)]
+    out = decimate_min_segment(pts, 0.05)
+    assert out[0] == out[-1] == (0.0, 0.0)
+
+
+def test_full_cut_feed_override():
+    cfg = small_puzzle_config()
+    g = emit_cut_gcode_full(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "NORA", feed_override=800
+    )
+    feeds = set(re.findall(r"^F(\d+)", g, re.MULTILINE))
+    assert feeds == {"800"}  # material feed (500) fully overridden
+
+
+def test_simple_cut_feed_override():
+    cfg = small_puzzle_config()
+    g = emit_cut_gcode_simple(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "X", feed_override=800
+    )
+    feeds = set(re.findall(r"^F(\d+)", g, re.MULTILINE))
+    assert feeds == {"800"}
+
+
+def test_full_cut_power_override():
+    cfg = small_puzzle_config()
+    # material is 80% (S800); override to 100% -> S1000
+    g = emit_cut_gcode_full(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "NORA", power_percent=100
+    )
+    s_vals = set(re.findall(r"S(\d+)", g))
+    assert s_vals == {"1000"}
+
+
+def test_simple_cut_power_override():
+    cfg = small_puzzle_config()
+    g = emit_cut_gcode_simple(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "X", power_percent=100
+    )
+    s_vals = set(re.findall(r"S(\d+)", g))
+    assert s_vals == {"1000"}
+
+
+def test_cut_power_defaults_to_material_when_unset():
+    cfg = small_puzzle_config()
+    # _tiny_material is 80% -> S800 when no override given
+    g = emit_cut_gcode_full(_tiny_pieces(cfg), _tiny_material(), cfg, "NORA")
+    s_vals = set(re.findall(r"S(\d+)", g))
+    assert s_vals == {"800"}
+
+
+def test_full_cut_min_segment_enforced_in_output():
+    cfg = full_puzzle_config()
+    g = emit_cut_gcode_full(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "NORA", min_segment_mm=0.05
+    )
+    # Walk consecutive G0/G1 XY and assert every G1 chord >= 0.05mm
+    prev = None
+    shortest = float("inf")
+    for ln in g.splitlines():
+        m = re.match(r"^G([01]) X([-\d.]+) Y([-\d.]+)", ln)
+        if not m:
+            continue
+        x, y = float(m.group(2)), float(m.group(3))
+        if ln.startswith("G1 ") and prev is not None:
+            d = math.hypot(x - prev[0], y - prev[1])
+            if d > 0:
+                shortest = min(shortest, d)
+        prev = (x, y)
+    assert shortest >= 0.05 - 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Contiguous-path chaining (continuous cuts, no per-edge re-fire)
+# ---------------------------------------------------------------------------
+
+
+def test_chain_fuses_touching_edges():
+    from shapely.geometry import LineString
+
+    # three edges meeting end-to-end -> one chain
+    e1 = LineString([(0, 0), (1, 0)])
+    e2 = LineString([(1, 0), (1, 1)])
+    e3 = LineString([(1, 1), (0, 1)])
+    chains = chain_contiguous_paths([(e1, False), (e2, False), (e3, False)])
+    assert len(chains) == 1
+    assert chains[0][0] == (0.0, 0.0)
+    assert chains[0][-1] == (0.0, 1.0)
+
+
+def test_chain_splits_on_gap():
+    from shapely.geometry import LineString
+
+    e1 = LineString([(0, 0), (1, 0)])
+    e2 = LineString([(5, 5), (6, 5)])  # far away -> new chain
+    chains = chain_contiguous_paths([(e1, False), (e2, False)])
+    assert len(chains) == 2
+
+
+def test_chain_within_tolerance():
+    from shapely.geometry import LineString
+
+    e1 = LineString([(0, 0), (1.0, 0)])
+    e2 = LineString([(1.05, 0), (2.0, 0)])  # 0.05 gap, under 0.1 tol
+    chains = chain_contiguous_paths([(e1, False), (e2, False)], tol_px=0.1)
+    assert len(chains) == 1
+
+
+def test_full_cut_chaining_reduces_path_count():
+    # A real puzzle: chained output must have far fewer M3 starts than the
+    # raw deduped edge count, and zero needless re-fires (a G0 landing
+    # exactly where the previous cut ended).
+    cfg = full_puzzle_config()
+    pieces, _ = generate_pieces("NORA", 7, cfg)
+    # passes=1 so a 2nd pass's legitimate return-to-start isn't counted
+    material = {
+        "id": "t",
+        "laser": {"power_percent": 80, "feed_mm_per_min": 500, "passes": 1},
+    }
+    g = emit_cut_gcode_full(pieces, material, cfg, "NORA")
+    # Walk for G0 starts that coincide with the previous cut's end.
+    seq = []
+    for ln in g.splitlines():
+        m = re.match(r"^G([01]) X([-\d.]+) Y([-\d.]+)", ln)
+        if m:
+            seq.append((ln[1], float(m.group(2)), float(m.group(3))))
+    prev_end = None
+    needless = 0
+    i = 0
+    while i < len(seq):
+        if seq[i][0] == "0":
+            gx, gy = seq[i][1], seq[i][2]
+            if prev_end is not None:
+                if math.hypot(gx - prev_end[0], gy - prev_end[1]) < 0.05:
+                    needless += 1
+            j = i + 1
+            while j < len(seq) and seq[j][0] == "1":
+                j += 1
+            if j > i + 1:
+                prev_end = (seq[j - 1][1], seq[j - 1][2])
+            i = j
+        else:
+            i += 1
+    assert needless == 0, f"{needless} cut paths needlessly re-fire at the prior end"
+
+
 def test_simple_cut_coords_within_panel():
     cfg = small_puzzle_config()
     g = emit_cut_gcode_simple(_tiny_pieces(cfg), _tiny_material(), cfg, "X")
@@ -367,3 +542,51 @@ def test_raster_only_includes_validator_headers():
     assert ";HEAD: laser" in out
     assert ";MATERIAL: test_mat" in out
     assert "$32=1" in out
+
+
+# ---------------------------------------------------------------------------
+# GCode-derived previews (PNG + SVG emitted alongside every cut)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_gcode_paths_extracts_cut_runs():
+    import jigsaw  # noqa: E402
+
+    gcode = "\n".join(
+        [
+            "G0 X0 Y0",
+            "M3 S1000",
+            "F800",
+            "G1 X10 Y0",
+            "G1 X10 Y10",
+            "M5",
+            "G0 X20 Y20",
+            "M3 S1000",
+            "G1 X30 Y20",
+            "M5",
+        ]
+    )
+    paths = jigsaw._parse_gcode_paths(gcode)
+    assert len(paths) == 2
+    assert paths[0][0] == (0.0, 0.0)
+    assert paths[0][-1] == (10.0, 10.0)
+    assert paths[1][0] == (20.0, 20.0)
+
+
+def test_render_gcode_previews_writes_png_and_svg(tmp_path):
+    import jigsaw  # noqa: E402
+
+    cfg = full_puzzle_config()
+    pieces, _ = generate_pieces("NORA", 7, cfg)
+    material = {
+        "id": "t",
+        "laser": {"power_percent": 80, "feed_mm_per_min": 500, "passes": 1},
+    }
+    g = emit_cut_gcode_full(pieces, material, cfg, "NORA")
+    stem = tmp_path / "preview_test"
+    png, svg = jigsaw.render_gcode_previews(g, cfg, stem, title="t")
+    assert png.exists() and png.suffix == ".png"
+    assert svg.exists() and svg.suffix == ".svg"
+    body = svg.read_text()
+    assert body.startswith("<svg") and "</svg>" in body
+    assert "<polyline" in body  # at least one cut path drawn
