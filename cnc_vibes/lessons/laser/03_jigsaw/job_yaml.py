@@ -13,7 +13,8 @@ Schema, jigsaw-specific block (under `jigsaw:`):
 
   # cut-only:
   laser_mode:            dynamic | static          (default: dynamic / M4)
-  warmup_ms:             int                       (default: 0; G4 cold-start dwell per path)
+  warmup_ms:             int                       (default: 250; G4 dwell on cuts after the first)
+  warmup_ms_first:       int                       (default: 750; G4 dwell on the first/coldest cut)
   feed:                  int                       (default: material feed; override mm/min)
   min_segment_mm:        float                     (default: 0; decimate chords shorter than this)
   power_percent:         float                     (default: 100 via CLI; override cut power %)
@@ -96,6 +97,8 @@ def jigsaw_argv(data: dict) -> list[str]:
             argv += ["--laser-mode", str(jig["laser_mode"])]
         if "warmup_ms" in jig:
             argv += ["--warmup-ms", str(int(jig["warmup_ms"]))]
+        if "warmup_ms_first" in jig:
+            argv += ["--warmup-ms-first", str(int(jig["warmup_ms_first"]))]
         if "feed" in jig:
             argv += ["--feed", str(int(jig["feed"]))]
         if "min_segment_mm" in jig:

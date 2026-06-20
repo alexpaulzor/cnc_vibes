@@ -162,9 +162,10 @@ def test_letter_shifts_some_tabs_in_full_config():
     _piece_polys, stats = build_pieces_with_shifted_tabs(
         seed=7, letter_union=letter_union, cfg=cfg
     )
-    # With NORA at seed 7, we expect a mix (this is also the known good
-    # output from the scratch version's printed stats)
-    assert stats["total"] == 120  # 60 internal edges x 2 (each from both sides)
+    # With NORA at seed 7, we expect a mix. Each interior edge is now
+    # computed ONCE (shared by both adjacent cells), so total = 60 internal
+    # edges (was double-counted as 120 before edge-sharing).
+    assert stats["total"] == 60
     assert stats["shifted"] > 0
     assert stats["dropped"] > 0
 
@@ -228,7 +229,8 @@ def test_regression_full_nora_matches_phase8():
     cfg = full_puzzle_config()
     pieces, stats = generate_pieces("NORA", seed=7, cfg=cfg)
     assert len(pieces) == 43
-    assert stats == {"total": 120, "centered": 88, "shifted": 20, "dropped": 12}
+    # Interior edges counted once (shared between cells), not double-counted.
+    assert stats == {"total": 60, "centered": 44, "shifted": 10, "dropped": 6}
 
 
 def test_regression_small_n_matches_phase6_small():
@@ -237,7 +239,7 @@ def test_regression_small_n_matches_phase6_small():
     pieces, stats = generate_pieces("N", seed=7, cfg=cfg)
     # Hard-coded from scratch phase6_small's known good output
     assert len(pieces) == 5
-    assert stats == {"total": 8, "centered": 2, "shifted": 4, "dropped": 2}
+    assert stats == {"total": 4, "centered": 1, "shifted": 2, "dropped": 1}
 
 
 def test_regression_full_emits_polygons_in_expected_area():

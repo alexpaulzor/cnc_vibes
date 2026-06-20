@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from PIL import Image, ImageDraw, ImageFont
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 
@@ -57,12 +57,25 @@ class PuzzleConfig:
     process without import-order trickery.
     """
 
-    panel_mm: float = 300.0  # outer panel side length (square)
-    piece_mm: float = 50.0  # nominal cell size
+    panel_mm: float = 300.0  # outer panel WIDTH (square unless panel_h_mm set)
+    panel_h_mm: float | None = None  # outer panel HEIGHT; None = square (= panel_mm)
+    piece_mm: float = 50.0  # nominal cell WIDTH
+    piece_h_mm: float | None = None  # nominal cell HEIGHT; None = square (= piece_mm)
     px_per_mm: int = 5  # render scale (5 px/mm = 0.2mm per pixel)
     tab_circle_r_px: int = 22  # lollipop bulb radius in pixels
     margin_px: int = 120  # canvas inset around the panel for rendering
     legend_h_px: int = 240  # extra canvas height below for labels
+
+    # Rounded outer corners. 0 (default) = sharp 90° panel corners (legacy).
+    # >0 rounds the four outer panel-perimeter corners with this radius (mm).
+    corner_radius_mm: float = 0.0
+
+    # Vertically center the letter band on the nearest interior HORIZONTAL
+    # grid line instead of free-centering it in the middle of the panel.
+    # When the panel has an even row count this puts the letters straddling
+    # a row boundary, so each row is carved symmetrically into larger,
+    # tabbable chunks rather than thin mid-row slivers. Default True.
+    snap_letters_to_grid: bool = True
 
     # Shifting + merging parameters; default to "scale with tab radius"
     letter_clearance_factor: float = 1.0  # multiplied by tab_circle_r_px
@@ -102,10 +115,15 @@ class PuzzleConfig:
     def __post_init__(self):
         # Match phase2's int-coercion exactly so identical configs produce
         # byte-identical geometry vs the scratch code (regression-safety).
+        # panel_h_mm=None means a square panel (height == width), and
+        # piece_h_mm=None means square cells — both keep every existing
+        # square config bit-for-bit identical.
+        h_mm = self.panel_mm if self.panel_h_mm is None else self.panel_h_mm
+        cell_h_mm = self.piece_mm if self.piece_h_mm is None else self.piece_h_mm
         self.cols = int(self.panel_mm // self.piece_mm)
-        self.rows = int(self.panel_mm // self.piece_mm)
+        self.rows = int(h_mm // cell_h_mm)
         self.cell_w_px = int(self.piece_mm * self.px_per_mm)
-        self.cell_h_px = int(self.piece_mm * self.px_per_mm)
+        self.cell_h_px = int(cell_h_mm * self.px_per_mm)
         self.tab_height_px = 3 * self.tab_circle_r_px
         self.tab_len_px = max(int(0.40 * self.cell_w_px), 5 * self.tab_circle_r_px)
         self.letter_clearance_px = self.tab_circle_r_px * self.letter_clearance_factor
@@ -115,6 +133,11 @@ class PuzzleConfig:
         self.fragment_min_area_px = (
             self.fragment_min_area_factor * self.cell_w_px * self.cell_h_px
         )
+
+    @property
+    def panel_height_mm(self) -> float:
+        """Outer panel height in mm (== panel_mm for a square panel)."""
+        return self.panel_mm if self.panel_h_mm is None else self.panel_h_mm
 
     @property
     def puzzle_w_px(self) -> int:
@@ -163,6 +186,24 @@ def mini_puzzle_config() -> PuzzleConfig:
     return PuzzleConfig(panel_mm=100, piece_mm=25, tab_circle_r_px=11)
 
 
+def banner_puzzle_config() -> PuzzleConfig:
+    """150x75mm landscape panel, 6x2 grid (25mm wide x 37.5mm tall cells),
+    wavy internal edges and 3mm rounded outer corners. The 2-row layout
+    puts the panel's horizontal center line ON a grid boundary, so the
+    letters (snapped to that line by default) carve each row symmetrically
+    into large tabbable chunks instead of mid-row slivers. Sized for a
+    name-plate style NORA cut on a small cardboard scrap."""
+    return PuzzleConfig(
+        panel_mm=150,
+        panel_h_mm=75,
+        piece_mm=25,
+        piece_h_mm=37.5,
+        tab_circle_r_px=11,
+        wave_amplitude_px=4,
+        corner_radius_mm=3.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Wavy segment helper (used when cfg.wave_amplitude_px > 0)
 # ---------------------------------------------------------------------------
@@ -178,20 +219,32 @@ def wavy_points(
     half-sine perpendicular displacement. Endpoints have zero displacement
     so the wave stitches cleanly to whatever the caller's path is doing.
     Returns the list INCLUDING both endpoints — caller drops p1 if it
-    already exists in their accumulator."""
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
-    length = math.hypot(dx, dy)
+    already exists in their accumulator.
+
+    The displaced curve is computed in a *canonical* endpoint order (the
+    two endpoints sorted), then returned in the caller's requested
+    direction. This makes the wave traversal-invariant: the shared edge
+    between two cells is the SAME world-space curve no matter which cell
+    draws it (one cell goes top→bottom, the other bottom→top). Without
+    this, each neighbour bows its copy of the edge the opposite way,
+    cutting two arcs around a hollow sliver instead of one shared wave."""
+    length = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
     if length < 1e-6 or n_steps < 2 or amplitude_px <= 0:
         return [p1, p2]
-    nx, ny = -dy / length, dx / length  # left perpendicular to direction
+    # Canonical order: smaller (x, y) endpoint first, so both neighbours
+    # agree on direction (and therefore on the perpendicular sign).
+    reverse = (p1[0], p1[1]) > (p2[0], p2[1])
+    a, b = (p2, p1) if reverse else (p1, p2)
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    nx, ny = -dy / length, dx / length  # left perpendicular to canonical dir
     out = []
     for i in range(n_steps + 1):
         t = i / n_steps
         wave = amplitude_px * math.sin(t * math.pi)
-        x = p1[0] + dx * t + nx * wave
-        y = p1[1] + dy * t + ny * wave
-        out.append((x, y))
+        out.append((a[0] + dx * t + nx * wave, a[1] + dy * t + ny * wave))
+    if reverse:
+        out.reverse()
     return out
 
 
@@ -367,6 +420,20 @@ def render_letter_polygons(word: str, cfg: PuzzleConfig):
     text_x = px + (puzzle_w - tw) // 2 - bbox[0]
     text_y = py + (puzzle_h - th) // 2 - bbox[1]
 
+    # Optionally snap the letter band so its vertical center sits on the
+    # nearest INTERIOR horizontal grid line, rather than free-centered in
+    # the middle of a cell row. Carving the letters out of a row boundary
+    # leaves larger, tabbable chunks instead of thin mid-row slivers.
+    # The shift is applied only when it's at least 1px so even-row panels
+    # (whose center already lands on a grid line) stay byte-identical.
+    if cfg.snap_letters_to_grid and cfg.rows > 1:
+        glyph_center_y = text_y + bbox[1] + th / 2.0
+        grid_lines = [py + r * cfg.cell_h_px for r in range(1, cfg.rows)]
+        nearest = min(grid_lines, key=lambda gy: abs(gy - glyph_center_y))
+        shift = int(round(nearest - glyph_center_y))
+        if abs(shift) >= 1:
+            text_y += shift
+
     letter_mask = Image.new("L", (img_w, img_h), 0)
     ImageDraw.Draw(letter_mask).text((text_x, text_y), word, fill=255, font=font)
     letter_polys = _trace_mask_polygons(letter_mask)
@@ -445,96 +512,94 @@ def build_pieces_with_shifted_tabs(
     stats = {"total": 0, "centered": 0, "shifted": 0, "dropped": 0}
     wave_amp = cfg.wave_amplitude_px
     wave_steps = cfg.wave_steps
+    px, py = cfg.margin_px, cfg.margin_px
+    cw, ch = cfg.cell_w_px, cfg.cell_h_px
 
-    def add_tab(pts, edge_start, edge_dir, edge_length, direction):
-        """Original API preserved: append tab points to `pts` between
-        edge_start (already in pts) and the next corner (caller appends
-        after). When wave_amp > 0, the flat segments before/after the
-        tab bulge are wavy; the bulge itself is unchanged. When the tab
-        is dropped (no clear position), this function leaves pts as-is —
-        the caller's subsequent corner-append produces a straight or
-        wavy connection via the corner_after handling below."""
+    def _edge_interior(c0, c1, tab_dir):
+        """Build the point list strictly BETWEEN corners c0->c1 for one
+        interior (cell-cell) grid edge, in canonical order. Counts stats
+        once. Returns (interior_points, placed_bool). Computed a single
+        time per shared edge so both adjacent cells reuse the exact same
+        vertices (forward / reversed) — making the shared boundary
+        bit-identical so edge dedup is clean and no tab segment is left
+        uncut."""
         stats["total"] += 1
-        max_offset = edge_length - cfg.tab_len_px
-        if max_offset <= 0:
-            stats["dropped"] += 1
-            return False  # no tab placed
-        center = max_offset / 2
-        offset = find_clear_tab_offset(
-            edge_start, edge_dir, edge_length, letter_union, direction, cfg
-        )
+        length = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
+        edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
+        max_offset = length - cfg.tab_len_px
+        offset = None
+        if max_offset > 0:
+            offset = find_clear_tab_offset(
+                c0, edge_dir, length, letter_union, tab_dir, cfg
+            )
         if offset is None:
             stats["dropped"] += 1
-            return False
-        if abs(offset - center) < 1.0:
+            # dropped tab: wavy connector on interior edges, else straight
+            if wave_amp > 0:
+                return wavy_points(c0, c1, wave_amp, wave_steps)[1:-1], False
+            return [], False
+        if abs(offset - max_offset / 2) < 1.0:
             stats["centered"] += 1
         else:
             stats["shifted"] += 1
-        tab_world = place_tab_at_offset(
-            edge_start, edge_dir, edge_length, direction, offset, cfg
-        )
+        tw = place_tab_at_offset(c0, edge_dir, length, tab_dir, offset, cfg)
         if wave_amp > 0:
-            # corner_a (= pts[-1]) → wavy → tab base left
-            pts.extend(wavy_points(pts[-1], tab_world[1], wave_amp, wave_steps)[1:])
-            # bulge interior (excluding the two v=0 base points)
-            pts.extend(tab_world[2:-2])
-            # tab base right (last v=0 point on the tab outline)
-            pts.append(tab_world[-2])
-            # NOTE: wavy connection from tab base right → next corner
-            # is handled by the caller via _connect_to_corner below.
-        else:
-            pts.extend(tab_world[1:-1])
-        return True  # tab placed
+            pts = wavy_points(c0, tw[1], wave_amp, wave_steps)[1:]
+            pts += tw[2:-2]
+            pts.append(tw[-2])
+            pts += wavy_points(tw[-2], c1, wave_amp, wave_steps)[1:-1]
+            return pts, True
+        return list(tw[1:-1]), True
 
-    def _connect_to_corner(pts, corner, edge_has_tab):
-        """Append a straight or wavy connection from pts[-1] to corner.
-        Wavy when cfg.wave_amplitude_px > 0 AND the edge has a tab (or
-        had one dropped — either way, it's an internal cell-cell edge).
-        Panel-perimeter edges (edge_has_tab=False) always stay straight."""
-        if wave_amp > 0 and edge_has_tab:
-            pts.extend(wavy_points(pts[-1], corner, wave_amp, wave_steps)[1:])
-        else:
-            pts.append(corner)
+    # Precompute every interior edge ONCE in canonical orientation.
+    #   vertical edge v[(c,r)]   : between col c and c+1, top->bottom
+    #   horizontal edge h[(c,r)] : between row r and r+1, left->right
+    v_int: dict = {}
+    for c in range(cfg.cols - 1):
+        for r in range(cfg.rows):
+            x = px + (c + 1) * cw
+            c0 = (x, py + r * ch)
+            c1 = (x, py + (r + 1) * ch)
+            tab_dir = +1 if vertical_tabs[(c, r)] else -1
+            v_int[(c, r)] = _edge_interior(c0, c1, tab_dir)[0]
+    h_int: dict = {}
+    for c in range(cfg.cols):
+        for r in range(cfg.rows - 1):
+            y = py + (r + 1) * ch
+            c0 = (px + c * cw, y)
+            c1 = (px + (c + 1) * cw, y)
+            tab_dir = -1 if horizontal_tabs[(c, r)] else +1
+            h_int[(c, r)] = _edge_interior(c0, c1, tab_dir)[0]
 
-    def piece_polygon(col, row, ox, oy):
-        x0 = ox + col * cfg.cell_w_px
-        y0 = oy + row * cfg.cell_h_px
-        x1 = x0 + cfg.cell_w_px
-        y1 = y0 + cfg.cell_h_px
-        pts = [(x0, y0)]
-        # Top edge (TL → TR)
-        top_has_tab = row > 0
-        if top_has_tab:
-            d = -1 if horizontal_tabs[(col, row - 1)] else +1
-            add_tab(pts, (x0, y0), (1, 0), cfg.cell_w_px, d)
-        _connect_to_corner(pts, (x1, y0), top_has_tab)
-        # Right edge (TR → BR)
-        right_has_tab = col < cfg.cols - 1
-        if right_has_tab:
-            d = +1 if vertical_tabs[(col, row)] else -1
-            add_tab(pts, (x1, y0), (0, 1), cfg.cell_h_px, d)
-        _connect_to_corner(pts, (x1, y1), right_has_tab)
-        # Bottom edge (BR → BL)
-        bottom_has_tab = row < cfg.rows - 1
-        if bottom_has_tab:
-            d = +1 if horizontal_tabs[(col, row)] else -1
-            add_tab(pts, (x1, y1), (-1, 0), cfg.cell_w_px, d)
-        _connect_to_corner(pts, (x0, y1), bottom_has_tab)
-        # Left edge (BL → TL closes the polygon implicitly)
-        left_has_tab = col > 0
-        if left_has_tab:
-            d = -1 if vertical_tabs[(col - 1, row)] else +1
-            add_tab(pts, (x0, y1), (0, -1), cfg.cell_h_px, d)
-            # Wavy connection back to the starting TL corner
-            if wave_amp > 0:
-                pts.extend(wavy_points(pts[-1], (x0, y0), wave_amp, wave_steps)[1:-1])
+    def piece_polygon(col, row):
+        x0 = px + col * cw
+        y0 = py + row * ch
+        x1 = x0 + cw
+        y1 = y0 + ch
+        TL, TR, BR, BL = (x0, y0), (x1, y0), (x1, y1), (x0, y1)
+        pts = [TL]
+        # top edge TL->TR : horizontal edge h(col,row-1), canonical forward
+        if row > 0:
+            pts += h_int[(col, row - 1)]
+        pts.append(TR)
+        # right edge TR->BR : vertical edge v(col,row), canonical forward
+        if col < cfg.cols - 1:
+            pts += v_int[(col, row)]
+        pts.append(BR)
+        # bottom edge BR->BL : horizontal edge h(col,row), canonical reversed
+        if row < cfg.rows - 1:
+            pts += reversed(h_int[(col, row)])
+        pts.append(BL)
+        # left edge BL->TL : vertical edge v(col-1,row), canonical reversed
+        if col > 0:
+            pts += reversed(v_int[(col - 1, row)])
+        # TL closes implicitly
         return pts
 
-    px, py = cfg.margin_px, cfg.margin_px
     pieces: dict = {}
     for c in range(cfg.cols):
         for r in range(cfg.rows):
-            pts = piece_polygon(c, r, px, py)
+            pts = piece_polygon(c, r)
             try:
                 poly = Polygon(pts)
                 if not poly.is_valid:
@@ -695,10 +760,73 @@ def fuse_counter_fragments(
     return result
 
 
+def _rounded_panel_mask(cfg: PuzzleConfig):
+    """Return a shapely polygon of the panel rectangle (pixel space) with
+    its four outer corners rounded by cfg.corner_radius_mm. Returns None
+    when no rounding is requested."""
+    if cfg.corner_radius_mm <= 0:
+        return None
+    x0 = cfg.margin_px
+    y0 = cfg.margin_px
+    x1 = cfg.margin_px + cfg.puzzle_w_px
+    y1 = cfg.margin_px + cfg.puzzle_h_px
+    rect = box(x0, y0, x1, y1)
+    r_px = cfg.corner_radius_mm * cfg.px_per_mm
+    # Erode then dilate (positive buffer) with round joins => rounded corners
+    # on the outside, while leaving interior cell edges (which are far from
+    # the panel border) untouched once we intersect each cell with this mask.
+    rounded = rect.buffer(-r_px, join_style=1).buffer(r_px, join_style=1)
+    return rounded
+
+
+def round_panel_corners(pieces: list[dict], cfg: PuzzleConfig) -> list[dict]:
+    """Clip cell pieces to a rounded-rectangle panel mask so the four
+    OUTER panel corners are rounded by cfg.corner_radius_mm. Interior
+    cells are unaffected (they lie wholly inside the mask). Tabs that bulge
+    past the panel border are preserved because the mask only rounds the
+    rectangle's corners, not its straight edges (tabs sit mid-edge)."""
+    mask = _rounded_panel_mask(cfg)
+    if mask is None:
+        return pieces
+    # Union the mask with a dilation along straight edges so tab bulges that
+    # legitimately stick out past the panel rectangle aren't clipped — we
+    # only want to remove the sharp corner triangles. Achieve this by
+    # intersecting each piece with (mask ∪ piece-minus-corner-regions).
+    # Simpler + robust: only clip the 4 corner squares.
+    r_px = cfg.corner_radius_mm * cfg.px_per_mm
+    x0, y0 = cfg.margin_px, cfg.margin_px
+    x1 = cfg.margin_px + cfg.puzzle_w_px
+    y1 = cfg.margin_px + cfg.puzzle_h_px
+    corner_boxes = [
+        box(x0, y0, x0 + r_px, y0 + r_px),
+        box(x1 - r_px, y0, x1, y0 + r_px),
+        box(x0, y1 - r_px, x0 + r_px, y1),
+        box(x1 - r_px, y1 - r_px, x1, y1),
+    ]
+    corner_region = unary_union(corner_boxes)
+    # The rounded fillet to KEEP within each corner box = mask ∩ corner box.
+    keep_in_corner = mask.intersection(corner_region)
+    out = []
+    for p in pieces:
+        poly = p["polygon"]
+        if p.get("kind") != "cell" or not poly.intersects(corner_region):
+            out.append(p)
+            continue
+        # piece outside the corner boxes (unchanged) + rounded bit inside
+        outside = poly.difference(corner_region)
+        inside = poly.intersection(keep_in_corner)
+        new = unary_union([outside, inside])
+        if isinstance(new, (MultiPolygon, GeometryCollection)):
+            polys = [g for g in new.geoms if isinstance(g, Polygon)]
+            new = max(polys, key=lambda g: g.area) if polys else poly
+        out.append({**p, "polygon": new})
+    return out
+
+
 def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict], dict]:
     """Full pipeline: render letter polygons, build cell pieces with
     shifted tabs, carve letter pockets, merge slivers, fuse split letter
-    counters, append letters as intact pieces.
+    counters, round outer corners, append letters as intact pieces.
 
     Returns (pieces, stats). pieces is a list of dicts each with
     'parent', 'polygon' (shapely), 'kind' ('cell' or 'letter'), 'serial'
@@ -710,6 +838,7 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
     cell_fragments = carve_letter_pockets(piece_polys, letter_union)
     cell_fragments = merge_small_fragments(cell_fragments, cfg)
     cell_fragments = fuse_counter_fragments(cell_fragments, letter_union, cfg)
+    cell_fragments = round_panel_corners(cell_fragments, cfg)
 
     letter_polys: list[Polygon] = []
     if letter_union is not None:

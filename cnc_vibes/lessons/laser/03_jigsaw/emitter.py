@@ -71,7 +71,9 @@ def img_to_machine_mm(
     instead of pinning the bottom-left corner there."""
     x_mm = (x_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[0]
     y_mm = (
-        cfg.panel_mm - (y_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[1]
+        cfg.panel_height_mm
+        - (y_px - cfg.margin_px) / cfg.px_per_mm
+        - cfg.origin_offset_mm[1]
     )
     return (x_mm, y_mm)
 
@@ -183,6 +185,7 @@ def emit_cut_gcode_simple(
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
+    warmup_ms_first: int | None = None,
 ) -> str:
     """Per-polygon cut, simple letter-then-cells ordering. Suitable for
     small-piece-count puzzles where edge dedup isn't worth the complexity.
@@ -204,14 +207,19 @@ def emit_cut_gcode_simple(
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
     warmup_s = max(0, warmup_ms) / 1000.0
+    first_ms = warmup_ms if warmup_ms_first is None else warmup_ms_first
+    first_s = max(0, first_ms) / 1000.0
 
     extra = [
         "loose-fit puzzle: centerline cuts, kerf becomes the clearance",
         "ASSUMES Z already at focal height in your WCS",
         "cut order: letters first, then cells (simple; shared edges cut twice)",
     ]
-    if warmup_ms > 0:
-        extra.append(f"warmup: G4 P{warmup_s:.3f} dwell after laser-on per path")
+    if first_ms > 0 or warmup_ms > 0:
+        extra.append(
+            f"warmup: G4 P{first_s:.3f} on first cut, P{warmup_s:.3f} on the rest "
+            "(diode cold-start)"
+        )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
@@ -224,6 +232,7 @@ def emit_cut_gcode_simple(
         mode=mode,
     )
 
+    first_cut = True
     for i, piece in enumerate(ordered, start=1):
         paths = _polygon_to_paths_mm(piece["polygon"], cfg)
         kind = piece.get("kind", "cell")
@@ -239,8 +248,10 @@ def emit_cut_gcode_simple(
             lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
             lines.append(f"{on} S{power_s}")
             lines.append(f"F{feed}")
-            if warmup_ms > 0:
-                lines.append(f"G4 P{warmup_s:.3f}  ; warmup")
+            dwell_s = first_s if first_cut else warmup_s
+            if dwell_s > 0:
+                lines.append(f"G4 P{dwell_s:.3f}  ; warmup")
+            first_cut = False
             for pass_n in range(passes):
                 if passes > 1:
                     lines.append(f"; pass {pass_n + 1} of {passes}")
@@ -390,6 +401,7 @@ def emit_cut_gcode_full(
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
+    warmup_ms_first: int | None = None,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -397,7 +409,9 @@ def emit_cut_gcode_full(
     stock stays attached until the very final cut).
 
     mode / warmup_ms / feed_override / min_segment_mm / power_percent
-    behave as in emit_cut_gcode_simple."""
+    behave as in emit_cut_gcode_simple. warmup_ms_first (if set) is the
+    dwell on the very first cut, when the diode is coldest; later cuts use
+    the shorter warmup_ms."""
     laser = material["laser"]
     pct = power_percent if power_percent is not None else laser["power_percent"]
     power_s = int(round(pct * 10))
@@ -405,6 +419,8 @@ def emit_cut_gcode_full(
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
     warmup_s = max(0, warmup_ms) / 1000.0
+    first_ms = warmup_ms if warmup_ms_first is None else warmup_ms_first
+    first_s = max(0, first_ms) / 1000.0
 
     edges = extract_unique_edges(pieces)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
@@ -444,8 +460,11 @@ def emit_cut_gcode_full(
         "contiguous edges fused into single continuous cuts (no per-edge re-fire)",
         "ASSUMES Z already at focal height in your WCS",
     ]
-    if warmup_ms > 0:
-        extra.append(f"warmup: G4 P{warmup_s:.3f} dwell after laser-on per path")
+    if first_ms > 0 or warmup_ms > 0:
+        extra.append(
+            f"warmup: G4 P{first_s:.3f} on first cut, P{warmup_s:.3f} on the rest "
+            "(diode cold-start)"
+        )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
@@ -457,6 +476,7 @@ def emit_cut_gcode_full(
         mode=mode,
     )
 
+    first_cut = True
     for idx, path_mm in enumerate(chains, start=1):
         coords_mm = decimate_min_segment(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
@@ -466,8 +486,10 @@ def emit_cut_gcode_full(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")
-        if warmup_ms > 0:
-            lines.append(f"G4 P{warmup_s:.3f}  ; warmup")
+        dwell_s = first_s if first_cut else warmup_s
+        if dwell_s > 0:
+            lines.append(f"G4 P{dwell_s:.3f}  ; warmup")
+        first_cut = False
         for pass_n in range(passes):
             if passes > 1:
                 lines.append(f"; pass {pass_n + 1} of {passes}")

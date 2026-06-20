@@ -47,6 +47,7 @@ from emitter import (  # noqa: E402
     raster_only_gcode,
 )
 from geometry import (  # noqa: E402
+    banner_puzzle_config,
     full_puzzle_config,
     generate_pieces,
     micro_puzzle_config,
@@ -68,8 +69,11 @@ def _config_for_size(size: str):
         return micro_puzzle_config()
     if size == "mini":
         return mini_puzzle_config()
+    if size == "banner":
+        return banner_puzzle_config()
     raise SystemExit(
-        f"unknown --size {size!r} (expected 'small', 'mini', 'micro', or 'full')"
+        f"unknown --size {size!r} "
+        "(expected 'small', 'mini', 'banner', 'micro', or 'full')"
     )
 
 
@@ -94,6 +98,7 @@ def _emit_cut_for(
     feed_override=None,
     min_segment_mm=0.0,
     power_percent=None,
+    warmup_ms_first=None,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -106,6 +111,7 @@ def _emit_cut_for(
             feed_override=feed_override,
             min_segment_mm=min_segment_mm,
             power_percent=power_percent,
+            warmup_ms_first=warmup_ms_first,
         )
     return emit_cut_gcode_full(
         pieces,
@@ -117,6 +123,7 @@ def _emit_cut_for(
         feed_override=feed_override,
         min_segment_mm=min_segment_mm,
         power_percent=power_percent,
+        warmup_ms_first=warmup_ms_first,
     )
 
 
@@ -267,20 +274,23 @@ def render_gcode_previews(
     between paths are drawn faintly so re-positioning is visible."""
     paths = _parse_gcode_paths(gcode)
     pad = 10.0
-    side = cfg.panel_mm + 2 * pad
+    pw = cfg.panel_mm
+    ph = cfg.panel_height_mm
+    vw = pw + 2 * pad
+    vh = ph + 2 * pad
     png_path = out_stem.with_suffix(".png")
     svg_path = out_stem.with_suffix(".svg")
 
     # --- SVG (mm units; Y flipped so up is +Y like the machine) ---
     def fy(y: float) -> float:
-        return cfg.panel_mm - y + pad
+        return ph - y + pad
 
     svg = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{side}mm" '
-        f'height="{side}mm" viewBox="0 0 {side} {side}">',
-        f'<rect x="0" y="0" width="{side}" height="{side}" fill="white"/>',
-        f'<rect x="{pad}" y="{pad}" width="{cfg.panel_mm}" '
-        f'height="{cfg.panel_mm}" fill="none" stroke="#ccc" stroke-width="0.2"/>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw}mm" '
+        f'height="{vh}mm" viewBox="0 0 {vw} {vh}">',
+        f'<rect x="0" y="0" width="{vw}" height="{vh}" fill="white"/>',
+        f'<rect x="{pad}" y="{pad}" width="{pw}" '
+        f'height="{ph}" fill="none" stroke="#ccc" stroke-width="0.2"/>',
         f"<title>{title}</title>",
     ]
     prev_end = None
@@ -301,17 +311,16 @@ def render_gcode_previews(
     svg_path.write_text("\n".join(svg))
 
     # --- PNG (raster, same geometry) ---
-    scale = max(4, int(900 / side))
-    W = H = int(side * scale)
+    scale = max(4, int(900 / max(vw, vh)))
+    W = int(vw * scale)
+    H = int(vh * scale)
     img = Image.new("RGB", (W, H), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
     def px(x: float, y: float) -> tuple[float, float]:
-        return ((x + pad) * scale, (cfg.panel_mm - y + pad) * scale)
+        return ((x + pad) * scale, (ph - y + pad) * scale)
 
-    d.rectangle(
-        [px(0, cfg.panel_mm), px(cfg.panel_mm, 0)], outline=(200, 200, 200), width=1
-    )
+    d.rectangle([px(0, ph), px(pw, 0)], outline=(200, 200, 200), width=1)
     prev_end = None
     for p in paths:
         if prev_end is not None:
@@ -331,7 +340,7 @@ def cmd_preview(args):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     out = FIG_DIR / f"preview_{args.size}_{word.lower()}_seed{args.seed}.png"
     title = (
-        f"{word} jigsaw preview — {args.size} ({cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm), "
+        f"{word} jigsaw preview — {args.size} ({cfg.panel_mm:.0f}x{cfg.panel_height_mm:.0f}mm), "
         f"{len(pieces)} pieces"
     )
     render_preview(pieces, cfg, title, out)
@@ -359,6 +368,7 @@ def cmd_cut(args):
         feed_override=args.feed,
         min_segment_mm=args.min_segment_mm,
         power_percent=args.power_percent,
+        warmup_ms_first=args.warmup_ms_first,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
@@ -378,8 +388,13 @@ def cmd_cut(args):
         f"{pct}% (override)" if args.power_percent is not None else f"{pct}% (material)"
     )
     print(f"pieces: {len(pieces)}  tabs: {stats}")
-    print(f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm")
-    print(f"laser: {args.laser_mode}  power: {pwr_note}  warmup: {args.warmup_ms}ms")
+    print(
+        f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_height_mm:.0f}mm"
+    )
+    print(
+        f"laser: {args.laser_mode}  power: {pwr_note}  "
+        f"warmup: {args.warmup_ms_first}ms first / {args.warmup_ms}ms rest"
+    )
     print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
 
@@ -389,7 +404,7 @@ def cmd_cut(args):
         gcode,
         cfg,
         out.with_suffix(""),
-        title=f"{word} {args.size} cut — {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm",
+        title=f"{word} {args.size} cut — {cfg.panel_mm:.0f}x{cfg.panel_height_mm:.0f}mm",
     )
     print(f"-> {png_path}")
     print(f"-> {svg_path}")
@@ -489,7 +504,7 @@ def main():
     # preview
     pv = subs.add_parser("preview", help="render a verification diagram only")
     pv.add_argument(
-        "--size", default="full", choices=("small", "mini", "micro", "full")
+        "--size", default="full", choices=("small", "mini", "banner", "micro", "full")
     )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
@@ -498,7 +513,7 @@ def main():
     # cut
     cu = subs.add_parser("cut", help="emit cut GCode")
     cu.add_argument(
-        "--size", default="full", choices=("small", "mini", "micro", "full")
+        "--size", default="full", choices=("small", "mini", "banner", "micro", "full")
     )
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
@@ -521,10 +536,16 @@ def main():
         "--warmup-ms",
         dest="warmup_ms",
         type=int,
-        default=0,
-        help="G4 dwell (ms) after laser-on per path to defeat diode "
-        "cold-start fade-in; dial in with `cnc.py cal-laser --sweep warmup` "
-        "(default 0 = off)",
+        default=250,
+        help="G4 dwell (ms) after laser-on on cuts AFTER the first, to keep "
+        "the warm diode from fading at each restart (default 250)",
+    )
+    cu.add_argument(
+        "--warmup-ms-first",
+        dest="warmup_ms_first",
+        type=int,
+        default=750,
+        help="G4 dwell (ms) on the FIRST cut, when the diode is coldest (default 750)",
     )
     cu.add_argument(
         "--feed",

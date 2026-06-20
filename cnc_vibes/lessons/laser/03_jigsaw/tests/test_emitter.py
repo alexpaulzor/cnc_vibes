@@ -319,6 +319,55 @@ def test_full_cut_min_segment_enforced_in_output():
     assert shortest >= 0.05 - 1e-9
 
 
+@pytest.mark.parametrize("word,seed", [("NORA", 42), ("NORA", 7), ("AYANA", 3)])
+def test_full_cut_covers_every_piece_boundary(word, seed):
+    """Regression for the shared-edge bug: adjacent cells must trace their
+    shared edge with IDENTICAL vertices so dedup is clean and the emitted
+    cut covers every piece boundary with no uncut gaps. Before the fix,
+    mismatched tab-arc sampling left laser-off gaps mid-tab so pieces
+    didn't separate."""
+    from shapely.geometry import LineString
+    from shapely.ops import unary_union
+    from emitter import img_to_machine_mm
+
+    cfg = full_puzzle_config()
+    pieces, _ = generate_pieces(word, seed, cfg)
+    material = {
+        "id": "t",
+        "laser": {"power_percent": 80, "feed_mm_per_min": 500, "passes": 1},
+    }
+    g = emit_cut_gcode_full(pieces, material, cfg, word)
+
+    # Ideal boundary = union of every piece's rings (in machine mm).
+    rings = []
+    for p in pieces:
+        poly = p["polygon"]
+        for ring in [poly.exterior, *poly.interiors]:
+            rings.append(
+                LineString([img_to_machine_mm(x, y, cfg) for x, y in ring.coords])
+            )
+    ideal = unary_union(rings)
+
+    # Emitted cut = all G1 segments.
+    segs = []
+    pos = None
+    for ln in g.splitlines():
+        m = re.match(r"^G([01]) X([-\d.]+) Y([-\d.]+)", ln)
+        if not m:
+            continue
+        xy = (float(m.group(2)), float(m.group(3)))
+        if ln.startswith("G1 ") and pos is not None:
+            segs.append(LineString([pos, xy]))
+        pos = xy
+    cut = unary_union(segs)
+
+    uncovered = ideal.difference(cut.buffer(0.05))
+    assert uncovered.length < 0.1, (
+        f"{word}/{seed}: {uncovered.length:.2f}mm of piece boundary is uncut "
+        "(shared-edge dedup gap)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Contiguous-path chaining (continuous cuts, no per-edge re-fire)
 # ---------------------------------------------------------------------------
