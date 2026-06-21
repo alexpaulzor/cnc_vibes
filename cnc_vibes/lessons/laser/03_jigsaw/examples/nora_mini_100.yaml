@@ -22,9 +22,8 @@ jigsaw:
   size: mini
   word: NORA
   seed: 7
-  laser_mode: static     # M3 constant power: non-zero S, immune to M4 cold-start fade
-  warmup_ms_first: 750   # G4 dwell on the FIRST cut (diode coldest)
-  warmup_ms: 250         # G4 dwell on later cuts (keep the warm diode from fading)
+  laser_mode: static     # M3 constant power
+  lead_in_mm: 10         # re-trace each loop start hot (beats the diode warmup ramp)
   feed: 800              # cut feedrate mm/min
   min_segment_mm: 0.05   # decimate any G1 chord shorter than this
   power_percent: 100     # weak diode — cut at full power (S1000)

@@ -175,6 +175,30 @@ def decimate_min_segment(
     return out
 
 
+def _append_lead_in_overlap(
+    coords: list[tuple[float, float]], lead_in_mm: float, tol: float = 0.05
+) -> list[tuple[float, float]]:
+    """If `coords` is a CLOSED loop, re-trace its first lead_in_mm at the
+    end. The diode ramps up over the first few mm of every laser-on run,
+    so the start of a loop is cut cold/incomplete; continuing past the
+    start (laser still on, now hot) re-cuts that opening segment to finish
+    it. Open paths are returned unchanged (nowhere safe to overlap)."""
+    if lead_in_mm <= 0 or len(coords) < 3:
+        return coords
+    if math.hypot(coords[-1][0] - coords[0][0], coords[-1][1] - coords[0][1]) > tol:
+        return coords  # not a closed loop
+    out = list(coords)
+    acc = 0.0
+    prev = coords[0]
+    for p in coords[1:]:
+        out.append(p)
+        acc += math.hypot(p[0] - prev[0], p[1] - prev[1])
+        prev = p
+        if acc >= lead_in_mm:
+            break
+    return out
+
+
 def emit_cut_gcode_simple(
     pieces: list[dict],
     material: dict,
@@ -357,6 +381,200 @@ def greedy_order(
     return ordered
 
 
+def eulerian_order(
+    edges: list[LineString],
+    start_pt: tuple[float, float] = (0.0, 0.0),
+    tol: float = 0.5,
+    close_circuits: bool = True,
+) -> list[tuple[LineString, bool]]:
+    """Order edges as continuous trails so the laser walks THROUGH grid
+    junctions without lifting. Returns (edge, reversed) like greedy_order;
+    the downstream chainer fuses each trail into one continuous laser-on
+    run.
+
+    With close_circuits=True this runs a Chinese-Postman pass: odd-degree
+    junctions (where letter pockets cross grid edges) are paired and the
+    shortest connector between each pair is RE-TRACED, making every
+    connected region an even-degree graph that Hierholzer covers in a
+    single closed circuit. The re-traced segments just pass back over
+    already-cut lines (harmless on cardboard) but keep the laser on, so a
+    whole region cuts with one laser-on event instead of one per junction.
+    """
+    if not edges:
+        return []
+
+    def key(p):
+        return (round(p[0] / tol), round(p[1] / tol))
+
+    ends = [(key(e.coords[0]), key(e.coords[-1])) for e in edges]
+    pt_of = {}
+    for i, e in enumerate(edges):
+        pt_of[ends[i][0]] = e.coords[0]
+        pt_of[ends[i][1]] = e.coords[-1]
+
+    from collections import defaultdict, deque
+    import heapq
+
+    # Multigraph edge list: (u, v, geom_idx). Duplicates (re-traced
+    # connectors) append more entries pointing at the same geometry.
+    medges = [(ends[i][0], ends[i][1], i) for i in range(len(edges))]
+
+    def node_adj(active):
+        a = defaultdict(list)
+        for gi in active:
+            u, v, _ = medges[gi]
+            a[u].append(gi)
+            a[v].append(gi)
+        return a
+
+    # Connected components over the original nodes.
+    base_adj = node_adj(range(len(medges)))
+    seen = set()
+    components = []
+    for n in list(base_adj):
+        if n in seen:
+            continue
+        comp = []
+        dq = deque([n])
+        seen.add(n)
+        while dq:
+            x = dq.popleft()
+            comp.append(x)
+            for gi in base_adj[x]:
+                for y in (medges[gi][0], medges[gi][1]):
+                    if y not in seen:
+                        seen.add(y)
+                        dq.append(y)
+        components.append(set(comp))
+
+    def dijkstra(src, comp_nodes):
+        dist = {src: 0.0}
+        prev = {}  # node -> (prev_node, geom_idx)
+        pq = [(0.0, src)]
+        while pq:
+            d, u = heapq.heappop(pq)
+            if d > dist.get(u, 1e18):
+                continue
+            for gi in base_adj[u]:
+                a, b, geom = medges[gi]
+                w = edges[geom].length
+                v = b if a == u else a
+                nd = d + w
+                if nd < dist.get(v, 1e18):
+                    dist[v] = nd
+                    prev[v] = (u, gi)
+                    heapq.heappush(pq, (nd, v))
+        return dist, prev
+
+    if close_circuits:
+        for comp in components:
+            odd = [n for n in comp if len(base_adj[n]) % 2 == 1]
+            if len(odd) < 2:
+                continue
+            # All-pairs shortest among odd nodes, then greedy nearest match.
+            dmap = {}
+            pmap = {}
+            for o in odd:
+                dmap[o], pmap[o] = dijkstra(o, comp)
+            unmatched = set(odd)
+            pairs = []
+            while unmatched:
+                a = min(unmatched, key=lambda n: (n[0], n[1]))
+                unmatched.discard(a)
+                best = None
+                bestd = 1e18
+                for b in unmatched:
+                    dd = dmap[a].get(b, 1e18)
+                    if dd < bestd:
+                        bestd = dd
+                        best = b
+                if best is None:
+                    continue
+                unmatched.discard(best)
+                pairs.append((a, best))
+            # Duplicate the connector edges along each matched shortest path.
+            for a, b in pairs:
+                node = b
+                while node != a and node in pmap[a]:
+                    pn, gi = pmap[a][node]
+                    u, v, geom = medges[gi]
+                    medges.append((u, v, geom))  # re-traced connector
+                    node = pn
+
+    # Hierholzer over the (augmented) multigraph.
+    adj = node_adj(range(len(medges)))
+    used = [False] * len(medges)
+
+    def walk(start):
+        node_st = [start]
+        edge_st = [None]
+        out_nodes = []
+        out_edges = []
+        while node_st:
+            v = node_st[-1]
+            gi = None
+            while adj[v]:
+                cand = adj[v][-1]
+                if used[cand]:
+                    adj[v].pop()
+                    continue
+                gi = cand
+                break
+            if gi is None:
+                out_nodes.append(node_st.pop())
+                out_edges.append(edge_st.pop())
+            else:
+                used[gi] = True
+                a, b, _ = medges[gi]
+                other = b if a == v else a
+                node_st.append(other)
+                edge_st.append(gi)
+        out_nodes.reverse()
+        out_edges.reverse()
+        directed = []
+        for k in range(1, len(out_nodes)):
+            gi = out_edges[k]
+            a, _b, geom = medges[gi]
+            directed.append((geom, a != out_nodes[k - 1]))
+        return directed
+
+    result: list[tuple[LineString, bool]] = []
+    cur = start_pt
+    remaining = set(range(len(medges)))
+    while remaining:
+        cand_nodes = set()
+        for gi in remaining:
+            if used[gi]:
+                continue
+            cand_nodes.add(medges[gi][0])
+            cand_nodes.add(medges[gi][1])
+        cand_nodes = {n for n in cand_nodes if any(not used[gi] for gi in adj[n])}
+        if not cand_nodes:
+            break
+        odd = [
+            n for n in cand_nodes if sum(1 for gi in adj[n] if not used[gi]) % 2 == 1
+        ]
+        pool = odd or list(cand_nodes)
+        start = min(
+            pool,
+            key=lambda n: (pt_of[n][0] - cur[0]) ** 2 + (pt_of[n][1] - cur[1]) ** 2,
+        )
+        trail = walk(start)
+        remaining = {gi for gi in range(len(medges)) if not used[gi]}
+        if not trail:
+            continue
+        for geom, rev in trail:
+            e = edges[geom]
+            if rev:
+                result.append((LineString(list(e.coords)[::-1]), True))
+            else:
+                result.append((e, False))
+        last_geom, last_rev = trail[-1]
+        lc = list(edges[last_geom].coords)
+        cur = lc[0] if last_rev else lc[-1]
+    return result
+
+
 def chain_contiguous_paths(
     ordered: list[tuple[LineString, bool]], tol_px: float = 0.5
 ) -> list[list[tuple[float, float]]]:
@@ -402,6 +620,7 @@ def emit_cut_gcode_full(
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
     warmup_ms_first: int | None = None,
+    lead_in_mm: float = 0.0,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -435,10 +654,15 @@ def emit_cut_gcode_full(
             interior.append(e)
 
     start_pt = (cfg.margin_px, cfg.margin_px)
+    # Eulerian routing keeps the laser cutting continuously through grid
+    # junctions (fewest laser-on events), which matters when the diode
+    # ramps up over the first few mm after every restart. Letters /
+    # interior / panel are still ordered as tiers (panel last so stock
+    # stays attached), but each tier is walked as continuous trails.
     ordered = (
-        greedy_order(letters, start_pt)
-        + greedy_order(interior, start_pt)
-        + greedy_order(panel, start_pt)
+        eulerian_order(letters, start_pt)
+        + eulerian_order(interior, start_pt)
+        + eulerian_order(panel, start_pt)
     )
 
     # Convert each ordered edge to machine mm (honoring greedy_order's
@@ -462,8 +686,13 @@ def emit_cut_gcode_full(
     ]
     if first_ms > 0 or warmup_ms > 0:
         extra.append(
-            f"warmup: G4 P{first_s:.3f} on first cut, P{warmup_s:.3f} on the rest "
-            "(diode cold-start)"
+            f"warmup dwell: G4 P{first_s:.3f}/{warmup_s:.3f} (note: GRBL laser "
+            "mode keeps the laser OFF while stationary, so dwells may not warm it)"
+        )
+    if lead_in_mm > 0:
+        extra.append(
+            f"lead-in: closed loops re-trace their first {lead_in_mm:.1f}mm at the "
+            "end (laser warm) to finish the cold under-cut start"
         )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
@@ -481,6 +710,7 @@ def emit_cut_gcode_full(
         coords_mm = decimate_min_segment(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
             continue
+        coords_mm = _append_lead_in_overlap(coords_mm, lead_in_mm)
         x0, y0 = coords_mm[0]
         lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")

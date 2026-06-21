@@ -99,6 +99,7 @@ def _emit_cut_for(
     min_segment_mm=0.0,
     power_percent=None,
     warmup_ms_first=None,
+    lead_in_mm=0.0,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -124,6 +125,7 @@ def _emit_cut_for(
         min_segment_mm=min_segment_mm,
         power_percent=power_percent,
         warmup_ms_first=warmup_ms_first,
+        lead_in_mm=lead_in_mm,
     )
 
 
@@ -369,6 +371,7 @@ def cmd_cut(args):
         min_segment_mm=args.min_segment_mm,
         power_percent=args.power_percent,
         warmup_ms_first=args.warmup_ms_first,
+        lead_in_mm=args.lead_in_mm,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
@@ -387,13 +390,14 @@ def cmd_cut(args):
     pwr_note = (
         f"{pct}% (override)" if args.power_percent is not None else f"{pct}% (material)"
     )
+    laser_on = gcode.count("\nM3 ") + gcode.count("\nM4 ")
     print(f"pieces: {len(pieces)}  tabs: {stats}")
     print(
         f"origin: {args.origin}  panel: {cfg.panel_mm:.0f}x{cfg.panel_height_mm:.0f}mm"
     )
     print(
         f"laser: {args.laser_mode}  power: {pwr_note}  "
-        f"warmup: {args.warmup_ms_first}ms first / {args.warmup_ms}ms rest"
+        f"laser-on events: {laser_on}  lead-in: {args.lead_in_mm}mm"
     )
     print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
@@ -536,16 +540,26 @@ def main():
         "--warmup-ms",
         dest="warmup_ms",
         type=int,
-        default=250,
-        help="G4 dwell (ms) after laser-on on cuts AFTER the first, to keep "
-        "the warm diode from fading at each restart (default 250)",
+        default=0,
+        help="G4 dwell (ms) after laser-on. NOTE: GRBL laser mode keeps the "
+        "laser OFF while stationary, so dwells usually do NOT warm the diode "
+        "— prefer --lead-in-mm (default 0 = off)",
     )
     cu.add_argument(
         "--warmup-ms-first",
         dest="warmup_ms_first",
         type=int,
-        default=750,
-        help="G4 dwell (ms) on the FIRST cut, when the diode is coldest (default 750)",
+        default=0,
+        help="G4 dwell (ms) on the first cut (default 0; see --warmup-ms)",
+    )
+    cu.add_argument(
+        "--lead-in-mm",
+        dest="lead_in_mm",
+        type=float,
+        default=10.0,
+        help="re-trace the first N mm of each closed cut loop at the end "
+        "(laser warm) to finish the cold under-cut start; the diode ramps up "
+        "over the first few mm of every laser-on run (default 10)",
     )
     cu.add_argument(
         "--feed",
