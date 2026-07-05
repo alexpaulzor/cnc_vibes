@@ -4,6 +4,8 @@ Generate cuttable GCode for a wooden jigsaw puzzle that embeds a name into the c
 
 Loose-fit puzzle: centerline cuts, kerf becomes the natural clearance between pieces.
 
+See [ALGORITHMS.md](ALGORITHMS.md) for the accumulated design rules, the geometry/cut-routing algorithms (shared edges, Eulerian/Chinese-Postman continuous cuts, lead-in warmup), laser/material rules, and open TODOs.
+
 ## How to use
 
 Single CLI: `jigsaw.py` at the lesson root. Four subcommands.
