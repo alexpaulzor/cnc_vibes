@@ -18,11 +18,11 @@ Usage:
 
   python spiral_cal.py --sweep feed --values 1500,2000,2500,3000,3500 \\
       --material plywood_baltic_birch_3mm --power 80 \\
-      --laser-mode static --laser-warmup-ms 250
+      --laser-mode static
 
   python spiral_cal.py --sweep passes --values 1,2,3,4 \\
       --material plywood_baltic_birch_6mm --power 100 --feed 200 \\
-      --laser-mode static --laser-warmup-ms 300
+      --laser-mode static
 
   python spiral_cal.py interactive       # prompts walk you through the same
 
@@ -149,7 +149,6 @@ def _emit_patch(
     feed: int,
     passes: int,
     mode: str,
-    warmup_ms: int,
     z_mm: float | None = None,
 ) -> list[str]:
     """Emit GCode for a single test patch at (cx, cy).
@@ -158,7 +157,6 @@ def _emit_patch(
     in this patch — for sweeping focal distance via the CNC's Z axis.
     """
     on = _power_code(mode)
-    warmup_s = max(0, warmup_ms) / 1000.0
     r_outer = PATCH_OUTER_DIAMETER_MM / 2
 
     prologue: list[str] = []
@@ -176,8 +174,6 @@ def _emit_patch(
             f"{on} S{s}",
             f"F{feed}",
         ]
-        if warmup_ms > 0:
-            lines.append(f"G4 P{warmup_s:.3f}  ; warmup")
         for p in range(passes):
             if passes > 1:
                 lines.append(f"; pass {p + 1}/{passes}")
@@ -236,7 +232,6 @@ def generate_sweep(
     sweep_var: str,
     values: list,
     mode: str = "dynamic",
-    warmup_ms: int = 0,
     power_percent: float | None = None,
     feed_mm_per_min: int | None = None,
     passes: int | None = None,
@@ -254,10 +249,8 @@ def generate_sweep(
     z_mm: if set (and sweep_var != "z"), all patches use this absolute
     Z. Default None = leave Z wherever the user parked.
     """
-    if sweep_var not in ("power", "feed", "passes", "z", "warmup"):
-        raise SystemExit(
-            f"--sweep must be power|feed|passes|z|warmup, got {sweep_var!r}"
-        )
+    if sweep_var not in ("power", "feed", "passes", "z"):
+        raise SystemExit(f"--sweep must be power|feed|passes|z, got {sweep_var!r}")
     if not values:
         raise SystemExit("--values must list at least one value")
     values = _coerce(values, sweep_var)
@@ -287,8 +280,6 @@ def generate_sweep(
         f"; {len(values)} patch(es), {PATCH_OUTER_DIAMETER_MM}mm OD, "
         f"{PATCH_GAP_MM}mm gap, hex-spiral from origin"
     )
-    if warmup_ms > 0:
-        header.append(f"; warmup dwell {warmup_ms}ms per ring start")
     header.append("")
     header.append("; Patch layout (cut order):")
     layout: list[tuple[float, float, str]] = []
@@ -302,11 +293,8 @@ def generate_sweep(
     for i, ((cx, cy), val) in enumerate(zip(centers, values), start=1):
         params = dict(base)
         patch_z = z_mm
-        patch_warmup = warmup_ms
         if sweep_var == "z":
             patch_z = float(val)
-        elif sweep_var == "warmup":
-            patch_warmup = int(val)
         else:
             params[sweep_var] = val
         s = _power_s(params["power"])
@@ -321,7 +309,6 @@ def generate_sweep(
                 feed=int(params["feed"]),
                 passes=max(1, int(params["passes"])),
                 mode=mode,
-                warmup_ms=patch_warmup,
                 z_mm=patch_z,
             )
         )
@@ -370,8 +357,8 @@ def interactive() -> argparse.Namespace:
     args.material = _ask(
         "Material id (from profiles/laser_materials.yaml)", "cardboard_thin_1mm"
     )
-    args.sweep = _ask("Sweep what? (power|feed|passes|z|warmup)", "power")
-    if args.sweep not in ("power", "feed", "passes", "z", "warmup"):
+    args.sweep = _ask("Sweep what? (power|feed|passes|z)", "power")
+    if args.sweep not in ("power", "feed", "passes", "z"):
         sys.exit(f"invalid sweep {args.sweep!r}")
 
     units = {
@@ -379,7 +366,6 @@ def interactive() -> argparse.Namespace:
         "feed": "mm/min",
         "passes": "passes",
         "z": "mm (WCS Z)",
-        "warmup": "ms (G4 dwell)",
     }[args.sweep]
     print(f"Enter the {args.sweep} values to test in {units}, comma-separated.")
     if args.sweep == "power":
@@ -390,10 +376,6 @@ def interactive() -> argparse.Namespace:
         ex = "-2,-1,0,1,2"
         print("  NOTE: values are ABSOLUTE WCS Z (mm). Park at a safe Z first.")
         print("  Going too low will crash the laser head into the stock.")
-    elif args.sweep == "warmup":
-        ex = "0,100,200,300,400"
-        print("  Sweeps the cold-start dwell. Lower power so a too-short dwell")
-        print("  visibly under-cuts; find the shortest dwell that cuts cleanly.")
     else:
         ex = "1,2,3,4"
     args.values = _ask(f"Values (e.g. {ex})")
@@ -413,12 +395,6 @@ def interactive() -> argparse.Namespace:
         args.z = float(args.z)
 
     args.laser_mode = _ask("Laser mode (dynamic|static)", "static")
-    if args.sweep == "warmup":
-        args.laser_warmup_ms = 0  # swept per-patch; base unused
-    else:
-        args.laser_warmup_ms = _ask_int(
-            "Warmup dwell ms (200-300 for cold-start fade)", 250
-        )
 
     args.out = None  # default path
     args.no_validate = False
@@ -439,14 +415,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--material", help="id from profiles/laser_materials.yaml")
     p.add_argument(
         "--sweep",
-        choices=("power", "feed", "passes", "z", "warmup"),
+        choices=("power", "feed", "passes", "z"),
         help="which variable to vary across patches",
     )
     p.add_argument(
         "--values",
         help="comma-separated values for the swept variable. For --sweep z "
-        "these are ABSOLUTE WCS Z (mm); going too low crashes the head. "
-        "For --sweep warmup these are G4 dwell milliseconds per patch.",
+        "these are ABSOLUTE WCS Z (mm); going too low crashes the head.",
     )
     p.add_argument(
         "--power", type=float, help="override power_percent (non-swept axis)"
@@ -466,12 +441,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="static",
         help="M4 dynamic vs M3 static (default static — calibration "
         "results are easier to interpret with constant power)",
-    )
-    p.add_argument(
-        "--laser-warmup-ms",
-        type=int,
-        default=250,
-        help="G4 dwell after M3/M4 to defeat cold-start fade-in (default 250)",
     )
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--no-validate", action="store_true")
@@ -505,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.material:
         sys.exit("error: --material is required (or use `interactive`)")
     if not args.sweep:
-        sys.exit("error: --sweep is required (power|feed|passes|z|warmup)")
+        sys.exit("error: --sweep is required (power|feed|passes|z)")
     if not args.values:
         sys.exit("error: --values is required (comma-separated)")
 
@@ -516,7 +485,6 @@ def main(argv: list[str] | None = None) -> int:
         args.sweep,
         values,
         mode=args.laser_mode,
-        warmup_ms=args.laser_warmup_ms,
         power_percent=args.power,
         feed_mm_per_min=args.feed,
         passes=args.passes,

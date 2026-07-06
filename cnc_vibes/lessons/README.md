@@ -10,7 +10,7 @@ Each lesson directory has its own `README.md` (user-facing: goal, prereqs, usage
 |---|---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](laser/01_spacer/) | ✅ | Fully automated. Pure Python → GCode. |
 | 3b | [Laser calibration pattern (power × passes × speed)](laser/02_calibration/) | ✅ | Fully automated. Pure Python → GCode with engraved labels. |
-| 3c | [Wooden jigsaw with name-preserving cuts + photo raster](laser/03_jigsaw/) | ✅ | Productionized: `jigsaw.py` CLI (preview / cut / raster / mockup). Lollipop tabs, tab-shifting, sliver merging, Floyd-Steinberg or grayscale photo engrave, multi-line per-letter fonts, optional wavy edges. |
+| 3c | Wooden jigsaw with name-preserving cuts + photo raster — **moved to `~/src/vibes/jigsawzall`** | ➡️ | Now its own repo. |
 | 3d | [Laser-cut spoilboard with M6 hole grid](laser/04_spoilboard/) | ✅ | Parametric grid + auto-tiling for designs larger than stock. Pure Python → GCode. |
 | 3e | [Laser test card (kerf / tram / dimensional)](laser/05_test_card/) | ✅ | Small square-in-square cut, centered on WCS origin. Measure outer + inner with calipers to back out effective kerf and check tram. Fast pre-flight before any real cut. |
 | 3f | [Spiral laser calibration card](laser/06_spiral_cal/) | ✅ | Hex spiral of 15mm double-spiral patches starting at origin. Sweeps power / feed / passes on scrap material; bits falling out = visual through-cut confirmation. Top-level shim: `cnc.py cal-laser`. |
@@ -51,7 +51,7 @@ For one-off shell-driven cuts (rrect + holes, circle pocket, label engrave), use
 
 ## Plasma (future)
 
-[`plasma/`](plasma/) — the ArcFony Cut53M Pro as a third tool head. **Not for this iteration; requires mechanical fabrication** (outrigger mount, opto-isolated electrical interface). SPEC captures the full workstream design.
+The **ArcFony Cut53M Pro** as a third tool head. **Not for this iteration; requires mechanical fabrication** (outrigger mount, opto-isolated electrical interface). Lesson removed; machine noted here for context.
 
 ## Suggested reading order
 

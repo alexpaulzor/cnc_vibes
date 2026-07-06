@@ -14,7 +14,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 |---|---|---|
 | 3a | [Parametric laser-cut PCB spacer](lessons/laser/01_spacer/) | ✅ |
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
-| 3c | [Photo-engraved wooden jigsaw with name-preserving cuts](lessons/laser/03_jigsaw/) | ✅ Productionized 2026-05. Single CLI (`jigsaw.py`) with `preview` / `cut` / `raster` / `mockup` subcommands; parametric geometry / encoder / emitter modules at lesson root; tests + regression locks vs scratch. |
+| 3c | Photo-engraved wooden jigsaw with name-preserving cuts — **moved to `~/src/vibes/jigsawzall`** | ➡️ Now its own repo (letter-aligned grid, dither raster, standalone CLI). |
 | 3d | [Laser-cut spoilboard with M6 hole grid](lessons/laser/04_spoilboard/) | ✅ Parametric grid + auto-tiling for stock larger than design. Default matches Anolex 4030 bed (400×500mm, 9×10 holes @ 45mm). |
 | 3e | [Laser test card (kerf / tram / dimensional)](lessons/laser/05_test_card/) | ✅ Small square-in-square cut centered on WCS origin. Quick pre-flight before any real cut — measure outer + inner with calipers to back out kerf and confirm tram. |
 | 3f | [Spiral laser calibration card](lessons/laser/06_spiral_cal/) | ✅ Hex spiral of 15mm double-spiral patches starting at WCS origin. Sweeps power, feed, or passes on a scrap material; through-cut visually confirmed by pieces falling out. Exposed as `cnc.py cal-laser`. |
@@ -42,7 +42,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 
 | # | Lesson | Status |
 |---|---|---|
-| 5 | [ArcFony Cut53M Pro as third tool head](lessons/plasma/) | ⛔ blocked — requires mechanical fabrication (outrigger mount, opto-isolator) |
+| 5 | ArcFony Cut53M Pro as third tool head | ⛔ blocked — requires mechanical fabrication (outrigger mount, opto-isolator). Machine noted for context; lesson removed. |
 
 ## Active library — `scripts/cam.py` (parametric 2.5D CAM, no FreeCAD)
 
@@ -77,41 +77,24 @@ The lessons build on each other. Recommended sequence:
 8. **Int-01** (inspect) — first machine-talking tool; small scope, big preflight win
 9. **Int-03** (probe-corner) — automates per-job WCS ritual; depends on Int-01
 10. **Int-04** (laser cal) — interactive iteration; depends on Int-01
-11. **3c** (jigsaw) — the productionized end-to-end example: text + photo + cut
-12. **3d** (spoilboard) — generic auto-tiling pattern for designs larger than stock
-13. **Int-02** (snapshot) — useful but lower priority; defer until camera bracket exists
-14. **5** (plasma) — separate workstream
+11. **3d** (spoilboard) — generic auto-tiling pattern for designs larger than stock
+12. **Int-02** (snapshot) — useful but lower priority; defer until camera bracket exists
+13. **5** (plasma) — separate workstream
 
-## Active work — Lesson 3c jigsaw sub-roadmap
+(jigsaw moved to its own repo, `~/src/vibes/jigsawzall`)
 
-The jigsaw lesson is the only one in flight. Current state in `lessons/laser/03_jigsaw/scratch/`:
+## Jigsaw (moved out)
 
-- ✅ Phase 1: cell-grid puzzle with Bezier knob tabs
-- ✅ Phase 2: sub-piece detection + tab-coverage analysis
-- ✅ Phase 4: letters as intact polygons, carved from cell pockets (Phase 3 abandoned)
-- ✅ Phase 5: tab shifting away from letters + sliver merging
-- ✅ Lollipop tab geometry (stem + circle, mechanical undercut)
-- ✅ One-tab-radius clearance enforcement between tab cavities and letter edges
-- ✅ Phase 6: small puzzle test variant (4 pieces + 1 letter, ~80×80mm)
-- ✅ GCode emission from polygon set (centerline cuts, validator-clean)
-- ✅ Simple inside-out cut ordering (letters first, then cells)
-- ✅ Phase 7: photo raster engraving (halftone via Floyd-Steinberg, grayscale via per-pixel power modulation); emits raster-only, cut-only, and combined GCode
-- ✅ Phase 8: full NORA-scale (300×300mm, 44-piece) GCode emitter with edge dedup (`unary_union` + `linemerge`) + containment-aware ordering (letter → interior → panel border) + greedy nearest-neighbor travel reduction
-- ✅ Productionized to canonical lesson layout: `jigsaw.py` CLI (preview/cut/raster/mockup), `geometry.py` + `encoder.py` + `emitter.py` modules, `tests/` at lesson root with regression locks against scratch
-- 📋 Delete `scratch/*` after the productionized code has been verified in actual cuts
-- ✅ `job.yaml` integration (declarative config; `cnc.py jigsaw <yaml>` dispatches + `cnc.py preflight <yaml>` walks the laser checklist). Three sample yamls in [`examples/`](lessons/laser/03_jigsaw/examples/).
-- 📋 Empirical gamma LUT for grayscale raster — bake the power-vs-darkness relationship for plywood/MDF into a lookup table (uses Int-04 `--mode engrave` patches as raw data)
+The photo-engraved jigsaw lesson graduated to its own repo: `~/src/vibes/jigsawzall` (letter-aligned grid, dither photo raster, standalone CLI). Its detailed roadmap now lives there.
+
 
 ## Next session candidates
 
 Software-side, all unblocked (the bed is on the way but no software work depends on it):
 
-- **Delete `scratch/*`** after the user verifies the productionized jigsaw cuts cleanly. Small commit, just cleanup.
-- **Empirical gamma curve for grayscale raster** — bake the power-vs-darkness relationship for plywood/MDF into a lookup table so jigsaw raster's grayscale mode produces accurate tonal reproduction. Uses Int-04 `--mode engrave` patches as raw data.
-- **Red-team test workflow** — user provides novel words/photos to surface corner cases the NORA canonical case doesn't.
+- **`scripts/cam.py` V-carve** (medial-axis variable-depth `engrave_text`) — bigger algorithmic problem; constant-depth handles most cases today.
+- (Jigsaw + photo-raster work now lives in `~/src/vibes/jigsawzall`.)
 
 Hardware-side (waiting on bed arrival):
 - First-corner Z-focus measurement after the bed is installed.
 - Run Int-04 cal on a real piece of stock to dial in cutting params.
-- Cut the small puzzle test (phase6_small.gcode) on the dialed-in params.
-- After confirming fit looks right at small scale, cut the full NORA puzzle (phase8 output).

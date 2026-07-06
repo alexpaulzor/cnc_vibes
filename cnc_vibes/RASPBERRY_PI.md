@@ -25,11 +25,11 @@ Every C-extension dep ships prebuilt 64-bit ARM wheels — no source compilation
 
 Source: `pypi.org/project/<package>/#files`.
 
-> **Why `opencv-python-headless` if we don't do camera work?** OpenCV here is used as a *contour-extraction library*, not a vision library. The `-headless` suffix just drops GUI bindings (no `cv2.imshow`, no X11 dep), which makes the package smaller and Pi-friendly. The three usages in the repo:
+> **Why `opencv-python-headless` if we don't do camera work?** OpenCV here is used as a *contour-extraction library*, not a vision library. The `-headless` suffix just drops GUI bindings (no `cv2.imshow`, no X11 dep), which makes the package smaller and Pi-friendly. The usages in the repo:
 > 1. `scripts/cam.py:751` — `cv2.findContours` for rasterizing text glyphs into polygons (`engrave_text` op).
-> 2. `lessons/laser/03_jigsaw/geometry.py:373` — same contour-extraction trick for jigsaw letter shapes.
-> 3. `lessons/integration/02_snapshot/snapshot.py:115` — the *one* actual camera use (optional, gated on a USB webcam being plugged in).
+> 2. `lessons/integration/02_snapshot/snapshot.py:115` — the *one* actual camera use (optional, gated on a USB webcam being plugged in).
 >
+> (The jigsaw lesson used the same contour trick but has moved to `~/src/vibes/jigsawzall`.)
 > So even on a Pi with no camera, `opencv-headless` is doing useful work for text/letter contour tracing.
 
 ## CAMotics is desktop-only

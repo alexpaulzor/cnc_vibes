@@ -16,11 +16,6 @@ You pick ONE variable to sweep:
 - **power** — the laser power S value (as % of $30 max)
 - **feed** — the cut feedrate (mm/min)
 - **passes** — number of times each ring is re-traced
-- **warmup** — the per-patch G4 cold-start dwell in milliseconds.
-  Diode lasers fade in from cold, so a too-short dwell under-cuts the
-  start of each ring. Sweep this at a deliberately low power so a short
-  dwell visibly fails, then pick the shortest dwell that still cuts
-  cleanly. Values are dwell ms (e.g. `0,100,200,300,400`).
 - **z** — the carriage Z (absolute WCS mm). The Anolex is a 3-axis CNC
   with the laser mounted to the Z carriage, so moving Z up/down
   changes the focal distance between laser and material — same effect
@@ -47,13 +42,13 @@ sweep needs only ring 0 + part of ring 1 (fits in ~50mm square).
 # Top-level shim
 python cnc.py cal-laser --material cardboard_thin_1mm \
     --sweep power --values 30,40,50,60,70 \
-    --laser-mode static --laser-warmup-ms 250
+    --laser-mode static
 
 # Or invoke the script directly
 python lessons/laser/06_spiral_cal/spiral_cal.py \
     --material plywood_baltic_birch_3mm \
     --sweep feed --values 1500,2000,2500,3000,3500 \
-    --power 80 --laser-mode static --laser-warmup-ms 300
+    --power 80 --laser-mode static
 
 # Focal-distance (Z) sweep — emits G0 Z<value> before each patch.
 # NOTE: use --values=-2,-1,0,1,2 (= form) to keep argparse from
@@ -61,19 +56,12 @@ python lessons/laser/06_spiral_cal/spiral_cal.py \
 python cnc.py cal-laser --material cardboard_thin_1mm \
     --sweep z --values=-2,-1,0,1,2 --power 50 --feed 2500
 
-# Cold-start dwell sweep — varies the per-patch G4 warmup. Run at a low
-# power so a too-short dwell visibly under-cuts the start of each ring.
-python cnc.py cal-laser --material cardboard_corrugated_3mm \
-    --sweep warmup --values 0,100,200,300,400 \
-    --power 40 --feed 1400 --laser-mode static
-
 # Guided interactive mode (prompts walk through all the choices)
 python cnc.py cal-laser interactive
 ```
 
 Defaults: `--laser-mode static` (M3 — calibration is easier to read
-with constant power, and avoids any M4 firmware quirks),
-`--laser-warmup-ms 250` (defeats cold-start fade-in per patch).
+with constant power, and avoids any M4 firmware quirks).
 
 ## How to read the output
 

@@ -13,11 +13,11 @@ You want CNC parts to be **scripts**, not click-trails. You're OK reading Python
 **A — Pure Python (no FreeCAD).** Best for parametric 2.5D parts (puzzles, spacers, hole grids, pockets, profile cuts). Define the shape as a `shapely` polygon or call a pre-built lesson script; emit GCode directly; preview in CAMotics; validate; cut. No GUI except CAMotics for inspection.
 
 ```bash
-# Example: full NORA jigsaw puzzle, MDF 3mm
-python lessons/laser/03_jigsaw/jigsaw.py cut --size full --word NORA --material mdf_3mm
-python cnc.py validate lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
-python cnc.py preview  lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode  # CAMotics
-python cnc.py preflight lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
+# Photo-engraved jigsaw puzzles moved to their own repo: ~/src/vibes/jigsawzall
+# This repo (cnc_vibes) is the core toolchain + spindle/laser lessons. Example:
+python cnc.py cam profile --head laser --shape circle --diameter 30 --material cardboard_thin_1mm
+python cnc.py preview  build/cam_cli/<generated>.gcode   # CAMotics 3D toolpath sim
+python cnc.py validate build/cam_cli/<generated>.gcode   # machine-envelope safety
 # ...load in your sender, cut...
 ```
 
@@ -33,7 +33,7 @@ Pick the lesson that matches what you actually want to cut. Each link is a self-
 |---|---|---|
 | **First time, want fastest path to a cut** | [3a laser spacer](lessons/laser/01_spacer/) | Smallest end-to-end lesson. Pure Python → laser GCode. Establishes the parametric pattern. Cuts in <2 minutes. |
 | **Have a CNC router (not laser) and want a 2.5D part** | [4e generic CAM](lessons/mill/05_generic_cam/) | Worked example: composes `profile_cut` + `pocket_mill` + `drill_array` into one mounting plate. The reference for the code-first router workflow. |
-| **Want to engrave a photo / make a jigsaw** | [3c jigsaw](lessons/laser/03_jigsaw/) | The productionized end-to-end example. Halftone + grayscale photo raster, multi-line per-letter fonts, optional wavy edges. |
+| **Want to engrave a photo / make a jigsaw** | moved to its own repo: `~/src/vibes/jigsawzall` | Photo raster + name-preserving jigsaw puzzles now live there. |
 | **Need to characterize an unknown laser** | [3b laser calibration](lessons/laser/02_calibration/) and then [Int-04 interactive cal](lessons/integration/04_interactive_laser_cal/) | Static matrix first, interactive iteration for the focus/power sweet spot. |
 | **Want a 3D part you can't express as 2.5D shapely** | `cnc_for_the_scad.md` (Workflow B deep-dive) + [4a router spacer](lessons/mill/01_spacer/) (frustum case) | FreeCAD path. Slower setup, handles arbitrary 3D. |
 | **Cutting metal** | [4c steel center-punch](lessons/mill/02_steel_center_punch/), then [4d aluminum trochoidal](lessons/mill/03_aluminum/) | Sanity-check spindle on metal with no cutting first; then graduate to actual material removal. |
@@ -113,10 +113,9 @@ cnc_vibes/
 ├── examples/                          ← per-job parts (Workflow B)
 │   └── hole_in_sheet/                 ← reference example with worked CAM
 ├── lessons/                           ← progressive tutorials — see lessons/README.md
-│   ├── laser/    {spacer, calibration, jigsaw, spoilboard}
+│   ├── laser/    {spacer, calibration, spoilboard, test-card, spiral-cal}
 │   ├── mill/     {spacer, steel-center-punch, aluminum-trochoidal, pcb-drill}
-│   ├── integration/  {inspect, snapshot, probe-corner, interactive-laser-cal}
-│   └── plasma/                         ← future tool head (specced, hardware-blocked)
+│   └── integration/  {inspect, snapshot, probe-corner, interactive-laser-cal}
 ├── scripts/
 │   ├── cam.py                          ← parametric 2.5D CAM library (profile/pocket/drill/engrave)
 │   ├── openscad_loader.py              ← OpenSCAD .scad/.svg → shapely Polygons (feeds cam.py)
@@ -133,12 +132,13 @@ cnc_vibes/
 Progressive tutorials, each demonstrating a technique you can reuse on your own jobs. Full index + suggested reading order in [lessons/README.md](lessons/README.md); [ROADMAP.md](ROADMAP.md) is the at-a-glance status view.
 
 **Implemented and tested**:
-- **Laser**: [3a spacer](lessons/laser/01_spacer/), [3b calibration matrix](lessons/laser/02_calibration/), [3c jigsaw](lessons/laser/03_jigsaw/) (productionized), [3d spoilboard](lessons/laser/04_spoilboard/)
+- **Laser**: [3a spacer](lessons/laser/01_spacer/), [3b calibration matrix](lessons/laser/02_calibration/), [3d spoilboard](lessons/laser/04_spoilboard/) — (jigsaw moved to `~/src/vibes/jigsawzall`)
 - **Mill**: [4a router spacer](lessons/mill/01_spacer/), [4b PCB drill](lessons/mill/04_pcb/), [4c steel center-punch](lessons/mill/02_steel_center_punch/), [4d aluminum trochoidal](lessons/mill/03_aluminum/), [4e generic 2.5D CAM](lessons/mill/05_generic_cam/)
 - **Integration** (talk to the machine): [Int-01 inspect](lessons/integration/01_inspect/), [Int-02 snapshot](lessons/integration/02_snapshot/), [Int-03 probe-corner](lessons/integration/03_probe_corner/), [Int-04 interactive laser cal](lessons/integration/04_interactive_laser_cal/)
 
 **Specced for future**:
-- **5 plasma** — ArcFony Cut53M Pro as third tool head, gated on mechanical fabrication
+- **plasma** — ArcFony Cut53M Pro as a third tool head, gated on mechanical fabrication (machine noted for context; lesson removed)
+- **jigsaw** — moved to its own repo, `~/src/vibes/jigsawzall`
 
 ## The profile concept (machine-as-YAML)
 

@@ -409,45 +409,10 @@ def _preflight_from_yaml(yaml_path: Path, print_only: bool) -> None:
 
 
 def cmd_jigsaw(args: argparse.Namespace) -> None:
-    """Dispatch a jigsaw job.yaml to lessons/laser/03_jigsaw/jigsaw.py.
-
-    Reads the job.yaml, validates the schema, derives the right CLI
-    args, and shells out. Saves the user from remembering which combo
-    of --size / --word / --mode flags this particular job needs.
-    """
-    yaml_path = Path(args.job_yaml)
-    if not yaml_path.exists():
-        sys.exit(f"error: job.yaml not found: {yaml_path}")
-
-    data = load_job_yaml(yaml_path)
-    if data.get("head") != "laser":
-        sys.exit(f"error: cnc.py jigsaw expects head: laser, got {data.get('head')!r}")
-
-    # Lazy import: this lesson's module isn't on sys.path by default,
-    # and we don't want to drag PIL/shapely into every cnc.py invocation.
-    jigsaw_dir = ROOT / "lessons" / "laser" / "03_jigsaw"
-    sys.path.insert(0, str(jigsaw_dir))
-    try:
-        from job_yaml import jigsaw_argv
-    finally:
-        sys.path.remove(str(jigsaw_dir))
-
-    argv = jigsaw_argv(data)
-    script = jigsaw_dir / "jigsaw.py"
-    cmd = [sys.executable, str(script), *argv]
-    print("->", " ".join(cmd))
-    rc = subprocess.run(cmd).returncode
-    if rc != 0:
-        sys.exit(rc)
-
-    # Confirm the gcode path the yaml declared was actually written.
-    declared = ROOT / data["gcode"]
-    if not declared.exists():
-        print(
-            f"\nwarning: jigsaw.py succeeded but {data['gcode']} does not exist. "
-            f"Check the gcode: key in {yaml_path} matches what jigsaw.py wrote.",
-            file=sys.stderr,
-        )
+    raise SystemExit(
+        "cnc.py jigsaw was removed: the jigsaw project moved to its own repo "
+        "(~/src/vibes/jigsawzall). Run jigsaw.py there directly."
+    )
 
 
 def cmd_find_machine(args: argparse.Namespace) -> None:
@@ -696,16 +661,6 @@ def main() -> None:
         help="print the checklist without prompting (for review/printing)",
     )
     pf.set_defaults(func=cmd_preflight)
-
-    jg = subs.add_parser(
-        "jigsaw",
-        help="dispatch a jigsaw job.yaml to lessons/laser/03_jigsaw/jigsaw.py",
-    )
-    jg.add_argument(
-        "job_yaml",
-        help="path to a jigsaw job.yaml (e.g. lessons/laser/03_jigsaw/examples/nora_300.yaml)",
-    )
-    jg.set_defaults(func=cmd_jigsaw)
 
     fm = subs.add_parser(
         "find-machine",

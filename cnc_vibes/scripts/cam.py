@@ -2,7 +2,7 @@
 
 Single-file library that produces validator-clean GCode for the common
 2.5D spindle ops without needing a CAM GUI. Same pattern as the laser
-emitters in lessons/laser/{01_spacer,03_jigsaw}: pure function takes a
+emitter in lessons/laser/01_spacer: pure function takes a
 shapely shape + tool + material, returns GcodeOutput.
 
 Operations (this file):
@@ -714,9 +714,8 @@ _ENGRAVE_PX_PER_MM = 20
 
 def _load_font_at_cap_height(font_path: str, sample_char: str, target_cap_px: int):
     """Load font_path at whatever pixel size makes sample_char's cap-height
-    ~= target_cap_px. Same approach as the multi-line text renderer in
-    lessons/laser/03_jigsaw/scratch/redteam_multiline.py: probe at a fixed
-    size to derive scale, then refine once."""
+    ~= target_cap_px: probe at a fixed size to derive scale, then refine
+    once."""
     from PIL import ImageFont
 
     probe = ImageFont.truetype(font_path, 200)
