@@ -696,24 +696,40 @@ def cmd_glyphs(args):
         d.text((ox, oy), ch, fill=(120, 120, 120), font=glyph_font)
         d.rectangle([l, t, r, b], outline=(185, 205, 235))
 
-        # AUTOMATIC origin from the glyph raster (red = the general rule).
+        # Operative anchors from the general rules (glyph_seam / glyph_hcut_y).
         m = Image.new(
             "L", (_GLYPH_SHEET_CELL, _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H), 0
         )
         ImageDraw.Draw(m).text((ox - cx, oy - cy), ch, fill=255, font=glyph_font)
         ink = np.asarray(m) > 80
-        anx, any_ = glyph_origins_mod.auto_glyph_origin(ink)
-        d.text((cx + 6, cy + 4), "", font=label_font)
-        _draw_crosshair(d, l + anx * (r - l), t + any_ * (b - t), (220, 30, 30))
+        nx, through = glyph_origins_mod.glyph_seam(ink)
+        hcy = glyph_origins_mod.glyph_hcut_y(ink)
+        seam_px = l + nx * (r - l)
+        cxc = (l + r) / 2.0
 
-        # Manual override (blue) shown only where one exists, for comparison.
-        if ch.upper() in glyph_origins_mod.USER_ORIGIN_OVERRIDES:
-            mx, my = glyph_origins_mod.glyph_origin_px(ch, ink_bbox)
-            _draw_crosshair(d, mx, my, (30, 90, 220))
+        if through:
+            # vertical seam (blue) x horizontal row boundary (green); dot = anchor
+            d.line([(seam_px, t), (seam_px, b)], fill=(30, 90, 220), width=2)
+            hy = t + hcy * (b - t)
+            d.line([(l, hy), (r, hy)], fill=(20, 160, 60), width=2)
+            _draw_crosshair(d, seam_px, hy, (220, 30, 30))
+            kind = "split"
+        else:
+            # capped-open (C, G): no vertical slice (dashed grey at center), row
+            # boundary cuts just inside an arm — mark BOTH alternating anchors.
+            for yy in range(int(t), int(b), 8):
+                d.line(
+                    [(cxc, yy), (cxc, min(yy + 4, b))], fill=(170, 170, 170), width=1
+                )
+            for f in (0.25, 0.75):
+                ay = t + f * (b - t)
+                d.line([(l, ay), (r, ay)], fill=(230, 140, 20), width=2)
+                _draw_crosshair(d, cxc, ay, (230, 140, 20), r=8)
+            kind = "glob"
 
         d.text(
             (cx + 6, cy + _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H + 6),
-            f"{ch}   auto ({anx:.2f}, {any_:.2f})",
+            f"{ch}  {kind}  seam {nx:.2f}",
             fill=(40, 40, 40),
             font=label_font,
         )
@@ -721,7 +737,11 @@ def cmd_glyphs(args):
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     out = FIG_DIR / "glyph_origins.png"
     img.save(out, "PNG", optimize=True)
-    print(f"glyph origins: {len(cells)} glyphs (red = automatic rule, blue = your dot)")
+    print(f"glyph anchors: {len(cells)} glyphs")
+    print(
+        "  blue=vertical seam  green=row boundary  red=anchor  "
+        "orange=capped-open arm cuts  grey dashes=no vertical slice"
+    )
     print(f"-> {out}")
 
 

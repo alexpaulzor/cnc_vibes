@@ -1187,12 +1187,13 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
     hcut_y = [b[1][1] + hcut_ny[i] * (b[1][3] - b[1][1]) for i, b in enumerate(boxes)]
     mid_x = [(b[1][0] + b[1][2]) / 2.0 for b in boxes]
     gaps = [(boxes[i][1][2] + boxes[i + 1][1][0]) / 2.0 for i in range(len(boxes) - 1)]
-    # keep-whole letters route their seam to a bounding gap instead of through.
-    # For a capped-open letter (C, G) we ALSO glob its whole ink + counter onto
-    # ONE row so the counter isn't split down the middle: its column's row
-    # boundary runs just OUTSIDE the ink (below -> the letter joins the TOP
-    # piece; above -> the BOTTOM piece). Alternate the side per occurrence so the
-    # boundary undulates. glob_y_at maps that letter's bounding seam-x -> the y.
+    # keep-whole letters route their seam to a bounding gap instead of through
+    # (no left/right slice through the hollow). For a capped-open letter (C, G)
+    # the column's row boundary cuts just INSIDE the ink near one arm, so the
+    # letter still spans two rows (no letter ever sits entirely inside one
+    # piece), the counter stays mostly whole on the big side, and the left
+    # semicircle globs onto that 'rest' piece. Alternate the arm per occurrence
+    # so the boundary undulates. glob_y_at maps that letter's seam-x -> the y.
     seam_xs = []
     glob_y_at = {}
     open_n = 0
@@ -1202,8 +1203,9 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
             continue
         sx = gaps[i] if i < len(gaps) else gaps[i - 1]  # bounding gap seam
         _, ink_t, _, ink_b = boxes[i][1]
-        m = 0.6 * cfg.tab_circle_r_px  # boundary sits a hair outside the ink
-        gy = (ink_b + m) if (open_n % 2 == 0) else (ink_t - m)
+        h = ink_b - ink_t
+        # ~quarter in from an arm: small arm piece + big rest (counter + back)
+        gy = (ink_t + 0.25 * h) if (open_n % 2 == 0) else (ink_b - 0.25 * h)
         gy = min(
             max(gy, float(py) + cfg.tab_height_px), float(py + ph) - cfg.tab_height_px
         )

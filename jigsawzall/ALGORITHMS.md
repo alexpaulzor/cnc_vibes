@@ -95,13 +95,15 @@ the grid is derived from the letters instead of a uniform lattice:
   stem, C's back). Never along an edge or through whitespace — so the tab sprouts
   from solid material and neither piece gets a fragile crumb.
 - **capped-open letters (C, G)** — a wide stroke at both top and bottom around a
-  hollow center — are never sliced through that hollow. Their vertical seam
-  routes to an adjacent gap (no left/right slice), and the row boundary for
-  their column runs just OUTSIDE the ink (below → the whole letter + counter
-  globs onto the TOP piece; above → the BOTTOM), alternating side per occurrence
-  so the boundary undulates. The counter stays one piece; the back is never cut.
-  This glob seam has priority in the min-column merge (a crowding neighbour's
-  seam is dropped, that letter staying whole, rather than losing the glob).
+  hollow center — are never sliced through that hollow (no left/right slice; the
+  vertical seam routes to an adjacent gap). Their column's row boundary instead
+  cuts just INSIDE the ink near one arm, alternating arm per occurrence so the
+  boundary undulates. Invariant: **no letter ever fits entirely inside one
+  piece** — the C still spans two rows (small arm piece + the rest), while the
+  counter stays mostly whole on the big side and the left semicircle globs onto
+  it (the back is cut near an arm, never thinly at mid). This glob seam has
+  priority in the min-column merge (a crowding neighbour's seam is dropped, that
+  letter staying whole, rather than losing the glob — e.g. ERIC's I before C).
 - the **middle (r=1) row boundary undulates**: each column's split anchors to the
   nearest glyph's horizontal feature (A15/`glyph_hcut_y`) — through a crossbar/arm
   where one exists (A sits low), else the ink centroid (an open C → mouth center,
