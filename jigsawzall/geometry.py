@@ -959,9 +959,9 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
             cfg = _fit_panel_to_text(word, cfg)
         # Spread letters (consistent tracking -> a tab fits in every gap), then
         # place a vertical seam through each glyph's dominant stroke (origin).
-        letter_union, _boxes, origins, whole_xs = letter_layout_spaced(word, cfg)
+        letter_union, _boxes, origins = letter_layout_spaced(word, cfg)
         piece_polys, stats = build_pieces_letter_aligned(
-            seed, letter_union, cfg, origins, whole_xs
+            seed, letter_union, cfg, origins
         )
     else:
         letter_union, _text_x, _text_y, _font = render_letter_polygons(word, cfg)
@@ -1187,15 +1187,29 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
     hcut_y = [b[1][1] + hcut_ny[i] * (b[1][3] - b[1][1]) for i, b in enumerate(boxes)]
     mid_x = [(b[1][0] + b[1][2]) / 2.0 for b in boxes]
     gaps = [(boxes[i][1][2] + boxes[i + 1][1][0]) / 2.0 for i in range(len(boxes) - 1)]
-    # keep-whole letters route their seam to a bounding gap instead of through
+    # keep-whole letters route their seam to a bounding gap instead of through.
+    # For a capped-open letter (C, G) we ALSO glob its whole ink + counter onto
+    # ONE row so the counter isn't split down the middle: its column's row
+    # boundary runs just OUTSIDE the ink (below -> the letter joins the TOP
+    # piece; above -> the BOTTOM piece). Alternate the side per occurrence so the
+    # boundary undulates. glob_y_at maps that letter's bounding seam-x -> the y.
     seam_xs = []
+    glob_y_at = {}
+    open_n = 0
     for i in range(len(boxes)):
         if through_ok[i]:
             seam_xs.append(centers[i])
-        elif i < len(gaps):
-            seam_xs.append(gaps[i])  # gap after -> letter stays whole to its left
-        elif i - 1 >= 0:
-            seam_xs.append(gaps[i - 1])  # last letter: gap before it
+            continue
+        sx = gaps[i] if i < len(gaps) else gaps[i - 1]  # bounding gap seam
+        _, ink_t, _, ink_b = boxes[i][1]
+        m = 0.6 * cfg.tab_circle_r_px  # boundary sits a hair outside the ink
+        gy = (ink_b + m) if (open_n % 2 == 0) else (ink_t - m)
+        gy = min(
+            max(gy, float(py) + cfg.tab_height_px), float(py + ph) - cfg.tab_height_px
+        )
+        glob_y_at[sx] = gy
+        seam_xs.append(sx)
+        open_n += 1
     seam_xs = sorted(set(seam_xs))
 
     for _ in range(4):  # break up over-wide columns with a between-letter gap seam
@@ -1215,21 +1229,32 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
         seam_xs.extend(extra)
 
     # enforce min column width (merge: drop seams too close to the previous/edge).
-    # Each seam's y is the HORIZONTAL-cut anchor of the nearest glyph, so the row
-    # boundary undulates through each letter's feature (crossbar / mouth center)
-    # instead of running dead flat.
-    origins = []
-    prevx = left_edge
+    # Each seam's y is the capped-open glob-y when it bounds such a letter, else
+    # the HORIZONTAL-cut anchor of the nearest glyph — so the row boundary
+    # undulates through each letter's feature (crossbar / mouth) and dives
+    # around capped-open letters instead of slicing their hollow. A capped-open
+    # glob seam has PRIORITY: if it collides with a neighbour's seam, drop the
+    # neighbour's (that letter just stays whole) rather than lose the glob.
+    def _y_at(x):
+        if x in glob_y_at:
+            return glob_y_at[x]
+        li = min(range(len(boxes)), key=lambda i: abs(mid_x[i] - x))
+        return hcut_y[li]
+
+    kept = []  # list of x, closest-first
     for x in sorted(seam_xs):
-        if x - prevx >= min_col and right_edge - x >= min_col:
-            li = min(range(len(boxes)), key=lambda i: abs(mid_x[i] - x))
-            origins.append(("|", (x, hcut_y[li])))
-            prevx = x
-    # keep-whole letters (capped-open C, G): their column becomes a single
-    # full-height piece so the whole letter attaches to ONE piece (no horizontal
-    # boundary cutting through its hollow). Report their ink center-x.
-    whole_xs = [mid_x[i] for i in range(len(boxes)) if not through_ok[i]]
-    return union, boxes, origins, whole_xs
+        if kept and x - kept[-1] < min_col:
+            # collision: keep the glob seam, drop the plain one
+            if x in glob_y_at and kept[-1] not in glob_y_at:
+                kept[-1] = x
+            continue
+        kept.append(x)
+    origins = [
+        ("|", (x, _y_at(x)))
+        for x in kept
+        if x - left_edge >= min_col and right_edge - x >= min_col
+    ]
+    return union, boxes, origins
 
 
 def _straight_edge_with_tab(c0, c1, tab_dir, letter_union, cfg, stats):
@@ -1380,14 +1405,14 @@ def _end_column_h_edge(
     return []
 
 
-def build_pieces_letter_aligned(seed, letter_union, cfg, origins, whole_xs=None):
+def build_pieces_letter_aligned(seed, letter_union, cfg, origins):
     """Letter-aligned 2-row grid: vertical grid lines pass THROUGH each glyph
     at its origin-x; the middle (r=1) row boundary is a polyline that bends to
     each glyph's origin-y (letters are not moved). origins is the list from
-    letter_auto_origins (left-to-right). `whole_xs` are ink center-x of
-    keep-whole letters (capped-open C/G): the column containing each becomes ONE
-    full-height piece (no horizontal cut) so the whole letter attaches to a
-    single piece. Returns (piece_polys{(c,r):Polygon}, stats)."""
+    letter_auto_origins (left-to-right). Returns (piece_polys{(c,r):Polygon},
+    stats). Capped-open letters (C, G) are handled in letter_layout_spaced by
+    routing the row boundary just outside their ink (via origins' y), so the
+    whole letter globs onto one row — no special-casing needed here."""
     random.seed(seed)
     px, py = cfg.margin_px, cfg.margin_px
     pw, ph = cfg.puzzle_w_px, cfg.puzzle_h_px
@@ -1412,13 +1437,6 @@ def build_pieces_letter_aligned(seed, letter_union, cfg, origins, whole_xs=None)
         node_y1 = [py + ph / 2] * len(lines_x)
     ncols = len(lines_x) - 1
     ROWS = 2
-    # columns that hold a keep-whole letter -> one full-height piece (no h-cut)
-    whole_cols = set()
-    for wx in whole_xs or []:
-        for c in range(ncols):
-            if lines_x[c] < wx < lines_x[c + 1]:
-                whole_cols.add(c)
-                break
 
     def node(c, r):
         if r == 0:
@@ -1462,9 +1480,6 @@ def build_pieces_letter_aligned(seed, letter_union, cfg, origins, whole_xs=None)
     # placement so existing layouts stay byte-identical.
     h_int = {}
     for c in range(ncols):
-        if c in whole_cols:
-            h_int[c] = None  # full-height piece, no horizontal cut here
-            continue
         tab_dir = -1 if h_tab[c] else +1
         if ncols >= 2 and c in (0, ncols - 1):
             h_int[c] = _end_column_h_edge(
@@ -1503,36 +1518,8 @@ def build_pieces_letter_aligned(seed, letter_union, cfg, origins, whole_xs=None)
             pts += reversed(v_int[(c, r)])
         return pts
 
-    def full_column_polygon(c):
-        """One piece spanning both rows (r=0..r=2) — no horizontal cut. Its
-        vertical edges concatenate the two per-row fragments with the r=1 node
-        between them, so they trace identically to the neighbours' split edges
-        (A1 invariant)."""
-        pts = [node(c, 0), node(c + 1, 0)]  # top edge = panel top (straight)
-        if c + 1 <= ncols - 1:  # right vertical line c+1 (r=0 then r=1)
-            pts += v_int[(c + 1, 0)]
-            pts.append(node(c + 1, 1))
-            pts += v_int[(c + 1, 1)]
-        pts.append(node(c + 1, 2))
-        pts.append(node(c, 2))  # bottom edge = panel bottom (straight)
-        if c >= 1:  # left vertical line c (r=1 then r=0, reversed)
-            pts += reversed(v_int[(c, 1)])
-            pts.append(node(c, 1))
-            pts += reversed(v_int[(c, 0)])
-        return pts
-
     pieces = {}
     for c in range(ncols):
-        if c in whole_cols:
-            try:
-                poly = Polygon(full_column_polygon(c))
-                if not poly.is_valid:
-                    poly = poly.buffer(0)
-                if not poly.is_empty:
-                    pieces[(c, 0)] = poly
-            except Exception:
-                pass
-            continue
         for r in range(ROWS):
             try:
                 poly = Polygon(piece_polygon(c, r))

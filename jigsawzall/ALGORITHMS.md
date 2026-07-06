@@ -95,9 +95,13 @@ the grid is derived from the letters instead of a uniform lattice:
   stem, C's back). Never along an edge or through whitespace — so the tab sprouts
   from solid material and neither piece gets a fragile crumb.
 - **capped-open letters (C, G)** — a wide stroke at both top and bottom around a
-  hollow center — are NOT split (there is no non-fragile cut line through them).
-  Their seam routes to an adjacent gap and the letter stays a single whole piece
-  belonging to one column.
+  hollow center — are never sliced through that hollow. Their vertical seam
+  routes to an adjacent gap (no left/right slice), and the row boundary for
+  their column runs just OUTSIDE the ink (below → the whole letter + counter
+  globs onto the TOP piece; above → the BOTTOM), alternating side per occurrence
+  so the boundary undulates. The counter stays one piece; the back is never cut.
+  This glob seam has priority in the min-column merge (a crowding neighbour's
+  seam is dropped, that letter staying whole, rather than losing the glob).
 - the **middle (r=1) row boundary undulates**: each column's split anchors to the
   nearest glyph's horizontal feature (A15/`glyph_hcut_y`) — through a crossbar/arm
   where one exists (A sits low), else the ink centroid (an open C → mouth center,
@@ -207,10 +211,11 @@ every gap so the tightest pair's ink-to-ink clearance reaches
 stick-width wall each side). The font is sized from the panel BOUNDS and
 shrinks to fit the reserved width (A16), so long names get smaller letters.
 Per-glyph seam-x (`glyph_seam`: ink center / dominant stroke / centroid, plus a
-`through_ok` flag that keeps capped-open C/G whole by routing their seam to a
-gap) and horizontal-cut y (A15/`glyph_hcut_y`) are computed here on the spread
-layout; the spread `letter_union` is carved. Returns `(letter_union, boxes,
-origins)` where each origin is `("|", (seam_x, hcut_y_of_nearest_glyph))`.
+`through_ok` flag — False for capped-open C/G, whose seam routes to a gap and
+whose row boundary is globbed just outside the ink, alternating side) and
+horizontal-cut y (A15/`glyph_hcut_y`) are computed here on the spread layout;
+the spread `letter_union` is carved. Returns `(letter_union, boxes, origins)`
+where each origin is `("|", (seam_x, boundary_y))`.
 
 ### A15. Feature-anchored horizontal boundary (undulation)
 `glyph_origins.glyph_hcut_y(ink)` picks the row where the r=1 boundary crosses
