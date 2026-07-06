@@ -37,16 +37,31 @@ python cnc.py validate lessons/laser/03_jigsaw/build/cut_full_nora_seed7.gcode
 | `small` | 80×80mm | 2×2 @ 40mm | `N` | 5 (4 cell + 1 letter) | Calibration / test cuts; many fit on one piece of stock |
 | `mini` | 100×100mm | 4×4 @ 25mm | `NORA` | 23 (20 cell + 3 letter) | Mini NORA test cut on a small scrap (e.g. cardboard) |
 | `micro` | 150×150mm | 3×3 @ 50mm | `NORA` | varies | Tram / tolerance test cuts |
+| `banner` | 150×75mm | letter-aligned, 2 rows | `NORA` | ~17–23 | Nameplate: grid lines derived from the letters (R12) |
 | `full` | 300×300mm | 6×6 @ 50mm | `NORA` | 44 (40 cell + 4 letter) | The actual deliverable puzzle |
 
-### Cold-start dwell (`cut`)
+The **`banner`** preset uses the *letter-aligned grid*: vertical cut lines pass through each glyph's automatic origin (its dominant stroke) and the middle row boundary bends through those origins, so background pieces frame the letters cleanly instead of the slivers a uniform grid leaves. See ALGORITHMS.md R12/A12/A13.
 
-Diode lasers fade in from cold, so the start of each cut path can under-burn. The `cut` subcommand exposes two flags for this:
+Review tools:
+
+```bash
+# Contact sheet of every glyph's automatic grid-origin (red crosshair)
+python lessons/laser/03_jigsaw/jigsaw.py glyphs
+
+# The 7 banner name demos (NORA + alt names), archived to a git-ignored
+# history folder on each change; --origins overlays the origin crosshair
+python lessons/laser/03_jigsaw/jigsaw.py bannerdemos
+python lessons/laser/03_jigsaw/jigsaw.py bannerdemos --origins
+```
+
+### Cold-start fade (`cut`)
+
+Diode lasers fade in from cold, so the first few mm of each cut path can under-burn. With GRBL laser mode (`$32=1`) the beam fires *only while moving*, so a `G4` dwell does nothing — warmup has to happen through motion. Two flags matter:
 
 - `--laser-mode dynamic|static` — `dynamic` (default) emits M4 (power scales with feed); `static` emits M3 constant power with a `;LASER_MODE: static` header. Static is easier to reason about on thin stock.
-- `--warmup-ms N` — inserts a `G4 P<sec>` dwell after the laser turns on at the start of each path (default 0 = off).
+- `--lead-in-mm N` — after a closed cut loop finishes (laser now warm), re-trace its first `N` mm to clean up the cold under-cut start (default 10). This is the real cold-start remedy; there are no warmup-dwell flags.
 
-Dial in the right dwell value first with the spiral calibration card: `cnc.py cal-laser --sweep warmup --values 0,100,200,300,400 ...` (see [lesson 06](../06_spiral_cal/)). Pick the shortest dwell that cuts cleanly, then pass it to `cut --warmup-ms`.
+Measure the ramp distance with `build/warmup_ramp_test.gcode` (cut it, see how far into each line the cut starts going through) and set `--lead-in-mm` to that + ~2mm.
 
 ### Cut emission strategy
 
@@ -67,7 +82,7 @@ For a curated invocation that survives outside your shell history, drop a `job.y
 | File | What it cuts | Use when |
 |---|---|---|
 | [`examples/small_n.yaml`](examples/small_n.yaml) | 80x80mm N, cut only | Calibration / first cut on a new material |
-| [`examples/nora_mini_100.yaml`](examples/nora_mini_100.yaml) | 100x100mm NORA on 3mm corrugated, static M3 + 250ms dwell | Mini test cut; dial dwell in via lesson 06 first |
+| [`examples/nora_mini_100.yaml`](examples/nora_mini_100.yaml) | 100x100mm NORA on 3mm corrugated, static M3 + 10mm lead-in | Mini test cut on a small scrap |
 | [`examples/nora_300.yaml`](examples/nora_300.yaml) | Full 300x300mm NORA, cut only | The canonical deliverable |
 | [`examples/nora_with_photo.yaml`](examples/nora_with_photo.yaml) | Full NORA + halftone photo raster | When you want the kitten-on-NORA effect |
 

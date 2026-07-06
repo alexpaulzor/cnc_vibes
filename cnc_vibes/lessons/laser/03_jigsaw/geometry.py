@@ -77,6 +77,12 @@ class PuzzleConfig:
     # tabbable chunks rather than thin mid-row slivers. Default True.
     snap_letters_to_grid: bool = True
 
+    # Letter-aligned grid (single row of text): derive vertical grid lines from
+    # each glyph's automatic origin (glyph_origins.auto_glyph_origin) so cuts
+    # run along the letters' strokes; the middle row boundary bends through the
+    # origins. 2-row layout. Default False = the classic uniform grid.
+    letter_aligned_grid: bool = False
+
     # Shifting + merging parameters; default to "scale with tab radius"
     letter_clearance_factor: float = 1.0  # multiplied by tab_circle_r_px
     fragment_min_thickness_factor: float = 1.0  # multiplied by tab_circle_r_px
@@ -199,8 +205,9 @@ def banner_puzzle_config() -> PuzzleConfig:
         piece_mm=25,
         piece_h_mm=37.5,
         tab_circle_r_px=11,
-        wave_amplitude_px=4,
+        wave_amplitude_px=0,
         corner_radius_mm=3.0,
+        letter_aligned_grid=True,
     )
 
 
@@ -254,15 +261,17 @@ def wavy_points(
 
 
 def tab_outline(
-    direction: int, cfg: PuzzleConfig, n: int = 24
+    direction: int, cfg: PuzzleConfig, n: int = 24, tab_len: float | None = None
 ) -> list[tuple[float, float]]:
     """Lollipop tab: short stem (width = R, length ~ R) rising from the
     edge into a circle of radius R. Returns (u, v) with u in [0, 1] across
     tab_len_px and v in [0, 1] across tab_height_px (= 3R). direction is +1
-    for an outward bulb, -1 for an inward cavity."""
+    for an outward bulb, -1 for an inward cavity. tab_len overrides
+    cfg.tab_len_px for a shorter tab on a short edge (bulb stays radius R;
+    only the flat lead-in/out shrink)."""
     R = cfg.tab_circle_r_px
     H = cfg.tab_height_px  # 3 * R
-    L = cfg.tab_len_px
+    L = cfg.tab_len_px if tab_len is None else tab_len
     v_tangent_px = 2 * R - R * math.sqrt(3) / 2
     v_tangent = v_tangent_px / H
     stem_half_u = (R / 2) / L
@@ -297,13 +306,15 @@ def place_tab_at_offset(
     direction: int,
     offset_u: float,
     cfg: PuzzleConfig,
+    tab_len: float | None = None,
 ) -> list[tuple[float, float]]:
     """Tab outline placed in world coords at the given offset along the edge."""
+    L = cfg.tab_len_px if tab_len is None else tab_len
     out = (edge_dir[1], -edge_dir[0])
-    local = tab_outline(direction, cfg)
+    local = tab_outline(direction, cfg, tab_len=tab_len)
     world = []
     for u, v in local:
-        u_world = offset_u + u * cfg.tab_len_px
+        u_world = offset_u + u * L
         x = edge_start[0] + u_world * edge_dir[0] + v * cfg.tab_height_px * out[0]
         y = edge_start[1] + u_world * edge_dir[1] + v * cfg.tab_height_px * out[1]
         world.append((x, y))
@@ -311,10 +322,10 @@ def place_tab_at_offset(
 
 
 def _tab_bulb_polygon(
-    edge_start, edge_dir, edge_length, direction, offset_u, cfg
+    edge_start, edge_dir, edge_length, direction, offset_u, cfg, tab_len=None
 ) -> Polygon | None:
     pts = place_tab_at_offset(
-        edge_start, edge_dir, edge_length, direction, offset_u, cfg
+        edge_start, edge_dir, edge_length, direction, offset_u, cfg, tab_len=tab_len
     )
     if len(pts) < 3:
         return None
@@ -336,16 +347,19 @@ def find_clear_tab_offset(
     letter_union,
     direction,
     cfg: PuzzleConfig,
+    tab_len: float | None = None,
 ) -> float | None:
     """Walk candidate offsets (center first, then alternating left/right by
     SHIFT_STEPS x SHIFT_STEP_FRAC * tab_len_px) and return the first one
     where the tab bulb clears the letter union by letter_clearance_px.
-    Returns None if no clear position exists (caller should drop the tab)."""
-    max_offset = edge_length - cfg.tab_len_px
+    Returns None if no clear position exists (caller should drop the tab).
+    tab_len overrides cfg.tab_len_px (shorter tab for a short edge)."""
+    L = cfg.tab_len_px if tab_len is None else tab_len
+    max_offset = edge_length - L
     if max_offset <= 0:
         return None
     center = max_offset / 2
-    step = cfg.tab_len_px * cfg.shift_step_frac
+    step = L * cfg.shift_step_frac
 
     candidates = [center]
     for i in range(1, cfg.shift_steps + 1):
@@ -359,7 +373,7 @@ def find_clear_tab_offset(
 
     for offset_u in candidates:
         bulb = _tab_bulb_polygon(
-            edge_start, edge_dir, edge_length, direction, offset_u, cfg
+            edge_start, edge_dir, edge_length, direction, offset_u, cfg, tab_len=L
         )
         if bulb is None:
             continue
@@ -490,12 +504,14 @@ def build_pieces_with_shifted_tabs(
     seed: int, letter_union, cfg: PuzzleConfig
 ) -> tuple[dict, dict]:
     """Build cell piece polygons. Tabs shift along their edge to clear
-    letter outlines; if no clear position exists, the tab is dropped (the
-    edge becomes a straight cut).
+    letter outlines; if no clear slide exists, the tab flips in/out and
+    retries; only if that also fails is the tab dropped (the edge becomes a
+    straight cut).
 
     Returns (piece_polys, stats) where:
       piece_polys: {(col, row): shapely.Polygon}
-      stats: {'total': N, 'centered': X, 'shifted': Y, 'dropped': Z}
+      stats: {'total': N, 'centered': X, 'shifted': Y, 'flipped': F,
+              'dropped': Z}
     """
     random.seed(seed)
     vertical_tabs = {
@@ -509,7 +525,7 @@ def build_pieces_with_shifted_tabs(
         for r in range(cfg.rows - 1)
     }
 
-    stats = {"total": 0, "centered": 0, "shifted": 0, "dropped": 0}
+    stats = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
     wave_amp = cfg.wave_amplitude_px
     wave_steps = cfg.wave_steps
     px, py = cfg.margin_px, cfg.margin_px
@@ -528,10 +544,23 @@ def build_pieces_with_shifted_tabs(
         edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
         max_offset = length - cfg.tab_len_px
         offset = None
+        used_dir = tab_dir
         if max_offset > 0:
             offset = find_clear_tab_offset(
                 c0, edge_dir, length, letter_union, tab_dir, cfg
             )
+            if offset is None and letter_union is not None:
+                # No clear slide with the seeded direction — try flipping the
+                # tab in/out before dropping it (a dropped tab leaves the joint
+                # held only by the piece's other edges). The edge is computed
+                # once and shared, so the flip stays consistent for both cells.
+                alt = find_clear_tab_offset(
+                    c0, edge_dir, length, letter_union, -tab_dir, cfg
+                )
+                if alt is not None:
+                    offset = alt
+                    used_dir = -tab_dir
+                    stats["flipped"] += 1
         if offset is None:
             stats["dropped"] += 1
             # dropped tab: wavy connector on interior edges, else straight
@@ -542,7 +571,7 @@ def build_pieces_with_shifted_tabs(
             stats["centered"] += 1
         else:
             stats["shifted"] += 1
-        tw = place_tab_at_offset(c0, edge_dir, length, tab_dir, offset, cfg)
+        tw = place_tab_at_offset(c0, edge_dir, length, used_dir, offset, cfg)
         if wave_amp > 0:
             pts = wavy_points(c0, tw[1], wave_amp, wave_steps)[1:]
             pts += tw[2:-2]
@@ -617,7 +646,13 @@ def build_pieces_with_shifted_tabs(
 
 def carve_letter_pockets(piece_polys: dict, letter_union) -> list[dict]:
     """Subtract the letter union from each cell. Returns cell fragments
-    as a list of {'parent': (c, r), 'polygon': Polygon, 'kind': 'cell'}."""
+    as a list of {'parent': (c, r), 'polygon': Polygon, 'kind': 'cell'}.
+
+    Keeps even tiny fragments (down to ~10px^2) so the little triangle
+    tips pinched between a letter stroke and a grid line are NOT silently
+    dropped (which would leave uncut gaps / orphan bits). They are cleaned
+    up downstream: merged into a neighbour cell, or absorbed into the
+    adjacent letter by absorb_letter_slivers()."""
     fragments = []
     for (c, r), piece in sorted(piece_polys.items()):
         remaining = piece if letter_union is None else piece.difference(letter_union)
@@ -625,11 +660,11 @@ def carve_letter_pockets(piece_polys: dict, letter_union) -> list[dict]:
             continue
         if isinstance(remaining, (MultiPolygon, GeometryCollection)):
             for geom in remaining.geoms:
-                if isinstance(geom, Polygon) and geom.area > 100:
+                if isinstance(geom, Polygon) and geom.area > 10:
                     fragments.append(
                         {"parent": (c, r), "polygon": geom, "kind": "cell"}
                     )
-        elif isinstance(remaining, Polygon) and remaining.area > 100:
+        elif isinstance(remaining, Polygon) and remaining.area > 10:
             fragments.append({"parent": (c, r), "polygon": remaining, "kind": "cell"})
     return fragments
 
@@ -823,18 +858,83 @@ def round_panel_corners(pieces: list[dict], cfg: PuzzleConfig) -> list[dict]:
     return out
 
 
+def absorb_letter_slivers(pieces: list[dict], letter_union, cfg: PuzzleConfig):
+    """Absorb tiny cell fragments that are pinched against a letter into
+    that letter piece.
+
+    Where a letter stroke crosses a cell near a grid line it can leave a
+    small triangle tip (e.g. inside the N's diagonal crook). Such a tip is
+    cut off from the rest of its cell by the letter, so it can't merge into
+    a neighbouring cell (merge_small_fragments) — it would otherwise be a
+    tabless orphan. If it's small, not a letter counter, and borders a
+    letter, fold it into that letter piece (fills the notch; the letter
+    grows by a sliver). Counters (fragments inside a glyph hole) are left
+    alone — they are intentional drop-in pieces."""
+    if letter_union is None:
+        return pieces
+    glyphs = (
+        list(letter_union.geoms)
+        if isinstance(letter_union, MultiPolygon)
+        else [letter_union]
+    )
+    holes = [Polygon(r) for g in glyphs for r in g.interiors]
+    hole_union = unary_union(holes) if holes else None
+    letters = [p for p in pieces if p.get("kind") == "letter"]
+    if not letters:
+        return pieces
+
+    kept = []
+    for p in pieces:
+        if p.get("kind") != "cell":
+            kept.append(p)
+            continue
+        poly = p["polygon"]
+        if poly.area >= cfg.fragment_min_area_px:
+            kept.append(p)
+            continue  # a real piece, not a sliver
+        is_counter = (
+            hole_union is not None
+            and poly.intersection(hole_union).area > 0.4 * poly.area
+        )
+        if is_counter:
+            kept.append(p)
+            continue  # drop-in counter — keep as its own piece
+        # find the letter it shares the most boundary with
+        best = None
+        best_sh = 0.0
+        for lp in letters:
+            sh = _adjacency_length(poly, lp["polygon"])
+            if sh > best_sh:
+                best_sh = sh
+                best = lp
+        if best is not None and best_sh > 1.0:
+            best["polygon"] = unary_union([best["polygon"], poly])
+        else:
+            kept.append(p)  # not letter-adjacent after all — leave it
+    return kept
+
+
 def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict], dict]:
     """Full pipeline: render letter polygons, build cell pieces with
     shifted tabs, carve letter pockets, merge slivers, fuse split letter
-    counters, round outer corners, append letters as intact pieces.
+    counters, round outer corners, append letters, absorb letter-pinched
+    slivers into their letter.
 
     Returns (pieces, stats). pieces is a list of dicts each with
     'parent', 'polygon' (shapely), 'kind' ('cell' or 'letter'), 'serial'
     (1-indexed). stats is the tab-shifting stats dict.
     """
     word = word.upper()
-    letter_union, _text_x, _text_y, _font = render_letter_polygons(word, cfg)
-    piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
+    if cfg.letter_aligned_grid:
+        # Spread letters (consistent tracking -> a tab fits in every gap), then
+        # place a vertical seam through each glyph's dominant stroke (origin).
+        letter_union, _boxes, origins = letter_layout_spaced(word, cfg)
+        piece_polys, stats = build_pieces_letter_aligned(
+            seed, letter_union, cfg, origins
+        )
+    else:
+        letter_union, _text_x, _text_y, _font = render_letter_polygons(word, cfg)
+        piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
     cell_fragments = carve_letter_pockets(piece_polys, letter_union)
     cell_fragments = merge_small_fragments(cell_fragments, cfg)
     cell_fragments = fuse_counter_fragments(cell_fragments, letter_union, cfg)
@@ -849,6 +949,279 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
     pieces = list(cell_fragments) + [
         {"parent": None, "polygon": lp, "kind": "letter"} for lp in letter_polys
     ]
+    pieces = absorb_letter_slivers(pieces, letter_union, cfg)
     for i, p in enumerate(pieces, start=1):
         p["serial"] = i
+    return pieces, stats
+
+
+def letter_auto_origins(
+    word: str, cfg: PuzzleConfig
+) -> list[tuple[str, tuple[float, float]]]:
+    """For each glyph in `word` as rendered by render_letter_polygons, compute
+    its automatic grid origin (glyph_origins.auto_glyph_origin) and return
+    [(char, (x_px, y_px)), ...] in image-pixel space (same frame as the piece
+    polygons). Used to annotate previews and, in the letter-aligned grid, to
+    place the vertical grid lines. Spaces / empty glyphs are skipped."""
+    import numpy as np
+    from glyph_origins import auto_glyph_origin
+
+    word = word.upper()
+    _union, text_x, text_y, font = render_letter_polygons(word, cfg)
+    out: list[tuple[str, tuple[float, float]]] = []
+    for i, ch in enumerate(word):
+        x_pen = text_x + font.getlength(word[:i])
+        gl, gt, gr, gb = font.getbbox(ch)
+        if gr <= gl or gb <= gt:  # space / empty glyph
+            continue
+        glyph_img = Image.new("L", (int(gr - gl), int(gb - gt)), 0)
+        ImageDraw.Draw(glyph_img).text((-gl, -gt), ch, fill=255, font=font)
+        ink = np.asarray(glyph_img) > 80
+        nx, ny = auto_glyph_origin(ink)
+        ink_l, ink_t = x_pen + gl, text_y + gt
+        ink_r, ink_b = x_pen + gr, text_y + gb
+        ox = ink_l + nx * (ink_r - ink_l)
+        oy = ink_t + ny * (ink_b - ink_t)
+        out.append((ch, (float(ox), float(oy))))
+    return out
+
+
+# Target column width (mm) for the letter-aligned grid's seam selection.
+# Absolute (not per-letter), so short names with big letters get subdivided
+# and long names with small letters share columns. Tunable.
+LETTER_ALIGNED_TARGET_COL_MM = 28.0
+
+
+def letter_layout_spaced(word: str, cfg: PuzzleConfig):
+    """Lay out `word` for the letter-aligned grid with a guaranteed tab-width
+    gap between every adjacent letter, using CONSISTENT tracking relative to
+    the font's natural (proportional, kerned) spacing — not fixed-width.
+
+    Rule: place glyphs at their natural advances, measure each pair's
+    ink-to-ink gap, then add ONE uniform tracking delta to every gap so the
+    tightest pair clears exactly `tab_len_px` (looser pairs clear more). Shrink
+    the font to fit the panel width if needed. Returns (letter_union, boxes)
+    where boxes is [(char, (l, t, r, b)), ...] ink boxes in image px, left to
+    right — the gap midpoints become the vertical grid lines."""
+    word = word.upper()
+    chars = [c for c in word if not c.isspace()]
+    px, py = cfg.margin_px, cfg.margin_px
+    pw, ph = cfg.puzzle_w_px, cfg.puzzle_h_px
+    img_w, img_h = cfg.canvas_w_px, cfg.canvas_h_px
+    # Required clear gap between adjacent letters: a tab on the (vertical) cut
+    # line in the gap bulges perpendicular by tab_height_px, and we want a
+    # stick-width wall (~tab_circle_r_px) of piece material on each side so the
+    # between-letters piece isn't pinched to a sliver (cf. the R/A pinch).
+    min_gap = cfg.tab_height_px + 2 * cfg.tab_circle_r_px
+    avail = pw * 0.92
+    if not chars:
+        return None, []
+
+    font_size = int(int(ph * 0.72) * 1.4)
+    for _ in range(5):
+        font = find_font(font_size)
+        adv = [font.getlength(c) for c in chars]
+        bbox = [font.getbbox(c) for c in chars]
+        pen = [0.0]
+        for a in adv[:-1]:
+            pen.append(pen[-1] + a)
+        ink_l = [pen[i] + bbox[i][0] for i in range(len(chars))]
+        ink_r = [pen[i] + bbox[i][2] for i in range(len(chars))]
+        gaps = [ink_l[i + 1] - ink_r[i] for i in range(len(chars) - 1)]
+        delta = max(0.0, min_gap - min(gaps)) if gaps else 0.0
+        pen2 = [pen[i] + i * delta for i in range(len(chars))]
+        total = (pen2[-1] + bbox[-1][2]) - (pen2[0] + bbox[0][0])
+        if total <= avail or font_size <= 10:
+            break
+        font_size = max(10, int(font_size * (avail / total)))
+
+    tops = [bbox[i][1] for i in range(len(chars))]
+    bots = [bbox[i][3] for i in range(len(chars))]
+    band_h = max(bots) - min(tops)
+    text_y = py + (ph - band_h) / 2 - min(tops)
+    world_off = px + (pw - total) / 2 - (pen2[0] + bbox[0][0])
+
+    mask = Image.new("L", (img_w, img_h), 0)
+    md = ImageDraw.Draw(mask)
+    import numpy as np
+    from glyph_origins import glyph_stroke_anchors
+
+    boxes = []
+    anchors = []  # (x, y, char) — every glyph's thick-stroke seam candidates
+    for i, c in enumerate(chars):
+        pen_x = world_off + pen2[i]
+        md.text((pen_x, text_y), c, fill=255, font=font)
+        gl, gt, gr, gb = bbox[i]
+        ink_l, ink_t, ink_r, ink_b = pen_x + gl, text_y + gt, pen_x + gr, text_y + gb
+        boxes.append((c, (ink_l, ink_t, ink_r, ink_b)))
+        gi = Image.new("L", (max(int(gr - gl), 1), max(int(gb - gt), 1)), 0)
+        ImageDraw.Draw(gi).text((-gl, -gt), c, fill=255, font=font)
+        for nx, ny in glyph_stroke_anchors(np.asarray(gi) > 80):
+            anchors.append(
+                (ink_l + nx * (ink_r - ink_l), ink_t + ny * (ink_b - ink_t), c)
+            )
+    union = _trace_mask_polygons(mask)
+
+    # Choose vertical seams from the stroke anchors so column widths land near
+    # an ABSOLUTE target (tunable) — a big letter (short name) gets subdivided
+    # (e.g. both arcs of a large O); small letters share a column. Each seam
+    # snaps to a thick stroke so it bisects it. Piece count is emergent.
+    anchors.sort(key=lambda a: a[0])
+    min_col = cfg.tab_height_px + 2 * cfg.tab_circle_r_px
+    target = max(min_col * 1.3, LETTER_ALIGNED_TARGET_COL_MM * cfg.px_per_mm)
+    max_col = 1.9 * target
+    right = px + pw
+    origins = []
+    last = float(px)
+    while right - last > max_col and anchors:
+        goal = last + target
+        cands = [
+            a
+            for a in anchors
+            if last + min_col <= a[0] <= min(last + max_col, right - min_col)
+        ]
+        if not cands:
+            break
+        best = min(cands, key=lambda a: abs(a[0] - goal))
+        origins.append((best[2], (best[0], best[1])))
+        last = best[0]
+    return union, boxes, origins
+
+
+def _straight_edge_with_tab(c0, c1, tab_dir, letter_union, cfg, stats):
+    """Interior points (excluding endpoints) for a straight edge c0->c1 with
+    a lollipop tab that slides, then flips, then drops to clear letters.
+    Mirrors build_pieces_with_shifted_tabs._edge_interior but standalone and
+    wave-free — used by the letter-aligned builder for its (possibly sloped)
+    node-lattice edges. Updates `stats` in place."""
+    length = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
+    if length < 1e-6:
+        return []
+    stats["total"] += 1
+    edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
+    # Try the full tab first, then progressively shorter ones, so a tab still
+    # lands in a short CLEAR span of the edge (e.g. the narrow margin left of a
+    # letter that fills its column — pieces 1/2). Below ~2.4R the bulb won't fit.
+    min_tab = 2.4 * cfg.tab_circle_r_px
+    full = min(cfg.tab_len_px, 0.7 * length)
+    etabs = []
+    for e in (full, 0.75 * full, 0.55 * full, min_tab):
+        if e >= min_tab and e < length and e not in etabs:
+            etabs.append(e)
+    for etab in etabs:
+        offset, used = None, tab_dir
+        offset = find_clear_tab_offset(
+            c0, edge_dir, length, letter_union, tab_dir, cfg, tab_len=etab
+        )
+        if offset is None and letter_union is not None:
+            alt = find_clear_tab_offset(
+                c0, edge_dir, length, letter_union, -tab_dir, cfg, tab_len=etab
+            )
+            if alt is not None:
+                offset, used = alt, -tab_dir
+                stats["flipped"] += 1
+        if offset is None:
+            continue
+        if abs(offset - (length - etab) / 2) < 1.0:
+            stats["centered"] += 1
+        else:
+            stats["shifted"] += 1
+        tw = place_tab_at_offset(c0, edge_dir, length, used, offset, cfg, tab_len=etab)
+        return list(tw[1:-1])
+    stats["dropped"] += 1
+    return []  # no tab fits any clear span
+
+
+def build_pieces_letter_aligned(seed, letter_union, cfg, origins):
+    """Letter-aligned 2-row grid: vertical grid lines pass THROUGH each glyph
+    at its origin-x; the middle (r=1) row boundary is a polyline that bends to
+    each glyph's origin-y (letters are not moved). origins is the list from
+    letter_auto_origins (left-to-right). Returns (piece_polys{(c,r):Polygon},
+    stats), same shape as build_pieces_with_shifted_tabs."""
+    random.seed(seed)
+    px, py = cfg.margin_px, cfg.margin_px
+    pw, ph = cfg.puzzle_w_px, cfg.puzzle_h_px
+    inset = max(cfg.tab_circle_r_px, 4)
+
+    # Vertical line xs: panel-left, each origin-x (monotonic, clamped), panel-right.
+    xs, oy = [], []
+    for _ch, (ox, o_y) in origins:
+        cx = min(max(ox, px + inset), px + pw - inset)
+        if xs and cx <= xs[-1] + inset:
+            cx = xs[-1] + inset  # keep strictly increasing with room for a tab
+        if cx >= px + pw - inset:
+            continue  # ran out of room; skip extra letters' lines
+        xs.append(cx)
+        oy.append(o_y)
+    lines_x = [px] + xs + [px + pw]
+    # r=1 node y at each vertical line: interior line i -> its origin-y; the two
+    # panel-edge lines copy the nearest origin-y.
+    if oy:
+        node_y1 = [oy[0]] + oy + [oy[-1]]
+    else:
+        node_y1 = [py + ph / 2] * len(lines_x)
+    ncols = len(lines_x) - 1
+    ROWS = 2
+
+    def node(c, r):
+        if r == 0:
+            return (lines_x[c], py)
+        if r == ROWS:
+            return (lines_x[c], py + ph)
+        return (lines_x[c], node_y1[c])  # r == 1, the bent boundary
+
+    stats = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
+    v_tab = {
+        (c, r): random.random() > 0.5 for c in range(1, ncols) for r in range(ROWS)
+    }
+    h_tab = {c: random.random() > 0.5 for c in range(ncols)}
+
+    # Interior vertical edges (lines c=1..ncols-1), split per row at the boundary.
+    v_int = {}
+    for c in range(1, ncols):
+        for r in range(ROWS):
+            tab_dir = +1 if v_tab[(c, r)] else -1
+            v_int[(c, r)] = _straight_edge_with_tab(
+                node(c, r), node(c, r + 1), tab_dir, letter_union, cfg, stats
+            )
+    # Interior horizontal edges (the r=1 boundary), one per column, possibly sloped.
+    h_int = {}
+    for c in range(ncols):
+        tab_dir = -1 if h_tab[c] else +1
+        h_int[c] = _straight_edge_with_tab(
+            node(c, 1), node(c + 1, 1), tab_dir, letter_union, cfg, stats
+        )
+
+    def piece_polygon(c, r):
+        TL, TR = node(c, r), node(c + 1, r)
+        BR, BL = node(c + 1, r + 1), node(c, r + 1)
+        pts = [TL]
+        # top edge TL->TR : boundary only when r==1 (its top is h_int[c] forward)
+        if r == 1:
+            pts += h_int[c]
+        pts.append(TR)
+        # right edge TR->BR : vertical line c+1 (interior only)
+        if c + 1 <= ncols - 1:
+            pts += v_int[(c + 1, r)]
+        pts.append(BR)
+        # bottom edge BR->BL : boundary only when r==0 (its bottom is h_int[c] reversed)
+        if r == 0:
+            pts += reversed(h_int[c])
+        pts.append(BL)
+        # left edge BL->TL : vertical line c (interior only)
+        if c >= 1:
+            pts += reversed(v_int[(c, r)])
+        return pts
+
+    pieces = {}
+    for c in range(ncols):
+        for r in range(ROWS):
+            try:
+                poly = Polygon(piece_polygon(c, r))
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+                if not poly.is_empty:
+                    pieces[(c, r)] = poly
+            except Exception:
+                continue
     return pieces, stats

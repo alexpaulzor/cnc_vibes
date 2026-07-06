@@ -13,9 +13,7 @@ Schema, jigsaw-specific block (under `jigsaw:`):
 
   # cut-only:
   laser_mode:            dynamic | static          (default: dynamic / M4)
-  warmup_ms:             int                       (default: 0; G4 dwell — usually no-op in laser mode)
-  warmup_ms_first:       int                       (default: 0; G4 dwell on first cut)
-  lead_in_mm:            float                     (default: 10; re-trace loop start hot to beat diode ramp)
+  overburn_ms:           float                     (default: 1000; re-trace loop start hot to beat diode ramp)
   feed:                  int                       (default: material feed; override mm/min)
   min_segment_mm:        float                     (default: 0; decimate chords shorter than this)
   power_percent:         float                     (default: 100 via CLI; override cut power %)
@@ -96,12 +94,8 @@ def jigsaw_argv(data: dict) -> list[str]:
         argv += ["--material", material]
         if "laser_mode" in jig:
             argv += ["--laser-mode", str(jig["laser_mode"])]
-        if "warmup_ms" in jig:
-            argv += ["--warmup-ms", str(int(jig["warmup_ms"]))]
-        if "warmup_ms_first" in jig:
-            argv += ["--warmup-ms-first", str(int(jig["warmup_ms_first"]))]
-        if "lead_in_mm" in jig:
-            argv += ["--lead-in-mm", str(float(jig["lead_in_mm"]))]
+        if "overburn_ms" in jig:
+            argv += ["--overburn-ms", str(float(jig["overburn_ms"]))]
         if "feed" in jig:
             argv += ["--feed", str(int(jig["feed"]))]
         if "min_segment_mm" in jig:

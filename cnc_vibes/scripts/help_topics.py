@@ -826,10 +826,6 @@ Common flags:
   --simplify-mm 0.05       laser only: Douglas-Peucker tolerance for shape /
                            glyph simplification (0 disables). Default 0.05mm
                            drops sub-pixel vertices so M4 doesn't starve.
-  --laser-warmup-ms 0      laser only: G4 P<sec> dwell inserted after each
-                           M3/M4 and before first G1 cut. Try 200-300ms if
-                           cut starts fade in from cold laser. Costs a small
-                           burn dot at each ring's start point.
 
 Op-specific:
   profile        --depth (spindle) --side outside|inside|on
@@ -867,7 +863,7 @@ See also: cam-library, openscad-loader
 Usage:
   cnc.py cal-laser --material <id> --sweep {power,feed,passes} \\
       --values v1,v2,... [--laser-mode static|dynamic] \\
-      [--laser-warmup-ms N] [--power P] [--feed F] [--passes N]
+      [--power P] [--feed F] [--passes N]
   cnc.py cal-laser interactive       # prompt-driven setup
 
 Generates one GCode file with N test patches arranged in a hex spiral
@@ -878,8 +874,7 @@ the inside disk falls apart into several pie-slice pieces, giving you
 instant visual confirmation.
 
 Defaults: --laser-mode static (M3 — constant power, easier to read
-results), --laser-warmup-ms 250 (defeats cold-start fade-in per
-patch). The non-swept axes use the material's defaults from
+results). The non-swept axes use the material's defaults from
 profiles/laser_materials.yaml unless you override them.
 
 Sweep options:
@@ -903,7 +898,7 @@ Examples:
       --sweep power --values 30,40,50,60,70
   cnc.py cal-laser --material plywood_baltic_birch_3mm \\
       --sweep feed --values 1500,2000,2500,3000,3500 \\
-      --power 80 --laser-warmup-ms 300
+      --power 80
   cnc.py cal-laser interactive       # walks every choice
 
 After cutting, evaluate each patch:

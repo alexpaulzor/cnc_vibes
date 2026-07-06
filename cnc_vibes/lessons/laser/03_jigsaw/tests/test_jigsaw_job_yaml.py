@@ -124,9 +124,7 @@ def _build_jigsaw_parser():
         default="dynamic",
         choices=("dynamic", "static"),
     )
-    cu.add_argument("--warmup-ms", dest="warmup_ms", type=int, default=0)
-    cu.add_argument("--warmup-ms-first", dest="warmup_ms_first", type=int, default=0)
-    cu.add_argument("--lead-in-mm", dest="lead_in_mm", type=float, default=10.0)
+    cu.add_argument("--overburn-ms", dest="overburn_ms", type=float, default=1000.0)
     cu.add_argument("--feed", type=int, default=None)
     cu.add_argument("--min-segment-mm", dest="min_segment_mm", type=float, default=0.0)
     cu.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)

@@ -183,17 +183,9 @@ def test_simple_cut_pass_count_matches_material():
     assert g.count("pass 2 of 2") == 2
 
 
-def test_simple_cut_warmup_emits_dwell_per_path():
-    cfg = small_puzzle_config()
-    # 2 pieces, 1 path each -> 2 warmup dwells
-    g = emit_cut_gcode_simple(
-        _tiny_pieces(cfg), _tiny_material(), cfg, "X", warmup_ms=300
-    )
-    dwells = [l for l in g.splitlines() if l.startswith("G4 P0.300")]
-    assert len(dwells) == 2
-
-
-def test_simple_cut_no_dwell_when_warmup_zero():
+def test_simple_cut_never_emits_dwell():
+    """Warmup dwells were removed — GRBL laser mode fires only while moving,
+    so a G4 dwell produces no beam. Cold-start fade is handled by lead-in."""
     cfg = small_puzzle_config()
     g = emit_cut_gcode_simple(_tiny_pieces(cfg), _tiny_material(), cfg, "X")
     assert "G4 P" not in g
@@ -209,7 +201,7 @@ def test_simple_cut_static_mode_uses_m3_with_header():
     assert ";LASER_MODE: static" in g
 
 
-def test_full_cut_warmup_and_static_mode():
+def test_full_cut_static_mode_uses_m3_no_dwell():
     cfg = small_puzzle_config()
     g = emit_cut_gcode_full(
         _tiny_pieces(cfg),
@@ -217,12 +209,11 @@ def test_full_cut_warmup_and_static_mode():
         cfg,
         "NORA",
         mode="static",
-        warmup_ms=250,
     )
     assert ";LASER_MODE: static" in g
     assert re.search(r"^M3 ", g, re.MULTILINE)
     assert not re.search(r"^M4\b", g, re.MULTILINE)
-    assert any(l.startswith("G4 P0.250") for l in g.splitlines())
+    assert "G4 P" not in g
 
 
 # ---------------------------------------------------------------------------

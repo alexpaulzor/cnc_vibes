@@ -24,6 +24,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -48,12 +49,14 @@ from emitter import (  # noqa: E402
 )
 from geometry import (  # noqa: E402
     banner_puzzle_config,
+    find_font,
     full_puzzle_config,
     generate_pieces,
     micro_puzzle_config,
     mini_puzzle_config,
     small_puzzle_config,
 )
+import glyph_origins as glyph_origins_mod  # noqa: E402
 
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 BUILD_DIR = SCRIPT_DIR / "build"
@@ -94,12 +97,10 @@ def _emit_cut_for(
     word,
     size,
     mode="dynamic",
-    warmup_ms=0,
     feed_override=None,
     min_segment_mm=0.0,
     power_percent=None,
-    warmup_ms_first=None,
-    lead_in_mm=0.0,
+    overburn_ms=1000.0,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -108,11 +109,9 @@ def _emit_cut_for(
             cfg,
             word,
             mode=mode,
-            warmup_ms=warmup_ms,
             feed_override=feed_override,
             min_segment_mm=min_segment_mm,
             power_percent=power_percent,
-            warmup_ms_first=warmup_ms_first,
         )
     return emit_cut_gcode_full(
         pieces,
@@ -120,12 +119,10 @@ def _emit_cut_for(
         cfg,
         word,
         mode=mode,
-        warmup_ms=warmup_ms,
         feed_override=feed_override,
         min_segment_mm=min_segment_mm,
         power_percent=power_percent,
-        warmup_ms_first=warmup_ms_first,
-        lead_in_mm=lead_in_mm,
+        overburn_ms=overburn_ms,
     )
 
 
@@ -176,10 +173,11 @@ def _pastel(i: int, total: int) -> tuple[int, int, int]:
     return (int((r + m) * 255), int((g + m) * 255), int((b + m) * 255))
 
 
-def render_preview(pieces, cfg, title: str, out_path: Path):
+def render_preview(pieces, cfg, title: str, out_path: Path, origins=None):
     """Self-contained preview render (doesn't depend on scratch).
     Pastel-colors each piece, highlights letter pieces, labels with
-    serial numbers."""
+    serial numbers. If `origins` is given (list of (char, (x_px, y_px))),
+    draws a crosshair at each glyph's auto grid-origin."""
     img = Image.new("RGB", (cfg.canvas_w_px, cfg.canvas_h_px), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
@@ -225,6 +223,18 @@ def render_preview(pieces, cfg, title: str, out_path: Path):
             fill=(20, 20, 20),
             font=label_font,
         )
+
+    if origins:
+        for _ch, (ox, oy) in origins:
+            # vertical guide line (where the letter-aligned grid line would fall)
+            d.line(
+                [ox, cfg.margin_px, ox, cfg.margin_px + cfg.puzzle_h_px],
+                fill=(255, 0, 255),
+                width=1,
+            )
+            r = 9
+            d.line([ox - r, oy, ox + r, oy], fill=(210, 20, 210), width=3)
+            d.line([ox, oy - r, ox, oy + r], fill=(210, 20, 210), width=3)
 
     img.save(out_path, "PNG", optimize=True)
 
@@ -366,12 +376,10 @@ def cmd_cut(args):
         word,
         args.size,
         mode=args.laser_mode,
-        warmup_ms=args.warmup_ms,
         feed_override=args.feed,
         min_segment_mm=args.min_segment_mm,
         power_percent=args.power_percent,
-        warmup_ms_first=args.warmup_ms_first,
-        lead_in_mm=args.lead_in_mm,
+        overburn_ms=args.overburn_ms,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
@@ -397,7 +405,7 @@ def cmd_cut(args):
     )
     print(
         f"laser: {args.laser_mode}  power: {pwr_note}  "
-        f"laser-on events: {laser_on}  lead-in: {args.lead_in_mm}mm"
+        f"laser-on events: {laser_on}  overburn: {args.overburn_ms:.0f}ms"
     )
     print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
@@ -496,6 +504,288 @@ def cmd_mockup(args):
     sys.exit(subprocess.run(cmd).returncode)
 
 
+GLYPH_SHEET_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_GLYPH_SHEET_COLS = 6
+_GLYPH_SHEET_CELL = 220
+_GLYPH_SHEET_LABEL_H = 34
+_GLYPH_SHEET_FONT_PX = 150
+
+
+def _glyph_sheet_layout():
+    """Deterministic layout shared by the renderer and the dot-reader.
+
+    Returns (width, height, cells) where cells is a list of
+    (char, cell_x, cell_y, pen_xy, ink_bbox); pen_xy is where the glyph is
+    drawn, ink_bbox = (l, t, r, b) its ink box in image space. Because
+    render and read use the SAME layout, a dot placed on the rendered sheet
+    maps back to exact normalized ink-bbox coordinates."""
+    n = len(GLYPH_SHEET_CHARS)
+    cols = _GLYPH_SHEET_COLS
+    rows = (n + cols - 1) // cols
+    cell = _GLYPH_SHEET_CELL
+    label_h = _GLYPH_SHEET_LABEL_H
+    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
+
+    cells = []
+    for i, ch in enumerate(GLYPH_SHEET_CHARS):
+        cx, cy = (i % cols) * cell, (i // cols) * cell
+        l, t, r, b = glyph_font.getbbox(ch)
+        gw, gh = r - l, b - t
+        area_h = cell - label_h
+        ox = cx + (cell - gw) // 2 - l
+        oy = cy + (area_h - gh) // 2 - t
+        ink_bbox = (ox + l, oy + t, ox + r, oy + b)
+        cells.append((ch, cx, cy, (ox, oy), ink_bbox))
+    return cols * cell, rows * cell, cells
+
+
+def _draw_crosshair(d, x, y, color, r=13, w=2):
+    d.line([x - r, y, x + r, y], fill=color, width=w)
+    d.line([x, y - r, x, y + r], fill=color, width=w)
+
+
+def _snap_to_ink(ink, gx, gy, band=8):
+    """Nudge a hand-placed point onto the local stroke's centerline, moving
+    PERPENDICULAR to the stroke and keeping the along-stroke axis where the
+    user put it. `ink` is a bool array (True = glyph pixel).
+
+    At the point, measure the ink run width across the row (horizontal) and
+    down the column (vertical). The thinner direction is the stroke's cross
+    section, so snap that axis to the run center and keep the other: on a
+    vertical stem -> snap x only; on a horizontal bar -> snap y only; on a
+    small junction -> snap both. Off ink (an open counter/gap) -> keep the
+    point as placed, so deliberate center anchors like O/C are trusted."""
+    h, w = ink.shape
+    ix = min(max(int(round(gx)), 0), w - 1)
+    iy = min(max(int(round(gy)), 0), h - 1)
+
+    if not ink[iy, ix]:
+        # snap onto the nearest ink pixel within a small band, else keep raw
+        best = None
+        for dy in range(-band, band + 1):
+            for dx in range(-band, band + 1):
+                y, x = iy + dy, ix + dx
+                if 0 <= y < h and 0 <= x < w and ink[y, x]:
+                    dist = dx * dx + dy * dy
+                    if best is None or dist < best[0]:
+                        best = (dist, x, y)
+        if best is None:
+            return gx, gy  # open space: trust the placement
+        _d, ix, iy = best
+
+    lo = ix
+    while lo > 0 and ink[iy, lo - 1]:
+        lo -= 1
+    hi = ix
+    while hi < w - 1 and ink[iy, hi + 1]:
+        hi += 1
+    run_w = hi - lo + 1
+
+    tlo = iy
+    while tlo > 0 and ink[tlo - 1, ix]:
+        tlo -= 1
+    thi = iy
+    while thi < h - 1 and ink[thi + 1, ix]:
+        thi += 1
+    run_h = thi - tlo + 1
+
+    sx, sy = float(ix), float(iy)
+    if run_w <= run_h:  # vertical-ish stroke -> center across its width
+        sx = (lo + hi) / 2.0
+    if run_h <= run_w:  # horizontal-ish stroke -> center across its height
+        sy = (tlo + thi) / 2.0
+    return sx, sy
+
+
+def _read_green_dots(path: Path, snap=True):
+    """Detect the green dot in each glyph cell of an edited contact sheet
+    and convert to normalized ink-bbox origins. Hand-placed dots are
+    snapped to the glyph's ink midpoints (see _snap_to_ink) unless
+    snap=False. Returns {char: {"raw": (nx,ny), "snapped": (nx,ny)}}."""
+    import numpy as np
+
+    _w, _h, cells = _glyph_sheet_layout()
+    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
+    src = Image.open(path).convert("RGB")
+    if src.size != (_w, _h):
+        # Tolerate any export size / Retina scaling / PDF round-trip: the
+        # sheet is a fixed grid, so rescaling to canonical preserves every
+        # dot's relative position. (Assumes the image is the sheet only.)
+        src = src.resize((_w, _h), Image.BILINEAR)
+    arr = np.asarray(src, dtype=np.int16)
+    R, G, B = arr[..., 0], arr[..., 1], arr[..., 2]
+    green = (G > 140) & (R < 120) & (B < 120)  # tolerant "green dot" mask
+
+    found = {}
+    label_h = _GLYPH_SHEET_LABEL_H
+    cell = _GLYPH_SHEET_CELL
+    for ch, cx, cy, (ox, oy), (l, t, r, b) in cells:
+        y0, y1 = cy, cy + cell - label_h  # glyph area, excluding label strip
+        x0, x1 = cx, cx + cell
+        ys, xs = np.nonzero(green[y0:y1, x0:x1])
+        if len(xs) == 0:
+            continue
+        gx, gy = x0 + xs.mean(), y0 + ys.mean()
+
+        sx, sy = gx, gy
+        if snap:
+            # clean glyph mask in cell-local coords (no dot to interfere)
+            m = Image.new("L", (cell, cell - label_h), 0)
+            ImageDraw.Draw(m).text((ox - cx, oy - cy), ch, fill=255, font=glyph_font)
+            ink = np.asarray(m) > 80
+            lx, ly = _snap_to_ink(ink, gx - cx, gy - cy)
+            sx, sy = lx + cx, ly + cy
+
+        def norm(px, py):
+            nx = (px - l) / (r - l) if r > l else 0.5
+            ny = (py - t) / (b - t) if b > t else 0.5
+            return (round(float(nx), 3), round(float(ny), 3))
+
+        found[ch] = {"raw": norm(gx, gy), "snapped": norm(sx, sy)}
+    return found
+
+
+def cmd_glyphs(args):
+    """Render a contact sheet of every glyph with crosshairs at its grid
+    origin (RED = baseline guess, BLUE = adopted value), for reviewing and
+    correcting glyph_origins.py.
+
+    With --read <edited.png>: detect green dots the user drew on a copy of
+    the sheet, print the corresponding normalized origins to paste into
+    USER_ORIGIN_OVERRIDES, then (re)render the sheet."""
+    if getattr(args, "read", None):
+        detected = _read_green_dots(args.read)
+        if not detected:
+            print(f"no green dots detected in {args.read}")
+            print("draw a solid green dot (#00FF00) in each cell to override")
+            return
+        use_snap = getattr(args, "snap", False)
+        which = "snapped" if use_snap else "raw"
+        print(f"detected {len(detected)} green dot(s) in {args.read} (using {which}):")
+        print("paste into USER_ORIGIN_OVERRIDES in glyph_origins.py:")
+        for ch in sorted(detected):
+            base = glyph_origins_mod.baseline_grid_origin(ch)
+            vx, vy = detected[ch][which]
+            other = detected[ch]["snapped" if not use_snap else "raw"]
+            print(
+                f'    "{ch}": ({vx:.3f}, {vy:.3f}),'
+                f"   # {'raw' if not use_snap else 'snapped'}; "
+                f"{'snapped' if not use_snap else 'raw'} {other}, was {base}"
+            )
+        return
+
+    _w, _h, cells = _glyph_sheet_layout()
+    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
+    label_font = find_font(22)
+    img = Image.new("RGB", (_w, _h), (250, 250, 250))
+    d = ImageDraw.Draw(img)
+    import numpy as np
+
+    for ch, cx, cy, (ox, oy), ink_bbox in cells:
+        d.rectangle(
+            [cx, cy, cx + _GLYPH_SHEET_CELL - 1, cy + _GLYPH_SHEET_CELL - 1],
+            outline=(215, 215, 215),
+        )
+        l, t, r, b = ink_bbox
+        d.text((ox, oy), ch, fill=(120, 120, 120), font=glyph_font)
+        d.rectangle([l, t, r, b], outline=(185, 205, 235))
+
+        # AUTOMATIC origin from the glyph raster (red = the general rule).
+        m = Image.new(
+            "L", (_GLYPH_SHEET_CELL, _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H), 0
+        )
+        ImageDraw.Draw(m).text((ox - cx, oy - cy), ch, fill=255, font=glyph_font)
+        ink = np.asarray(m) > 80
+        anx, any_ = glyph_origins_mod.auto_glyph_origin(ink)
+        d.text((cx + 6, cy + 4), "", font=label_font)
+        _draw_crosshair(d, l + anx * (r - l), t + any_ * (b - t), (220, 30, 30))
+
+        # Manual override (blue) shown only where one exists, for comparison.
+        if ch.upper() in glyph_origins_mod.USER_ORIGIN_OVERRIDES:
+            mx, my = glyph_origins_mod.glyph_origin_px(ch, ink_bbox)
+            _draw_crosshair(d, mx, my, (30, 90, 220))
+
+        d.text(
+            (cx + 6, cy + _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H + 6),
+            f"{ch}   auto ({anx:.2f}, {any_:.2f})",
+            fill=(40, 40, 40),
+            font=label_font,
+        )
+
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    out = FIG_DIR / "glyph_origins.png"
+    img.save(out, "PNG", optimize=True)
+    print(f"glyph origins: {len(cells)} glyphs (red = automatic rule, blue = your dot)")
+    print(f"-> {out}")
+
+
+# ---------------------------------------------------------------------------
+# Versioned image save + banner demo suite
+# ---------------------------------------------------------------------------
+
+BANNER_DEMO_NAMES = ["NORA", "AYANA", "KARSON", "KAI", "KADE", "SLOAN", "LEO"]
+
+
+def save_versioned(path: Path, img: Image.Image) -> str:
+    """Save `img` to `path`, first archiving any existing (different) file
+    into `<dir>/.history/<stem>/NNNN.ext`. Dedup by pixel hash: if the new
+    image is identical to the current file, nothing is archived. History
+    lives under build/ so it stays out of git. Returns a status string."""
+    import hashlib
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_hash = hashlib.md5(img.convert("RGB").tobytes()).hexdigest()
+    status = "written"
+    if path.exists():
+        try:
+            cur = Image.open(path).convert("RGB")
+            cur_hash = hashlib.md5(cur.tobytes()).hexdigest()
+        except Exception:
+            cur_hash = None
+        if cur_hash == new_hash:
+            return "unchanged"
+        hist = path.parent / ".history" / path.stem
+        hist.mkdir(parents=True, exist_ok=True)
+        existing = sorted(hist.glob(f"[0-9]*{path.suffix}"))
+        n = 1 + (int(existing[-1].stem) if existing else 0)
+        shutil.copy2(path, hist / f"{n:04d}{path.suffix}")
+        status = f"versioned (prev -> .history/{path.stem}/{n:04d}{path.suffix})"
+    img.save(path, "PNG", optimize=True)
+    return status
+
+
+def _render_banner_demo(name: str, annotate_origins: bool) -> Path:
+    cfg = _config_for_size("banner")
+    pieces, stats = generate_pieces(name, 7, cfg)
+    origins = None
+    if annotate_origins:
+        from geometry import letter_auto_origins
+
+        origins = letter_auto_origins(name, cfg)
+    title = (
+        f"{name} — banner ({cfg.panel_mm:.0f}x{cfg.panel_height_mm:.0f}mm), "
+        f"{len(pieces)} pcs"
+    )
+    out = BUILD_DIR / "name_grids" / "banner" / f"{name}.png"
+    # render_preview saves internally; capture to an Image via a temp render
+    tmp = out.with_suffix(".tmp.png")
+    render_preview(pieces, cfg, title, tmp, origins=origins)
+    img = Image.open(tmp).convert("RGB")
+    status = save_versioned(out, img)
+    tmp.unlink(missing_ok=True)
+    print(f"  {name}: {len(pieces)} pcs — {status}")
+    return out
+
+
+def cmd_bannerdemos(args):
+    """Render the 7 banner demo previews, versioning any prior copy into a
+    git-ignored history folder. --origins overlays the auto grid-origin."""
+    print(f"banner demos (origins={'on' if args.origins else 'off'}):")
+    for name in BANNER_DEMO_NAMES:
+        _render_banner_demo(name, args.origins)
+    print(f"-> {BUILD_DIR / 'name_grids' / 'banner'}/")
+
+
 # ---------------------------------------------------------------------------
 # CLI plumbing
 # ---------------------------------------------------------------------------
@@ -537,29 +827,13 @@ def main():
         help="M4 dynamic (default) vs M3 static constant-power",
     )
     cu.add_argument(
-        "--warmup-ms",
-        dest="warmup_ms",
-        type=int,
-        default=0,
-        help="G4 dwell (ms) after laser-on. NOTE: GRBL laser mode keeps the "
-        "laser OFF while stationary, so dwells usually do NOT warm the diode "
-        "— prefer --lead-in-mm (default 0 = off)",
-    )
-    cu.add_argument(
-        "--warmup-ms-first",
-        dest="warmup_ms_first",
-        type=int,
-        default=0,
-        help="G4 dwell (ms) on the first cut (default 0; see --warmup-ms)",
-    )
-    cu.add_argument(
-        "--lead-in-mm",
-        dest="lead_in_mm",
+        "--overburn-ms",
+        dest="overburn_ms",
         type=float,
-        default=10.0,
-        help="re-trace the first N mm of each closed cut loop at the end "
-        "(laser warm) to finish the cold under-cut start; the diode ramps up "
-        "over the first few mm of every laser-on run (default 10)",
+        default=1000.0,
+        help="diode ramp duration (ms): closed loops re-trace their first "
+        "overburn_ms/1000 * feed_mm_per_s at the end (laser warm) to finish "
+        "the cold under-cut start. Default 1000 (conservative — overcut > undercut)",
     )
     cu.add_argument(
         "--feed",
@@ -612,6 +886,36 @@ def main():
     mo.add_argument("--seed", type=int, default=7)
     mo.add_argument("--out", type=Path, default=None)
     mo.set_defaults(func=cmd_mockup)
+
+    # glyphs — contact sheet of grid origins for LUT review
+    gl = subs.add_parser(
+        "glyphs", help="render a contact sheet of glyph grid-origins for review"
+    )
+    gl.add_argument(
+        "--read",
+        type=Path,
+        default=None,
+        help="read green dots from an edited copy of the sheet and print "
+        "snapped origins for USER_ORIGIN_OVERRIDES",
+    )
+    gl.add_argument(
+        "--snap",
+        action="store_true",
+        help="snap dots to local stroke centers (default: use raw placement, "
+        "which is usually more faithful — snapping misfires at junctions)",
+    )
+    gl.set_defaults(func=cmd_glyphs)
+
+    # bannerdemos — render the 7 banner demo previews (versioned)
+    bd = subs.add_parser(
+        "bannerdemos", help="render the 7 banner demo previews (versioned history)"
+    )
+    bd.add_argument(
+        "--origins",
+        action="store_true",
+        help="overlay the automatic grid-origin crosshair on each letter",
+    )
+    bd.set_defaults(func=cmd_bannerdemos)
 
     args = p.parse_args()
     args.func(args)

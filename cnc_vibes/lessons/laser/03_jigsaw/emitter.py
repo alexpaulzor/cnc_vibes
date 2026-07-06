@@ -205,11 +205,9 @@ def emit_cut_gcode_simple(
     cfg: PuzzleConfig,
     word: str,
     mode: str = "dynamic",
-    warmup_ms: int = 0,
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
-    warmup_ms_first: int | None = None,
 ) -> str:
     """Per-polygon cut, simple letter-then-cells ordering. Suitable for
     small-piece-count puzzles where edge dedup isn't worth the complexity.
@@ -217,33 +215,24 @@ def emit_cut_gcode_simple(
     tests.
 
     mode="dynamic" (default) emits M4 (power scales with feed); "static"
-    emits M3 + a ;LASER_MODE: static header (constant power). warmup_ms>0
-    inserts a G4 dwell after the laser turns on at the start of each path,
-    defeating diode cold-start fade-in (dial it in with lesson 06's
-    `--sweep warmup`). feed_override replaces the material feedrate.
-    min_segment_mm decimates points so no emitted segment is shorter than
-    that distance. power_percent overrides the material power (S =
-    percent*10)."""
+    emits M3 + a ;LASER_MODE: static header (constant power). feed_override
+    replaces the material feedrate. min_segment_mm decimates points so no
+    emitted segment is shorter than that distance. power_percent overrides
+    the material power (S = percent*10). Diode cold-start fade is handled by
+    lead-in overlap in emit_cut_gcode_full, not by dwells (GRBL laser mode
+    fires only while moving)."""
     laser = material["laser"]
     pct = power_percent if power_percent is not None else laser["power_percent"]
     power_s = int(round(pct * 10))
     feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
-    warmup_s = max(0, warmup_ms) / 1000.0
-    first_ms = warmup_ms if warmup_ms_first is None else warmup_ms_first
-    first_s = max(0, first_ms) / 1000.0
 
     extra = [
         "loose-fit puzzle: centerline cuts, kerf becomes the clearance",
         "ASSUMES Z already at focal height in your WCS",
         "cut order: letters first, then cells (simple; shared edges cut twice)",
     ]
-    if first_ms > 0 or warmup_ms > 0:
-        extra.append(
-            f"warmup: G4 P{first_s:.3f} on first cut, P{warmup_s:.3f} on the rest "
-            "(diode cold-start)"
-        )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
@@ -256,7 +245,6 @@ def emit_cut_gcode_simple(
         mode=mode,
     )
 
-    first_cut = True
     for i, piece in enumerate(ordered, start=1):
         paths = _polygon_to_paths_mm(piece["polygon"], cfg)
         kind = piece.get("kind", "cell")
@@ -272,10 +260,6 @@ def emit_cut_gcode_simple(
             lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
             lines.append(f"{on} S{power_s}")
             lines.append(f"F{feed}")
-            dwell_s = first_s if first_cut else warmup_s
-            if dwell_s > 0:
-                lines.append(f"G4 P{dwell_s:.3f}  ; warmup")
-            first_cut = False
             for pass_n in range(passes):
                 if passes > 1:
                     lines.append(f"; pass {pass_n + 1} of {passes}")
@@ -582,7 +566,7 @@ def chain_contiguous_paths(
 
     Consecutive edges whose join is within tol_px are concatenated into a
     single path so the laser cuts them in one uninterrupted stroke (one
-    laser-on, one warmup dwell, no mid-line lift/re-fire). A new path
+    laser-on, no mid-line lift/re-fire). A new path
     starts only where the gap to the previous edge's end exceeds tol_px.
 
     Returns a list of point-lists (each a continuous path). Each edge's
@@ -615,31 +599,31 @@ def emit_cut_gcode_full(
     cfg: PuzzleConfig,
     word: str,
     mode: str = "dynamic",
-    warmup_ms: int = 0,
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
-    warmup_ms_first: int | None = None,
-    lead_in_mm: float = 0.0,
+    overburn_ms: float = 1000.0,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
     letter perimeters → interior cell-to-cell → panel border last (so
     stock stays attached until the very final cut).
 
-    mode / warmup_ms / feed_override / min_segment_mm / power_percent
-    behave as in emit_cut_gcode_simple. warmup_ms_first (if set) is the
-    dwell on the very first cut, when the diode is coldest; later cuts use
-    the shorter warmup_ms."""
+    mode / feed_override / min_segment_mm / power_percent behave as in
+    emit_cut_gcode_simple. Diode cold-start fade is handled by OVERBURN, not
+    dwells (GRBL laser mode keeps the beam off while stationary): the first
+    `overburn_ms` of every closed loop under-cut while the diode ramped, so
+    after the loop closes (laser now hot) we re-trace that same distance.
+    overburn length = overburn_ms/1000 * feed_mm_per_s, derived from the
+    feedrate. Default 1000ms — conservative (better to overcut than under)."""
     laser = material["laser"]
     pct = power_percent if power_percent is not None else laser["power_percent"]
     power_s = int(round(pct * 10))
     feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
     passes = laser["passes"]
     on = "M3" if mode == "static" else "M4"
-    warmup_s = max(0, warmup_ms) / 1000.0
-    first_ms = warmup_ms if warmup_ms_first is None else warmup_ms_first
-    first_s = max(0, first_ms) / 1000.0
+    # Overburn distance from the ramp duration at this feed (mm/min -> mm/s).
+    lead_in_mm = max(0.0, overburn_ms) / 1000.0 * (feed / 60.0)
 
     edges = extract_unique_edges(pieces)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
@@ -684,15 +668,10 @@ def emit_cut_gcode_full(
         "contiguous edges fused into single continuous cuts (no per-edge re-fire)",
         "ASSUMES Z already at focal height in your WCS",
     ]
-    if first_ms > 0 or warmup_ms > 0:
-        extra.append(
-            f"warmup dwell: G4 P{first_s:.3f}/{warmup_s:.3f} (note: GRBL laser "
-            "mode keeps the laser OFF while stationary, so dwells may not warm it)"
-        )
     if lead_in_mm > 0:
         extra.append(
-            f"lead-in: closed loops re-trace their first {lead_in_mm:.1f}mm at the "
-            "end (laser warm) to finish the cold under-cut start"
+            f"overburn: {overburn_ms:.0f}ms = {lead_in_mm:.1f}mm at F{feed}; closed "
+            "loops re-trace that start distance at the end (laser warm)"
         )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
@@ -705,7 +684,6 @@ def emit_cut_gcode_full(
         mode=mode,
     )
 
-    first_cut = True
     for idx, path_mm in enumerate(chains, start=1):
         coords_mm = decimate_min_segment(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
@@ -716,10 +694,6 @@ def emit_cut_gcode_full(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")
-        dwell_s = first_s if first_cut else warmup_s
-        if dwell_s > 0:
-            lines.append(f"G4 P{dwell_s:.3f}  ; warmup")
-        first_cut = False
         for pass_n in range(passes):
             if passes > 1:
                 lines.append(f"; pass {pass_n + 1} of {passes}")

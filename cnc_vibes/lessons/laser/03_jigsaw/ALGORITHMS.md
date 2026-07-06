@@ -17,6 +17,7 @@ word + seed + PuzzleConfig
        merge_small_fragments()         absorb slivers into neighbours
        fuse_counter_fragments()        one disc per letter hole
        round_panel_corners()           fillet the 4 outer corners
+       absorb_letter_slivers()         fold letter-pinched tips into letters
   └─ emitter.emit_cut_gcode_full()
        extract_unique_edges()          dedup shared boundaries
        eulerian_order()                continuous-cut routing (CPP)
@@ -34,7 +35,7 @@ word + seed + PuzzleConfig
 Cuts run on the piece centerline; the laser kerf itself becomes the
 clearance between pieces. We do **not** offset for kerf — a piece and its
 neighbour share one cut line. Consequence: everything downstream depends
-on adjacent pieces describing that shared line **identically** (see A2).
+on adjacent pieces describing that shared line **identically** (see A1).
 
 ### R2. Interlocking lollipop tabs
 Adjacent cells connect with a "lollipop" tab: a short stem rising into a
@@ -42,11 +43,15 @@ circular bulb. One cell's outward bulb is the other's inward socket — the
 **same curve**. Tab direction (in/out) per interior edge is chosen by a
 seeded coin flip shared by both cells.
 
-### R3. Tabs shift to clear letters; drop if they can't
-A tab slides along its edge to avoid overlapping a letter stroke
-(`find_clear_tab_offset`). If no clear offset exists, the tab is dropped
-and that edge becomes a plain (or wavy) cut. Dropped tabs mean two
-pieces are only held by their other edges — watch the `dropped` stat.
+### R3. Tabs slide, then flip, then drop to clear letters
+A tab first **slides** along its edge to avoid overlapping a letter stroke
+(`find_clear_tab_offset`, center-out). If no offset clears, the tab
+**flips** its in/out direction and retries. Only if both directions fail
+at every offset is the tab **dropped** and that edge becomes a plain (or
+wavy) cut. Dropped tabs mean two pieces are only held by their other
+edges — watch the `dropped` stat (it's seed-independent for a given word:
+a drop means the letter blocks that edge in *both* directions). `flipped`
+counts tabs saved by the direction flip.
 
 ### R4. Letters are pieces; their counters are drop-ins
 Each glyph (N, O, R, A…) is a solid piece that drops into the pocket
@@ -60,47 +65,79 @@ nearest interior horizontal grid line instead of the middle of a cell
 row. Carving letters out of a row *boundary* leaves large, tabbable
 chunks; carving them out of a row *middle* leaves thin mid-row slivers
 and eats the edges where tabs go. Works best with an even row count (the
-panel center is then a grid line) — see the `banner` preset.
+panel center is then a grid line) — see the `banner` preset. When possible,
+letters should be nudged to vertical grid lines as well. Grid lines can be
+respaced as needed to align with the actual letter geometries (i.e. not
+a fixed-width font, so not a fixed-width grid.)
 
 ### R6. Rounded outer corners are optional
 `corner_radius_mm` fillets only the four outer panel corners (morphology
 on the panel rectangle, applied to the 4 corner cells). Interior tabs are
 untouched. Default 0 = sharp.
 
-### R7. Wavy edges are optional and shared
-`wave_amplitude_px > 0` gives internal cell-cell edges an organic
-half-sine wave. The wave is computed traversal-invariantly so both cells
-share ONE curve (see A2). Panel-perimeter edges stay straight.
+### R7. Wavy edges (legacy — superseded by the letter-aligned grid)
+`wave_amplitude_px > 0` gives internal cell-cell edges a half-sine wave
+(A1). A naive bolt-on: uniform wobble on a fixed grid, blind to the
+letters. **Superseded** by the letter-aligned grid (R12/A12/A13) for the
+`banner` nameplate preset, which now uses `wave_amplitude_px=0`. Wavy mode
+still exists for the uniform presets but is not the direction.
+
+### R12. Letter-aligned grid (single-row nameplates)
+For a single row of text (`letter_aligned_grid=True`, the `banner` preset),
+the grid is derived from the letters instead of a uniform lattice:
+- **Letter spacing (A14):** letters are laid out at their natural
+  (proportional, kerned) advances plus ONE consistent tracking delta, sized
+  so the tightest adjacent pair still clears a full tab (bulge + stick-width
+  walls). Not fixed-width; letters may shrink to fit the panel.
+- a **vertical seam** passes THROUGH each glyph at its automatic origin
+  (A12), *bisecting the dominant thick stroke* (e.g. N's left bar) — not
+  along an edge, not on a thin part.
+- the **middle (r=1) row boundary** bends to each glyph's origin-y; since
+  most origins land at a full stem's mid (~0.49) it is nearly level.
+- 2 rows, straight cuts. The spacing guarantees the between-letters piece
+  isn't pinched to a sliver (cf. the old R/A pinch), because there's room
+  for a tab plus walls in every gap.
 
 ---
 
 ## Geometry algorithms
 
-### A1. Non-square panels & cells
-`panel_mm` = width, `panel_h_mm` = height (None ⇒ square). `piece_mm` =
-cell width, `piece_h_mm` = cell height (None ⇒ square). `cols =
-panel_w // piece_w`, `rows = panel_h // piece_h`. The Y-flip in
-`img_to_machine_mm` uses `panel_height_mm`, not `panel_mm`. Square
-configs are byte-identical to before these fields existed.
+### A1. Shared interior edges computed ONCE (the core invariant)
+Each interior grid edge — its tab offset, direction, drop/flip decision,
+bulb vertices, and wave — is computed **one time in a canonical
+orientation** and reused by both adjacent cells (one forward, one
+reversed). **Invariant: a shared boundary must be vertex-identical from
+both sides.** Violate it and `unary_union`/`linemerge` can't merge the
+near-coincident curves; the boundary fragments into slivers the cut
+leaves **laser-off gaps** in, and pieces don't separate. This is the
+single most important correctness property in the geometry.
 
-### A2. Shared interior edges computed ONCE (critical)
-Each interior grid edge (its tab offset, drop decision, bulb vertices,
-and wave) is computed **one time in a canonical orientation** and reused
-by both adjacent cells — one forward, one reversed. Before this, each
-cell sampled its copy of the shared edge independently (opposite
-traversal directions → mismatched vertices). `unary_union`/`linemerge`
-then couldn't merge the near-coincident curves, fragmenting the boundary
-into slivers that the cut left **laser-off gaps** in → pieces didn't
-separate. Rule of thumb: **a shared boundary must be vertex-identical
-from both sides.** (Same fix applied to `wavy_points`.)
+### A2. Tab placement: slide → flip → drop
+`find_clear_tab_offset` walks candidate offsets center-out
+(`shift_steps` × `shift_step_frac` of the tab length) and returns the
+first where the tab bulb clears the letter union by `letter_clearance_px`.
+If none clears, the caller flips the tab's in/out direction and calls
+again; only if that also fails is the tab dropped (R3). All three
+outcomes are decided on the canonical edge so both cells stay consistent
+(A1).
 
-### A3. Sliver merge
-`merge_small_fragments` absorbs any cell fragment thinner than
-`fragment_min_thickness_px` or smaller than `fragment_min_area_px` into
-its largest adjacent **cell** neighbour sharing ≥ `min_shared` px of
-boundary. Isolated fragments (no cell neighbour) are left alone.
-KNOWN GAP: fragments that border only a *letter* (e.g. a triangle tip
-inside the N) aren't merged — this is TODO T2.
+### A3. Fragment absorption — the tab-ability rule
+**Target rule:** every final piece must carry at least one tab of its
+own. Any fragment that a letter cut has severed from all of its tabs —
+**regardless of size** — must be absorbed into a neighbouring piece that
+*does* have a tab. The lone exception is a fragment fully inside a letter
+with no adjacent non-letter piece: that's a **counter** (R4/A4), kept as
+a drop-in.
+
+**Current implementation** approximates this with two passes (true
+tab-presence detection is the follow-up — see TODO):
+- `merge_small_fragments`: a fragment that is thin (< `fragment_min_thickness_px`,
+  ~one tab-bulb radius) or small (< `fragment_min_area_px`) folds into the
+  adjacent **cell** it shares the most boundary with. (Today it picks the
+  largest-area neighbour sharing ≥ `min_shared` px; the target is
+  longest-shared-edge, which makes a stronger joint.)
+- `absorb_letter_slivers`: a leftover small, non-counter fragment that
+  borders only a *letter* folds INTO that letter piece (A5).
 
 ### A4. Counter fusion
 `fuse_counter_fragments`: cell fragments that fall inside the *same*
@@ -108,10 +145,57 @@ glyph interior hole are unioned into one piece. Without this, a counter
 straddling a grid line is carved into two half-discs that won't seat.
 Counters are detected as fragments inside a glyph's interior ring.
 
-### A5. Corner rounding
-`round_panel_corners` clips the corner cells to `mask ∩ corner-box`,
-where `mask` is the panel rectangle eroded-then-dilated by the radius
-(round joins). Only the 4 corners change; tabs mid-edge are preserved.
+### A5. Absorb letter-pinched slivers
+`carve_letter_pockets` keeps even tiny fragments (>10px²) instead of
+dropping them (was: drop ≤100px²). Where a letter stroke crosses a cell
+near a grid line it leaves a triangle tip (e.g. the N's diagonal crook)
+severed from the rest of its cell — it has no tab and can't merge into a
+cell (A3). `absorb_letter_slivers` folds any such sub-`fragment_min_area_px`,
+non-counter, letter-adjacent fragment INTO the letter piece (the notch
+fills; the letter grows by a sliver). Counters (A4) are skipped. Before
+this, those tips were dropped → uncut gaps / orphan bits inside letters.
+Guarded by `test_no_notch_gaps` (panel must tile completely).
+
+> **Config note (non-square):** `panel_mm`/`piece_mm` are widths;
+> `panel_h_mm`/`piece_h_mm` are heights (None ⇒ square). `cols = panel_w //
+> piece_w`, `rows = panel_h // piece_h`. `img_to_machine_mm`'s Y-flip uses
+> `panel_height_mm`. Corner rounding is R6 (`round_panel_corners` clips the
+> 4 corner cells to `mask ∩ corner-box`; no separate algorithm entry).
+
+### A12. Automatic glyph origin (font-independent)
+`glyph_origins.auto_glyph_origin(ink)` derives a grid origin from a glyph's
+rendered ink mask — no per-glyph/-font lookup table:
+- **origin-x** = the leftmost FULL-HEIGHT vertical stroke (longest vertical
+  ink run ≥ `stem_frac`·height): stems of B/E/F/H/K/N/P/R, the back of C, a
+  side of O/U, etc. No such stem (pure diagonals/curves: A/V/X/Y) → ink
+  centroid-x.
+- **origin-y** = the vertical center of that stem's run (mid-height for a
+  full stem); centroid-y when there's no stem.
+This snaps the grid line onto a real edge (the intent behind the manual
+dots, which were only a demonstration). `letter_auto_origins(word, cfg)`
+runs it per glyph and returns origins in image-pixel space. A manual
+`USER_ORIGIN_OVERRIDES` table remains only as an escape hatch.
+
+### A13. Letter-aligned node lattice
+`build_pieces_letter_aligned(seed, letter_union, cfg, origins)` builds the
+R12 grid on an explicit node lattice `node(c, r)`: vertical line xs =
+panel-left, each origin-x (clamped monotonic, min one tab-radius apart),
+panel-right; `r=0`/`r=2` = panel top/bottom; `r=1` = the origin-y at each
+line (the bent boundary). Interior edges get lollipop tabs via the shared
+slide→flip→drop helper (`_straight_edge_with_tab`); sloped `r=1` segments
+place tabs along the slope automatically (endpoint-driven). The uniform
+builder is untouched, so all uniform regression tests stay byte-identical.
+
+### A14. Letter spacing with a guaranteed tab gap
+`letter_layout_spaced(word, cfg)` renders the word for the aligned grid:
+glyphs at natural advances, then a single uniform tracking delta added to
+every gap so the tightest pair's ink-to-ink clearance reaches
+`tab_height_px + 2·tab_circle_r_px` (a tab's perpendicular bulge plus a
+stick-width wall each side). **Panel outer dimensions are absolute** (from
+the preset) — the font shrinks to fit `0.92·puzzle_w`, so long names get
+smaller letters rather than a wider panel (decided). Returns
+`(letter_union, boxes, origins)` — the spread `letter_union` is carved, and
+origins are computed per glyph on the spread layout (A12).
 
 ---
 
@@ -126,16 +210,20 @@ for calibration, not cut settings.
 ### R9. GRBL laser mode fires only while moving
 With `$32=1`, the laser is **off whenever the machine is stationary** —
 so a `G4` dwell does NOT warm the diode (no motion = no beam, no scorch).
-Warmup must be done with MOTION, not dwells. `--warmup-ms*` default to 0
-and are kept only for controllers that behave differently.
+Warmup must be done with MOTION, not dwells. Warmup-dwell flags have been
+removed from `jigsaw.py` AND the shared laser CAM (`scripts/laser_cam.py`,
+`cam_cli.py`, `help_topics.py`) entirely; cold-start fade is handled by
+OVERBURN (A7). (Lesson 06 `spiral_cal.py` still has a dwell sweep — pending
+scrub / repurpose to an overburn sweep.)
 
 ### R10. The diode ramps over the first few mm of every laser-on
 After any laser-off→on, optical power ramps up over ~5–10mm of travel
 (driver soft-start / thermal), so the first few mm of every cut path
 under-cut. Two levers: (a) minimize laser-on events (A6), (b) re-cut the
-cold start when hot (A7). Measure the ramp with
+cold start when hot (A7, "overburn"). Measure the ramp duration with
 `build/warmup_ramp_test.gcode` (cut it, see how far in each line starts
-cutting through) and set `--lead-in-mm` to that + ~2mm.
+cutting through) and set `--overburn-ms` so `overburn_ms/1000 * feed_mm_per_s`
+covers that distance + margin. Default 1000ms (conservative).
 
 ### R11. Cut order: letters → interior → panel
 Letters first (while stock is most rigid), interior next, panel border
@@ -161,11 +249,15 @@ even-degree ⇒ one closed circuit ⇒ one laser-on event per region.
   instead of greedy to shorten connectors; allow a few extra lifts to
   skip the longest bridges now that lead-in handles warmup.
 
-### A7. Lead-in overlap
-`_append_lead_in_overlap`: since CPP makes every region a closed loop,
-after finishing the loop (laser now hot) re-trace its first
-`lead_in_mm` — re-cutting the cold under-cut start. No waste area needed.
-Only applies to closed loops. Default 10mm.
+### A7. Overburn (lead-in overlap)
+Since CPP makes every region a closed loop, after finishing the loop (laser
+now hot) `_append_lead_in_overlap` re-traces its start — re-cutting the cold
+under-cut section. The distance is derived from a DURATION, `overburn_ms`
+(default 1000, conservative): `lead = overburn_ms/1000 * feed_mm_per_s`, so
+it auto-scales with feed. No waste area needed; only applies to closed loops.
+Future (per design notes): treat the overburn region as "uncut" and, for
+open paths, double back or hand it to an adjacent continuous path; worst case
+reverse over it (the ramp blends both ways).
 
 ### A8. Edge dedup + chaining
 `extract_unique_edges` = `unary_union` + `linemerge` of all piece
@@ -206,10 +298,28 @@ without reading G-code. Emitted by default with every `cut`.
   through; flesh out the dials (power, feed, line spacing, halftone vs
   grayscale levels, passes, air assist) and record per-material params.
   Likely a pendant/CLI script.
-- **T2 — Orphaned letter-corner slivers.** Small fragments that border
-  only a letter (e.g. the N's inner triangle tips) aren't merged by A3
-  (cell-neighbour only) and end up orphaned onto a piece the letter cuts
-  off. Merge them into the adjacent letter or nearest reachable cell;
-  keep counters (R4/A4) intact.
-- **T3 — Routing tuning.** Optional: optimal odd-node matching and/or
-  allow a few lifts to reduce CPP re-trace overhead (A6).
+- **T2 — Letter-aligned grid.** DONE (R12/A12/A13): `banner` preset now
+  derives vertical lines from glyph auto-origins with a bent middle
+  boundary. Follow-ups below (T6–T9).
+- **T3 — True tab-ability merge.** Implement A3's target rule directly:
+  detect whether a fragment retains a tab, and absorb any tab-less
+  fragment into its longest-shared-edge neighbour (drop the area/thickness
+  heuristics; keep counters). Today's code only approximates this.
+- **T4 — Routing tuning.** Optional: optimal odd-node matching (Blossom)
+  and/or allow a few lifts to reduce CPP re-trace overhead (A6).
+- **T5 — Scrub shared-CAM dwell flags.** `scripts/laser_cam.py` +
+  `cam_cli.py` + lesson 06's `--sweep warmup` still emit G4 dwells that do
+  nothing under `$32=1` (R9). Remove once confirmed nothing else depends
+  on them.
+- **T6 — Letter-aligned follow-ups.** (a) Letter *spacing*: currently the
+  glyphs use PIL default tracking; add a gap sized to fit a full tab
+  between letters. (b) Steep-slope rule: if adjacent origin-ys differ too
+  much (near-vertical `r=1` segment), omit that edge (merge into one taller
+  piece) or widen spacing — rarely hit now that origin-y≈mid. (c) Narrow
+  columns: thread a per-edge `edge_tab_len = min(tab_len_px,
+  0.4·edge_length)` so a skinny column (e.g. "I") keeps a tab instead of
+  dropping it. (d) Multi-row letter-aligned grids (text as a band in a
+  taller panel) — currently single-row (2-row) only.
+- **T7 — Letter sizing.** Short names (KAI/LEO) still gigantify because the
+  font is fit to panel width regardless of letter count; cap letter height
+  and center rather than stretch. Independent of the grid.

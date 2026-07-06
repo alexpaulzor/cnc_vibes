@@ -25,11 +25,15 @@ sys.path.insert(0, str(LESSON_DIR))
 
 from geometry import (  # noqa: E402
     PuzzleConfig,
+    banner_puzzle_config,
+    build_pieces_letter_aligned,
     build_pieces_with_shifted_tabs,
     carve_letter_pockets,
     full_puzzle_config,
     generate_pieces,
+    letter_auto_origins,
     merge_small_fragments,
+    mini_puzzle_config,
     place_tab_at_offset,
     render_letter_polygons,
     small_puzzle_config,
@@ -230,7 +234,15 @@ def test_regression_full_nora_matches_phase8():
     pieces, stats = generate_pieces("NORA", seed=7, cfg=cfg)
     assert len(pieces) == 43
     # Interior edges counted once (shared between cells), not double-counted.
-    assert stats == {"total": 60, "centered": 44, "shifted": 10, "dropped": 6}
+    # seed 7's default tab directions already clear (or are truly impossible),
+    # so flipped==0 here; the 6 drops are edges no direction/offset can clear.
+    assert stats == {
+        "total": 60,
+        "centered": 44,
+        "shifted": 10,
+        "flipped": 0,
+        "dropped": 6,
+    }
 
 
 def test_regression_small_n_matches_phase6_small():
@@ -239,7 +251,27 @@ def test_regression_small_n_matches_phase6_small():
     pieces, stats = generate_pieces("N", seed=7, cfg=cfg)
     # Hard-coded from scratch phase6_small's known good output
     assert len(pieces) == 5
-    assert stats == {"total": 4, "centered": 1, "shifted": 2, "dropped": 1}
+    assert stats == {
+        "total": 4,
+        "centered": 1,
+        "shifted": 2,
+        "flipped": 0,
+        "dropped": 1,
+    }
+
+
+def test_tab_flip_recovers_some_dropped_tabs():
+    """When the seeded tab direction can't clear a letter at any offset,
+    the tab flips in/out and retries before being dropped (a dropped tab
+    weakens the joint). seed 0 / NORA exercises this: several tabs are
+    saved by flipping. Truly-blocked edges (no direction/offset clears)
+    still drop, so `dropped` is seed-independent for a given word."""
+    cfg = full_puzzle_config()
+    _pieces, stats = generate_pieces("NORA", seed=0, cfg=cfg)
+    assert stats["flipped"] > 0, f"expected some flipped tabs, got {stats}"
+    # flip is a strict improvement: it only ever converts a would-be drop
+    # into a placed tab, never the reverse.
+    assert stats["dropped"] == 6
 
 
 def test_regression_full_emits_polygons_in_expected_area():
@@ -340,6 +372,41 @@ def test_ayana_keeps_three_a_counters_as_isolated_pieces():
     )
 
 
+@pytest.mark.parametrize(
+    "cfg_fn,word,seed",
+    [
+        (mini_puzzle_config, "NORA", 7),
+        (mini_puzzle_config, "NORA", 42),
+        (banner_puzzle_config, "NORA", 42),
+        (full_puzzle_config, "NORA", 7),
+    ],
+)
+def test_no_notch_gaps(cfg_fn, word, seed):
+    """Every point inside the panel must belong to a piece (cell or
+    letter). Regression for the letter-notch triangle tips that carve used
+    to DROP (<=100px), leaving uncut gaps / orphan bits inside letters like
+    the N's diagonal crook. absorb_letter_slivers folds them into the
+    adjacent letter so the panel tiles completely."""
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    from geometry import _rounded_panel_mask
+
+    cfg = cfg_fn()
+    pieces, _ = generate_pieces(word, seed, cfg)
+    m = cfg.margin_px
+    # When corner_radius_mm > 0 the panel corners are intentionally rounded
+    # off, so check coverage against the rounded mask, not the square box.
+    panel = _rounded_panel_mask(cfg) or box(
+        m, m, m + cfg.puzzle_w_px, m + cfg.puzzle_h_px
+    )
+    covered = unary_union([p["polygon"] for p in pieces])
+    gap = panel.difference(covered)
+    gap_mm2 = gap.area / (cfg.px_per_mm**2)
+    assert gap_mm2 < 0.5, (
+        f"{word}/{seed}: {gap_mm2:.2f}mm^2 of uncovered panel (notch gaps)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Wavy edges (Option A organic-grid implementation)
 # ---------------------------------------------------------------------------
@@ -387,3 +454,126 @@ def test_wavy_mode_preserves_sliver_merge_contract():
     )
     leaked = _surviving_slivers_with_eligible_neighbors(fragments, cfg)
     assert leaked == [], f"wavy mode leaked mergeable slivers: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# Letter-aligned grid (Phase 2) — auto origins + node-lattice builder
+# ---------------------------------------------------------------------------
+
+from glyph_origins import auto_glyph_origin  # noqa: E402
+
+
+def test_banner_config_is_letter_aligned():
+    cfg = banner_puzzle_config()
+    assert cfg.letter_aligned_grid is True
+    assert cfg.wave_amplitude_px == 0  # straight cuts in aligned mode
+
+
+def test_auto_origin_returns_normalized_coords():
+    import numpy as np
+
+    # a tall vertical bar on the left third -> stem => x on the bar, y mid
+    ink = np.zeros((100, 100), dtype=bool)
+    ink[5:95, 20:30] = True
+    nx, ny = auto_glyph_origin(ink)
+    assert 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0
+    assert nx < 0.5  # sits on the left bar, not center
+    assert 0.4 <= ny <= 0.6  # mid-height of a full stem
+
+
+def test_auto_origin_ring_sits_on_a_stroke():
+    import numpy as np
+
+    # a hollow ring (O-like): the auto rule anchors on the left arc (a real
+    # vertical stroke -> a clean cut edge), at mid height. Not forced to center.
+    ink = np.zeros((120, 120), dtype=bool)
+    yy, xx = np.ogrid[:120, :120]
+    d = (yy - 60) ** 2 + (xx - 60) ** 2
+    ink[(d <= 55**2) & (d >= 38**2)] = True
+    nx, ny = auto_glyph_origin(ink)
+    assert nx < 0.5  # sits on the left arc, not the empty counter
+    assert 0.4 <= ny <= 0.6  # mid-height
+
+
+def test_letter_auto_origins_one_per_glyph_in_bounds():
+    cfg = banner_puzzle_config()
+    origins = letter_auto_origins("NORA", cfg)
+    assert [c for c, _ in origins] == list("NORA")
+    for _c, (ox, oy) in origins:
+        assert cfg.margin_px <= ox <= cfg.margin_px + cfg.puzzle_w_px
+        assert cfg.margin_px <= oy <= cfg.margin_px + cfg.puzzle_h_px
+    # origins run left-to-right
+    xs = [ox for _c, (ox, _oy) in origins]
+    assert xs == sorted(xs)
+
+
+def test_letter_aligned_grid_splits_at_origins():
+    """Each glyph origin should lie on a boundary between two horizontally
+    adjacent cells (a vertical grid line passes through it), i.e. the origin
+    is not deep in the interior of a single cell."""
+    from shapely.geometry import Point
+
+    cfg = banner_puzzle_config()
+    origins = letter_auto_origins("NORA", cfg)
+    lu, _x, _y, _f = render_letter_polygons("NORA", cfg)
+    pieces, _stats = build_pieces_letter_aligned(7, lu, cfg, origins)
+    cells = list(pieces.values())
+    for _c, (ox, oy) in origins:
+        # a vertical line at ox borders cells on both sides: some cell's edge
+        # is within a few px of ox in x.
+        near_edge = min(
+            min(abs(ox - poly.bounds[0]), abs(ox - poly.bounds[2])) for poly in cells
+        )
+        assert near_edge <= cfg.tab_height_px + 3, (
+            f"origin x={ox:.0f} not on a grid line (nearest cell edge {near_edge:.0f}px)"
+        )
+
+
+def test_letter_aligned_banner_nora_piece_count():
+    """Regression lock for the aligned banner NORA layout."""
+    cfg = banner_puzzle_config()
+    pieces, _stats = generate_pieces("NORA", 7, cfg)
+    assert len(pieces) == 17
+    letters = [p for p in pieces if p["kind"] == "letter"]
+    assert len(letters) == 4
+
+
+@pytest.mark.parametrize("word", ["NORA", "KARSON", "KAI", "LEO", "AYANA"])
+def test_letter_aligned_tiles_panel(word):
+    """The aligned grid must cover the whole panel (no uncut gaps)."""
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    from geometry import _rounded_panel_mask
+
+    cfg = banner_puzzle_config()
+    pieces, _ = generate_pieces(word, 7, cfg)
+    m = cfg.margin_px
+    panel = _rounded_panel_mask(cfg) or box(
+        m, m, m + cfg.puzzle_w_px, m + cfg.puzzle_h_px
+    )
+    covered = unary_union([p["polygon"] for p in pieces])
+    gap_mm2 = panel.difference(covered).area / (cfg.px_per_mm**2)
+    assert gap_mm2 < 0.5, f"{word}: {gap_mm2:.2f}mm^2 uncovered"
+
+
+def test_letter_aligned_leftmost_column_interlocks():
+    """The two pieces of the leftmost column (top/bottom, against the panel
+    edge) must share a tabbed boundary — regression for the pieces 1/2
+    no-tab bug on the narrow margin strip. A tab makes the shared boundary
+    much longer than a straight cut across the column width."""
+    cfg = banner_puzzle_config()
+    pieces, _stats = generate_pieces("NORA", 7, cfg)
+    m = cfg.margin_px
+    left = [
+        p["polygon"]
+        for p in pieces
+        if p["kind"] == "cell" and abs(p["polygon"].bounds[0] - m) <= 2
+    ]
+    assert len(left) >= 2, "expected top+bottom pieces against the left edge"
+    left.sort(key=lambda g: g.bounds[1])
+    a, b = left[0], left[1]
+    col_w = a.bounds[2] - a.bounds[0]
+    shared = a.buffer(0.5).intersection(b).length
+    assert shared > 1.5 * col_w, (
+        f"leftmost pieces share only {shared:.0f}px (col {col_w:.0f}px) — no tab"
+    )

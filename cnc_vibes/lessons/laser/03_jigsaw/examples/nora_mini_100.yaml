@@ -5,10 +5,9 @@
 #   python cnc.py jigsaw lessons/laser/03_jigsaw/examples/nora_mini_100.yaml
 #   python cnc.py validate lessons/laser/03_jigsaw/build/cut_mini_nora_seed7.gcode
 #
-# BEFORE the real cut: dial in the cold-start dwell on a scrap with
-#   python cnc.py cal-laser --material cardboard_corrugated_3mm \
-#       --sweep warmup --values 0,100,200,300,400 --power 40 --feed 1400
-# then set warmup_ms below to the shortest dwell that cut cleanly.
+# Diode cold-start fade is handled by overburn_ms (the laser re-traces each
+# closed loop's start once warm; length = overburn_ms/1000 * feed). GRBL laser
+# mode ($32=1) fires only while moving, so G4 dwells do nothing.
 #
 # FIRE RISK: corrugated cardboard. Air assist non-negotiable; never
 # leave the machine unattended.
@@ -23,7 +22,7 @@ jigsaw:
   word: NORA
   seed: 7
   laser_mode: static     # M3 constant power
-  lead_in_mm: 10         # re-trace each loop start hot (beats the diode warmup ramp)
+  overburn_ms: 1000      # re-trace each loop start hot (beats the diode ramp)
   feed: 800              # cut feedrate mm/min
   min_segment_mm: 0.05   # decimate any G1 chord shorter than this
   power_percent: 100     # weak diode — cut at full power (S1000)
