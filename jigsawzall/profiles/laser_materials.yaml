@@ -1,0 +1,172 @@
+# Laser materials profile.
+#
+# Per-material starting parameters for a 10W optical-power diode laser
+# (e.g. LaserTree 10W) running through a GRBL controller in laser mode
+# ($32=1, M4 dynamic power).
+#
+# Values are PUBLISHED STARTING POINTS. They are not calibrated for your
+# specific machine, lens condition, bed height, or current air-assist
+# pressure. Lesson 3b (laser calibration pattern) refines these values
+# empirically. Always cut a small test before committing to a real part.
+#
+# Schema per entry:
+#   id                 stable string id (referenced from job specs)
+#   family             "wood" | "acrylic" | "paper" | ...
+#   thickness_mm       material thickness in mm
+#   laser:
+#     power_percent    S value as percent of 1000 (so 100 -> S1000)
+#     feed_mm_per_min  cut feedrate; M4 dynamic mode scales power with
+#                      actual speed so feed is the dominant heat control
+#     passes           cut-through passes (1 = single pass; more = deeper)
+#     notes            free-form safety / quality / technique notes
+
+- id: plywood_baltic_birch_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 400
+    passes: 2
+    notes: |
+      Reliable workhorse. Air assist strongly recommended.
+      First pass scores, second pass cuts through.
+
+- id: plywood_baltic_birch_6mm
+  family: wood
+  thickness_mm: 6.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 200
+    passes: 4
+    notes: |
+      Pushing the 10W diode's depth limit. Watch for charred edges.
+      If cuts aren't going through, slow feed before adding passes.
+
+- id: bamboo_plywood_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 350
+    passes: 2
+    notes: |
+      Density varies layer-to-layer more than baltic birch.
+      Expect occasional uncut spots; second pass usually finishes them.
+
+- id: mdf_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 350
+    passes: 2
+    notes: |
+      Denser than plywood. Smoke is heavy — air assist mandatory.
+      Edges char darker than plywood; sand/wipe before finishing.
+
+- id: balsa_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 80
+    feed_mm_per_min: 800
+    passes: 1
+    notes: |
+      Very soft. Cuts fast and clean. Watch for fire — low density
+      means flames can take hold. Air assist mandatory.
+
+- id: cast_acrylic_3mm_clear
+  family: acrylic
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 150
+    passes: 3
+    notes: |
+      Diode lasers struggle with CLEAR acrylic — much of the IR passes
+      through without absorption. Mitigate by masking the top with paper
+      masking tape or painting it (any color). Cast (not extruded);
+      extruded acrylic gums up and burns instead of cutting cleanly.
+
+- id: cast_acrylic_3mm_colored
+  family: acrylic
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 250
+    passes: 2
+    notes: |
+      Colored cast acrylic absorbs the diode's wavelength much better
+      than clear. Cuts cleanly with polished edges. Cast only.
+
+- id: cast_acrylic_3mm_black
+  family: acrylic
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 300
+    passes: 2
+    notes: |
+      Best diode-laser acrylic — maximum absorption. Edges come out
+      glossy with no flame polishing needed.
+
+- id: cardboard_2mm
+  family: paper
+  thickness_mm: 2.0
+  laser:
+    power_percent: 60
+    feed_mm_per_min: 1500
+    passes: 1
+    notes: |
+      Single-wall corrugated. FIRE RISK — air assist non-negotiable;
+      do not dwell. Cuts at very low power; bump only if not through.
+
+- id: cardboard_corrugated_3mm
+  family: paper
+  thickness_mm: 3.0
+  laser:
+    power_percent: 70
+    feed_mm_per_min: 1400
+    passes: 1
+    notes: |
+      Single-wall corrugated, ~3mm. FIRE RISK — air assist
+      non-negotiable; never dwell over a stationary spot. The
+      air gap inside the flutes means a single fast pass usually
+      cuts through; if the bottom liner survives, prefer a second
+      pass over raising power (high power chars + flares the
+      kerf). Good cheap stock for puzzle-fit tolerance tests.
+      Verify dwell/min-power with lesson 06 (cal-laser) before a
+      real cut on this stock.
+
+- id: cardstock_0.3mm
+  family: paper
+  thickness_mm: 0.3
+  laser:
+    power_percent: 30
+    feed_mm_per_min: 3000
+    passes: 1
+    notes: |
+      Watch for ignition. Air assist mandatory. Useful for stencils
+      and quick calibration tests.
+
+- id: cardboard_thin_1mm
+  family: paper
+  thickness_mm: 1.0
+  laser:
+    power_percent: 50
+    feed_mm_per_min: 2500
+    passes: 1
+    notes: |
+      Thin non-corrugated cardboard (cereal box, shoebox panel). FIRE
+      RISK is real — air assist non-negotiable; do not dwell over a
+      single spot. Single fast pass at medium power. If charring is
+      excessive, drop power 10% before adding passes. Good cheap
+      stock for puzzle-fit tolerance tests and machine-tram checks.
+
+# NEVER cut these with a laser — release toxic gases:
+#   - PVC (any color, any thickness): chlorine gas + corrodes machine
+#   - Polycarbonate / Lexan: burns, fumes, doesn't cut cleanly
+#   - ABS: cyanide gas
+#   - Vinyl: chlorine gas
+#   - Galvanized metal: zinc fumes
+#   - Anything containing chromium, copper, or unknown composition
