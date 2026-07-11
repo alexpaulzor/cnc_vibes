@@ -25,11 +25,12 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 400
+    feed_mm_per_min: 800
     passes: 2
     notes: |
       Reliable workhorse. Air assist strongly recommended.
-      First pass scores, second pass cuts through.
+      Two passes at 800mm/min cut clean through (measured); first pass scores,
+      second severs. Overcut > undercut — drop feed before removing a pass.
 
 - id: plywood_baltic_birch_6mm
   family: wood

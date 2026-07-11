@@ -10,6 +10,7 @@ contract.
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -614,8 +615,14 @@ def test_letter_aligned_holds_together(word):
     (fixes REBECCA/KARSON losing all top-bottom tabs). Allow at most one dropped
     tab (a first/last half-letter jammed against a thin panel margin can lose
     its horizontal tab, but that piece still interlocks via its vertical
-    neighbour). Also every interior column's two pieces must interlock."""
-    cfg = banner_puzzle_config()
+    neighbour). Also every interior column's two pieces must interlock.
+
+    This exercises the SEAM/GRID logic, so it runs with the thin lollipop tab
+    (tab_stem_w_px=None, tab_bulb_elong_px=0). The banner default is now the fat
+    capsule tab, which needs a real-size panel and does not fit these long names
+    on the tiny fit-to-text default (see test_fat_capsule_tab_is_banner_default
+    for the capsule's own hold-together check)."""
+    cfg = replace(banner_puzzle_config(), tab_stem_w_px=None, tab_bulb_elong_px=0.0)
     pieces, stats = generate_pieces(word, 7, cfg)
     assert stats["dropped"] <= 1, (
         f"{word}: {stats['dropped']} dropped tabs — won't hold"
@@ -636,3 +643,36 @@ def test_letter_aligned_holds_together(word):
             ):
                 bulges += 1
     assert bulges >= 2, f"{word}: too few top/bottom interlocks ({bulges})"
+
+
+def test_fat_capsule_tab_is_banner_default():
+    """The banner preset defaults to the fat capsule tab: a wide (~5mm) neck and
+    a stadium bulb wider than the neck (so it still locks). Verifies the neck
+    width, the capsule bulb width, and that the bulb overhangs the neck."""
+    cfg = banner_puzzle_config()
+    assert cfg.tab_stem_w_px == 25  # 5mm neck at 5px/mm
+    assert cfg.tab_bulb_elong_px == 25
+    L, H = cfg.tab_len_px, cfg.tab_height_px
+    pts = tab_outline(direction=+1, cfg=cfg)
+    # neck walls are the two interior points sitting on the edge (v == 0)
+    on_edge = [u for u, v in pts if abs(v) < 1e-9 and 0.0 < u < 1.0]
+    neck_px = (max(on_edge) - min(on_edge)) * L
+    assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 25px == 5mm
+    # bulb width = elong + 2R, measured across the raised (v > 0) points
+    bulb_us = [u for u, v in pts if v > 1e-6]
+    bulb_px = (max(bulb_us) - min(bulb_us)) * L
+    assert bulb_px == pytest.approx(
+        cfg.tab_bulb_elong_px + 2 * cfg.tab_circle_r_px, abs=2
+    )
+    assert bulb_px > neck_px + cfg.tab_circle_r_px  # real undercut / lock
+    # apex still reaches full tab depth
+    assert max(v for _u, v in pts) == pytest.approx(1.0, abs=0.01)
+
+
+def test_fat_capsule_banner_holds_at_real_size():
+    """At a real name-plate size the fat-capsule banner holds together with no
+    dropped tabs for a typical (<=6 letter) name — the size KAIDEN is cut at."""
+    cfg = replace(banner_puzzle_config(), panel_mm=290, panel_h_mm=170, piece_mm=29)
+    cfg = fit_config("KAIDEN", cfg)
+    _pieces, stats = generate_pieces("KAIDEN", 7, cfg)
+    assert stats["dropped"] == 0, f"KAIDEN dropped {stats['dropped']} fat tabs"

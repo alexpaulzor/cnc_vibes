@@ -63,8 +63,18 @@ class PuzzleConfig:
     piece_h_mm: float | None = None  # nominal cell HEIGHT; None = square (= piece_mm)
     px_per_mm: int = 5  # render scale (5 px/mm = 0.2mm per pixel)
     tab_circle_r_px: int = 22  # lollipop bulb radius in pixels
+    # Fat-tab (capsule) opt-in. When either is set the tab neck widens to
+    # tab_stem_w_px and the round bulb becomes a stadium/capsule: two circles of
+    # radius tab_circle_r_px whose centers are tab_bulb_elong_px apart, joined by
+    # a rectangle (bulb width = elong + 2*R). This keeps the bulb wider than the
+    # neck (undercut/lock) even with a thick neck, so pieces don't snap at the
+    # stem. Both None/0 (default) => the original thin lollipop, byte-identical.
+    tab_stem_w_px: float | None = None  # neck width px; None => R (old behavior)
+    tab_bulb_elong_px: float = 0.0  # capsule center-to-center px; 0 => plain circle
     margin_px: int = 120  # canvas inset around the panel for rendering
-    legend_h_px: int = 240  # extra canvas height below for labels
+    legend_h_px: int = (
+        0  # extra canvas height below the panel; unused (no legend is drawn)
+    )
 
     # Rounded outer corners. 0 (default) = sharp 90° panel corners (legacy).
     # >0 rounds the four outer panel-perimeter corners with this radius (mm).
@@ -97,6 +107,12 @@ class PuzzleConfig:
 
     # Shifting + merging parameters; default to "scale with tab radius"
     letter_clearance_factor: float = 1.0  # multiplied by tab_circle_r_px
+    # Absolute minimum wall (mm) a tab must keep from any letter. When set it
+    # overrides letter_clearance_factor: the tab shifts to a position at least
+    # this far from the letters, or drops to a straight edge if none exists.
+    # This is the minimum material bridge left beside a tab (raise it to stop
+    # brittle thin bridges; costs dropped tabs where letters are dense).
+    letter_clearance_mm: float | None = None
     fragment_min_thickness_factor: float = 1.0  # multiplied by tab_circle_r_px
     fragment_min_area_factor: float = 0.10  # fraction of (cell_w * cell_h)
     shift_steps: int = 12
@@ -144,7 +160,12 @@ class PuzzleConfig:
         self.cell_h_px = int(cell_h_mm * self.px_per_mm)
         self.tab_height_px = 3 * self.tab_circle_r_px
         self.tab_len_px = max(int(0.40 * self.cell_w_px), 5 * self.tab_circle_r_px)
-        self.letter_clearance_px = self.tab_circle_r_px * self.letter_clearance_factor
+        if self.letter_clearance_mm is not None:
+            self.letter_clearance_px = self.letter_clearance_mm * self.px_per_mm
+        else:
+            self.letter_clearance_px = (
+                self.tab_circle_r_px * self.letter_clearance_factor
+            )
         self.fragment_min_thickness_px = (
             self.tab_circle_r_px * self.fragment_min_thickness_factor
         )
@@ -231,6 +252,13 @@ def banner_puzzle_config() -> PuzzleConfig:
         piece_mm=25,
         piece_h_mm=37.5,
         tab_circle_r_px=11,
+        # Fat capsule tabs by default: 5mm neck (~1.7x a 3mm stock, so pieces
+        # don't snap at the stem) rising into a ~9.4mm-wide stadium bulb (elong
+        # 25px + 2*R) that keeps ~2.2mm of undercut lock each side. Needs a
+        # real-size banner (see cut cmd panel overrides); the 150mm calibration
+        # default is too short for them and will drop tabs.
+        tab_stem_w_px=25,
+        tab_bulb_elong_px=25,
         wave_amplitude_px=0,
         corner_radius_mm=3.0,
         letter_aligned_grid=True,
@@ -299,6 +327,9 @@ def tab_outline(
     R = cfg.tab_circle_r_px
     H = cfg.tab_height_px  # 3 * R
     L = cfg.tab_len_px if tab_len is None else tab_len
+    # Fat capsule tab (opt-in): wide neck + stadium bulb (two R-circles E apart).
+    if cfg.tab_stem_w_px is not None or cfg.tab_bulb_elong_px > 0:
+        return _capsule_tab_outline(cfg, L, R, H, direction, n)
     v_tangent_px = 2 * R - R * math.sqrt(3) / 2
     v_tangent = v_tangent_px / H
     stem_half_u = (R / 2) / L
@@ -324,6 +355,39 @@ def tab_outline(
     pts.append((u_stem_right, 0.0))
     pts.append((1.0, 0.0))
     return pts
+
+
+def _capsule_tab_outline(cfg, L, R, H, direction, n) -> list[tuple[float, float]]:
+    """Fat tab: neck of width cfg.tab_stem_w_px rising into a horizontal capsule
+    (stadium) bulb — two circles of radius R with centers cfg.tab_bulb_elong_px
+    apart, joined top and bottom. Bulb width = elong + 2R (> neck width => the
+    piece still locks, and the wide neck resists snapping). Built in px along the
+    edge (0..L) and perpendicular (0..H), then normalized like tab_outline."""
+    W = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else R
+    E = max(0.0, cfg.tab_bulb_elong_px)
+    uc = L / 2.0
+    neck_l, neck_r = uc - W / 2.0, uc + W / 2.0
+    cap_l, cap_r = uc - E / 2.0, uc + E / 2.0
+    v_bottom = R  # capsule bottom (cap centers sit at 2R, radius R)
+
+    def arc(cx, a0, a1):  # sample a cap arc (skip first point; caller already there)
+        return [
+            (
+                cx + R * math.cos(a0 + (a1 - a0) * (i / n)),
+                2 * R + R * math.sin(a0 + (a1 - a0) * (i / n)),
+            )
+            for i in range(1, n + 1)
+        ]
+
+    px = [(0.0, 0.0), (neck_l, 0.0), (neck_l, v_bottom)]  # lead-in + up left neck
+    if cap_l < neck_l:  # flat capsule bottom left of the neck
+        px.append((cap_l, v_bottom))
+    px += arc(cap_l, -math.pi / 2, -3 * math.pi / 2)  # left cap: bottom -> over -> top
+    px += arc(cap_r, math.pi / 2, -math.pi / 2)  # top flat + right cap down to bottom
+    if cap_r > neck_r:  # flat capsule bottom right of the neck
+        px.append((neck_r, v_bottom))
+    px += [(neck_r, 0.0), (L, 0.0)]  # down right neck + lead-out
+    return [(x / L, (y / H) * direction) for x, y in px]
 
 
 def place_tab_at_offset(

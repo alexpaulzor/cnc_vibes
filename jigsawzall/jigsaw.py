@@ -80,6 +80,72 @@ def _config_for_size(size: str):
     )
 
 
+def _apply_size_overrides(cfg, args):
+    """Return cfg with panel/piece dimensions overridden by any CLI flags that
+    were provided (--panel-mm/--panel-h-mm/--piece-mm). Used to flex the banner
+    preset to a specific name/stock without adding a new size preset. replace()
+    re-runs __post_init__ so the derived cols/cell_px stay consistent."""
+    from dataclasses import replace
+
+    over = {}
+    if getattr(args, "panel_mm", None) is not None:
+        over["panel_mm"] = args.panel_mm
+    if getattr(args, "panel_h_mm", None) is not None:
+        over["panel_h_mm"] = args.panel_h_mm
+    if getattr(args, "piece_mm", None) is not None:
+        over["piece_mm"] = args.piece_mm
+    # Fat capsule tabs: mm -> px (px_per_mm is fixed per config, default 5).
+    if getattr(args, "tab_stem_mm", None) is not None:
+        over["tab_stem_w_px"] = args.tab_stem_mm * cfg.px_per_mm
+    if getattr(args, "tab_bulb_elong_mm", None) is not None:
+        over["tab_bulb_elong_px"] = args.tab_bulb_elong_mm * cfg.px_per_mm
+    if getattr(args, "letter_clearance_mm", None) is not None:
+        over["letter_clearance_mm"] = args.letter_clearance_mm
+    return replace(cfg, **over) if over else cfg
+
+
+def _add_size_override_flags(sub):
+    """Attach the shared banner-sizing override flags to a subparser."""
+    sub.add_argument(
+        "--panel-mm",
+        type=float,
+        default=None,
+        help="override panel width bound (mm); flexes the banner to a name/stock",
+    )
+    sub.add_argument(
+        "--panel-h-mm",
+        type=float,
+        default=None,
+        help="override panel height bound (mm)",
+    )
+    sub.add_argument(
+        "--piece-mm",
+        type=float,
+        default=None,
+        help="override nominal cell width (mm); sets the width-quantization step",
+    )
+    sub.add_argument(
+        "--tab-stem-mm",
+        type=float,
+        default=None,
+        help="fat capsule tabs: neck width (mm), e.g. 5 (~1.5-2x stock thickness)",
+    )
+    sub.add_argument(
+        "--tab-bulb-elong-mm",
+        type=float,
+        default=None,
+        help="fat capsule tabs: bulb center-to-center elongation (mm); bulb width "
+        "= this + 2*bulb radius. Pair with --tab-stem-mm so the bulb still locks",
+    )
+    sub.add_argument(
+        "--letter-clearance-mm",
+        type=float,
+        default=None,
+        help="minimum wall (mm) a tab keeps from any letter = the material bridge "
+        "left beside it. Raise to kill brittle thin bridges (costs dropped tabs)",
+    )
+
+
 def _apply_origin(cfg, origin: str):
     """Mutate cfg.origin_offset_mm based on the --origin flag."""
     if origin == "corner":
@@ -350,7 +416,9 @@ def render_gcode_previews(
 
 
 def cmd_preview(args):
-    cfg = fit_config(args.word.upper(), _config_for_size(args.size))
+    cfg = fit_config(
+        args.word.upper(), _apply_size_overrides(_config_for_size(args.size), args)
+    )
     word = args.word.upper()
     pieces, stats = generate_pieces(word, args.seed, cfg)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -367,11 +435,16 @@ def cmd_preview(args):
 
 
 def cmd_cut(args):
-    cfg = fit_config(args.word.upper(), _config_for_size(args.size))
+    cfg = fit_config(
+        args.word.upper(), _apply_size_overrides(_config_for_size(args.size), args)
+    )
     _apply_origin(cfg, args.origin)
     word = args.word.upper()
     pieces, stats = generate_pieces(word, args.seed, cfg)
     material = load_material(args.material)
+    if getattr(args, "passes", None) is not None:
+        # override the profile's pass count without mutating the cached profile
+        material = {**material, "laser": {**material["laser"], "passes": args.passes}}
     gcode = _emit_cut_for(
         pieces,
         material,
@@ -846,6 +919,7 @@ def main():
     )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
+    _add_size_override_flags(pv)
     pv.set_defaults(func=cmd_preview)
 
     # cut
@@ -866,9 +940,10 @@ def main():
     cu.add_argument(
         "--laser-mode",
         dest="laser_mode",
-        default="dynamic",
+        default="static",
         choices=("dynamic", "static"),
-        help="M4 dynamic (default) vs M3 static constant-power",
+        help="M3 static constant-power (default — this weak diode under-fires in "
+        "M4 dynamic, which scales power with feed) vs M4 dynamic",
     )
     cu.add_argument(
         "--ramp-ms",
@@ -887,6 +962,13 @@ def main():
         "feed_mm_per_min)",
     )
     cu.add_argument(
+        "--passes",
+        type=int,
+        default=None,
+        help="override number of cut-through passes (default: material profile). "
+        "Use 1 to dial in a single-pass clean cut, or bump for stubborn stock",
+    )
+    cu.add_argument(
         "--min-segment-mm",
         dest="min_segment_mm",
         type=float,
@@ -903,6 +985,7 @@ def main():
         "and only cuts reliably at full power; pass a lower value to use "
         "the material profile's value instead via e.g. --power-percent <n>)",
     )
+    _add_size_override_flags(cu)
     cu.set_defaults(func=cmd_cut)
 
     # raster

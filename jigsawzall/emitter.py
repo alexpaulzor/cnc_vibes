@@ -68,12 +68,16 @@ def img_to_machine_mm(
     """Image pixel coords (panel inset by margin_px, Y-down) to machine
     mm (panel at origin, Y-up). cfg.origin_offset_mm shifts the result —
     set it to (panel_mm/2, panel_mm/2) to center the panel on WCS origin
-    instead of pinning the bottom-left corner there."""
+    instead of pinning the bottom-left corner there.
+
+    The Y flip is about the FITTED panel height (puzzle_h_px), not the
+    panel_h_mm bound: with fit_to_text the fitted banner is shorter than the
+    bound, and using the bound would float the panel up by (bound - fit) in +Y.
+    For non-fit configs puzzle_h_px/px_per_mm == panel_height_mm, so unchanged."""
+    fitted_h_mm = cfg.puzzle_h_px / cfg.px_per_mm
     x_mm = (x_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[0]
     y_mm = (
-        cfg.panel_height_mm
-        - (y_px - cfg.margin_px) / cfg.px_per_mm
-        - cfg.origin_offset_mm[1]
+        fitted_h_mm - (y_px - cfg.margin_px) / cfg.px_per_mm - cfg.origin_offset_mm[1]
     )
     return (x_mm, y_mm)
 
@@ -239,7 +243,7 @@ def emit_cut_gcode_simple(
     ordered = order_inside_out(pieces)
     lines = _header(
         title=f"small puzzle: word={word}, {len(pieces)} pieces, "
-        f"{cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm",
+        f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm",
         material_id=material["id"],
         extra=extra,
         mode=mode,
@@ -677,7 +681,8 @@ def emit_cut_gcode_full(
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 
     lines = _header(
-        title=f"full puzzle: word={word}, {cfg.panel_mm:.0f}x{cfg.panel_mm:.0f}mm, "
+        title=f"full puzzle: word={word}, "
+        f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm, "
         f"{len(chains)} continuous cut paths ({len(ordered)} edges after dedup)",
         material_id=material["id"],
         extra=extra,
