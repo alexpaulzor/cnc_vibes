@@ -171,7 +171,7 @@ def _emit_cut_for(
     cfg,
     word,
     size,
-    mode="dynamic",
+    mode="static",
     feed_override=None,
     min_segment_mm=0.0,
     power_percent=None,
@@ -516,6 +516,79 @@ def cmd_cut(args):
     )
     print(f"-> {png_path}")
     print(f"-> {svg_path}")
+
+
+def cmd_warmuptest(args):
+    """Emit a cold-start ramp test: parallel lines at increasing feeds, each
+    from a cold laser, at full static M3 power. Measure how far into each line
+    the burn reaches full depth/darkness; that fade-in length / feed = the ramp
+    time. It should be ~constant across feeds if the ramp is time-based."""
+    feeds = [int(f) for f in args.feeds.split(",")]
+    length = args.length_mm
+    power_s = int(round(args.power_percent * 10))
+    cool_ms = args.cool_ms
+    x0, y0 = 10.0, 10.0
+    dy = 8.0
+    lines = [
+        "; warmup-delay test — cold-start ramp measurement",
+        "; each line starts cold (laser off + dwell), full static M3 power.",
+        "; MEASURE: fade-in length from the start of each line to full-depth cut;",
+        ";          ramp_time_ms = fade_mm / (feed_mm_per_min/60) * 1000.",
+        f"; feeds (mm/min), bottom->top: {feeds}",
+        f"; line length {length}mm, power {args.power_percent}%, cooldown {cool_ms}ms",
+        ";",
+        "$32=1   ; GRBL laser mode",
+        "G21",
+        "G90",
+        "M5",
+        "G0 X0 Y0",
+        "",
+    ]
+    # A warm reference ruler along the bottom with 5mm ticks (cut after a wiggle
+    # so it's full-depth throughout) to read fade-in distances against.
+    ry = y0 - 6.0
+    lines += [
+        "; --- reference ruler (pre-warmed), ticks every 5mm ---",
+        f"G0 X{x0:.3f} Y{ry:.3f}",
+        "M3 S{}".format(power_s),
+        f"F{feeds[0]}",
+        # warm the ruler start so ticks are accurate
+        f"G1 X{x0 + 6:.3f} Y{ry:.3f}",
+        f"G1 X{x0:.3f} Y{ry:.3f}",
+        f"G1 X{x0 + length:.3f} Y{ry:.3f}",
+        "M5",
+    ]
+    tick = 0.0
+    while tick <= length + 1e-6:
+        tx = x0 + tick
+        lines += [
+            f"G0 X{tx:.3f} Y{ry:.3f}",
+            f"M3 S{power_s}",
+            f"G1 X{tx:.3f} Y{ry - 2.0:.3f}",
+            "M5",
+        ]
+        tick += 5.0
+    lines.append("")
+    for i, feed in enumerate(feeds):
+        y = y0 + i * dy
+        lines += [
+            f"; --- feed {feed} mm/min (cold start) ---",
+            f"G0 X{x0:.3f} Y{y:.3f}",
+            f"G4 P{cool_ms / 1000.0:.2f}   ; let the diode cool -> cold start",
+            f"M3 S{power_s}",
+            f"F{feed}",
+            f"G1 X{x0 + length:.3f} Y{y:.3f}",
+            "M5",
+            "",
+        ]
+    lines += ["G0 X0 Y0", ""]
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    out = BUILD_DIR / "warmup_ramp_test.gcode"
+    out.write_text("\n".join(lines))
+    print(f"feeds: {feeds}  length: {length}mm  power: {args.power_percent}%")
+    print("cut on scrap; measure each line's fade-in length against the ruler,")
+    print("then ramp_ms = fade_mm / (feed/60) * 1000 (average across feeds).")
+    print(f"-> {out}")
 
 
 def cmd_raster(args):
@@ -962,9 +1035,10 @@ def main():
         dest="ramp_ms",
         type=float,
         default=1000.0,
-        help="diode ramp duration (ms): closed loops re-trace their first "
-        "ramp_ms/1000 * feed_mm_per_s at the end (laser warm) to finish "
-        "the cold under-cut start. Default 1000 (conservative — overcut > undercut)",
+        help="diode warmup duration (ms): before each cut the head runs forward "
+        "ramp_ms/2 then back to the start (laser at full power on return), so the "
+        "cut then runs full-power over the whole path. Measure it with the "
+        "warmup-test command; default 1000 (conservative — tune down once measured)",
     )
     cu.add_argument(
         "--feed",
@@ -999,6 +1073,26 @@ def main():
     )
     _add_size_override_flags(cu)
     cu.set_defaults(func=cmd_cut)
+
+    # warmup-test — cold-start ramp measurement pattern
+    wt = subs.add_parser(
+        "warmup-test",
+        help="emit a cold-start ramp test (parallel lines at increasing feeds)",
+    )
+    wt.add_argument(
+        "--feeds",
+        default="200,400,600,800,1200",
+        help="comma-separated feeds (mm/min) to test, bottom->top",
+    )
+    wt.add_argument("--length-mm", type=float, default=40.0, help="test line length")
+    wt.add_argument(
+        "--cool-ms",
+        type=float,
+        default=2000.0,
+        help="laser-off dwell before each line so it starts cold",
+    )
+    wt.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
+    wt.set_defaults(func=cmd_warmuptest)
 
     # raster
     ra = subs.add_parser("raster", help="emit raster engrave + cut GCode (3 files)")

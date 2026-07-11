@@ -362,35 +362,30 @@ def tab_outline(
 
 
 def _capsule_tab_outline(cfg, L, R, H, direction, n) -> list[tuple[float, float]]:
-    """Fat tab: neck of width cfg.tab_stem_w_px rising into a horizontal capsule
-    (stadium) bulb — two circles of radius R with centers cfg.tab_bulb_elong_px
-    apart, joined top and bottom. Bulb width = elong + 2R (> neck width => the
-    piece still locks, and the wide neck resists snapping). Built in px along the
-    edge (0..L) and perpendicular (0..H), then normalized like tab_outline."""
-    W = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else R
-    E = max(0.0, cfg.tab_bulb_elong_px)
+    """Fat tab = a neck of width W (cfg.tab_stem_w_px) capped by a FULL semicircle
+    of radius R at each end — i.e. the rectangle width equals the stem width, so
+    the two bulb circles sit exactly on the neck walls (E == W, always a clean
+    stadium). The circles (radius R) and the protrusion (3R) never change; the
+    ONLY size knob is W. Bulb width = W + 2R, overhang = R on each side. Returned
+    as (u, v) with u over L and v over H, like tab_outline."""
+    W = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else float(R)
     uc = L / 2.0
-    neck_l, neck_r = uc - W / 2.0, uc + W / 2.0
-    cap_l, cap_r = uc - E / 2.0, uc + E / 2.0
-    v_bottom = R  # capsule bottom (cap centers sit at 2R, radius R)
+    vc = 2.0 * R  # bulb center; semicircles span v in [R, 3R] -> protrusion 3R
+    nl, nr = uc - W / 2.0, uc + W / 2.0  # neck walls == circle centers
 
-    def arc(cx, a0, a1):  # sample a cap arc (skip first point; caller already there)
+    def semi(cx, a0, a1):  # sample a semicircle (skip first pt; caller is there)
         return [
             (
                 cx + R * math.cos(a0 + (a1 - a0) * (i / n)),
-                2 * R + R * math.sin(a0 + (a1 - a0) * (i / n)),
+                vc + R * math.sin(a0 + (a1 - a0) * (i / n)),
             )
             for i in range(1, n + 1)
         ]
 
-    px = [(0.0, 0.0), (neck_l, 0.0), (neck_l, v_bottom)]  # lead-in + up left neck
-    if cap_l < neck_l:  # flat capsule bottom left of the neck
-        px.append((cap_l, v_bottom))
-    px += arc(cap_l, -math.pi / 2, -3 * math.pi / 2)  # left cap: bottom -> over -> top
-    px += arc(cap_r, math.pi / 2, -math.pi / 2)  # top flat + right cap down to bottom
-    if cap_r > neck_r:  # flat capsule bottom right of the neck
-        px.append((neck_r, v_bottom))
-    px += [(neck_r, 0.0), (L, 0.0)]  # down right neck + lead-out
+    px = [(0.0, 0.0), (nl, 0.0), (nl, R)]  # lead-in, up left neck to bulb bottom
+    px += semi(nl, -math.pi / 2, -3 * math.pi / 2)  # left cap: bottom -> left -> top
+    px += semi(nr, math.pi / 2, -math.pi / 2)  # top flat + right cap down to bottom
+    px += [(nr, 0.0), (L, 0.0)]  # down right neck, lead-out
     return [(x / L, (y / H) * direction) for x, y in px]
 
 
@@ -435,9 +430,10 @@ def _tab_bulb_polygon(
     return None
 
 
-# Minimum material wall (mm) a tab may leave against the panel border before it
-# is dropped to a straight edge instead — the sliver threshold.
-_BORDER_FLOOR_MM = 1.2
+# Minimum material wall (mm) a tab may leave against an obstacle (letter or
+# panel border) before its bulb is shrunk/flipped to back off — the hard floor
+# below which a bridge is considered brittle.
+_BORDER_FLOOR_MM = 4.0
 
 
 def find_clear_tab_offset(
@@ -1333,21 +1329,10 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
         open_n += 1
     seam_xs = sorted(set(seam_xs))
 
-    for _ in range(4):  # break up over-wide columns with a between-letter gap seam
-        xs = sorted([left_edge] + seam_xs + [right_edge])
-        extra = []
-        for a, b in zip(xs, xs[1:]):
-            if b - a > max_col:
-                cand = [
-                    g
-                    for g in gaps
-                    if a + min_col <= g <= b - min_col and g not in seam_xs
-                ]
-                if cand:
-                    extra.append(min(cand, key=lambda g: abs(g - (a + b) / 2.0)))
-        if not extra:
-            break
-        seam_xs.extend(extra)
+    # One vertical seam per letter (through its stroke), never an extra seam in
+    # the empty GAP between letters — a between-letter cut looks like a phantom
+    # edge. Wide columns on a short name are handled by narrowing the whole
+    # banner (smaller --panel-mm), not by inserting gap seams.
 
     # enforce min column width (merge: drop seams too close to the previous/edge).
     # Each seam's y is the capped-open glob-y when it bounds such a letter, else
@@ -1415,18 +1400,35 @@ def _straight_edge_with_tab(
     ).exterior
     obstacles = unary_union([g for g in (letter_union, border) if g is not None])
 
-    # Tab size ladder, largest -> smallest. The last entry collapses the capsule
-    # to a plain circle (no elongation / default neck) so a tab can fit a tight
-    # clear span rather than being dropped.
+    # Tab size ladder, WIDEST bulb -> narrowest.
     full = min(cfg.tab_len_px, 0.7 * length)
     ladder = []
-    for tl in (full, 0.8 * full, 0.6 * full):
-        if 2.4 * R <= tl < length:
-            ladder.append((cfg, tl))
-    circle_cfg = replace(cfg, tab_bulb_elong_px=0.0, tab_stem_w_px=None)
-    circ = min(max(2.4 * R, 0.0), 0.95 * length)
-    if 2.0 * R <= circ < length:
-        ladder.append((circle_cfg, circ))
+    if cfg.tab_stem_w_px is not None:
+        # Fat capsule. Circles (radius R) and protrusion (3R) never change; the
+        # ONLY knob is the stem width W (== rectangle width). To fit a crowded
+        # tab we step W down from its configured value toward a 3.5mm floor —
+        # the bulb (W + 2R) narrows with it while keeping a full-semicircle
+        # overhang (R) on each side. Never below 3.5mm.
+        w0 = cfg.tab_stem_w_px
+        w_min = 3.5 * cfg.px_per_mm
+        widths = sorted(
+            {w0, (w0 + w_min) / 2, w_min} | {w for w in (w0 * 0.85,) if w >= w_min},
+            reverse=True,
+        )
+        for w in widths:
+            if w < w_min - 1e-6:
+                continue
+            vcfg = replace(cfg, tab_stem_w_px=w, tab_bulb_elong_px=w)  # E == W
+            bulb_w = w + 2 * R  # tab length must contain the bulb
+            for tl in (full, 0.7 * full):
+                if bulb_w <= tl < length:
+                    ladder.append((vcfg, tl))
+    else:
+        # Thin lollipop (default/calibration): shorten the tab, then a plain
+        # circle, to fit a tight clear span.
+        for tl in (full, 0.8 * full, 0.6 * full, 2.4 * R):
+            if 2.4 * R <= tl < length and (not ladder or ladder[-1][1] != tl):
+                ladder.append((cfg, tl))
     if not ladder:
         stats["dropped"] += 1
         return []

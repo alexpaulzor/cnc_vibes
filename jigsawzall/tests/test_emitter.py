@@ -168,11 +168,18 @@ def test_simple_cut_validator_headers():
     assert "$32=1" in g
 
 
-def test_simple_cut_uses_m4_not_m3():
+def test_simple_cut_defaults_to_static_m3():
+    """Laser cutting defaults to static M3 (this diode under-fires in M4
+    dynamic). M4 is still reachable via mode='dynamic'."""
     cfg = small_puzzle_config()
     g = emit_cut_gcode_simple(_tiny_pieces(cfg), _tiny_material(), cfg, "X")
-    assert re.search(r"^M4 ", g, re.MULTILINE)
-    assert not re.search(r"^M3\b", g, re.MULTILINE)
+    assert re.search(r"^M3 ", g, re.MULTILINE)
+    assert not re.search(r"^M4\b", g, re.MULTILINE)
+    gd = emit_cut_gcode_simple(
+        _tiny_pieces(cfg), _tiny_material(), cfg, "X", mode="dynamic"
+    )
+    assert re.search(r"^M4 ", gd, re.MULTILINE)
+    assert not re.search(r"^M3\b", gd, re.MULTILINE)
 
 
 def test_simple_cut_pass_count_matches_material():
@@ -500,14 +507,16 @@ def test_greedy_order_visits_every_edge_once():
     assert len(ordered) == 2
 
 
-def test_full_cut_validator_headers_and_m4():
+def test_full_cut_validator_headers_and_static_default():
     cfg = full_puzzle_config()
     g = emit_cut_gcode_full(_tiny_pieces(cfg), _tiny_material(), cfg, "NORA")
     assert ";HEAD: laser" in g
     assert ";MATERIAL: test_mat" in g
     assert "$32=1" in g
-    assert re.search(r"^M4 ", g, re.MULTILINE)
-    assert not re.search(r"^M3\b", g, re.MULTILINE)
+    # cutting defaults to static M3, never M4
+    assert re.search(r"^M3 ", g, re.MULTILINE)
+    assert not re.search(r"^M4\b", g, re.MULTILINE)
+    assert ";LASER_MODE: static" in g
 
 
 # ---------------------------------------------------------------------------

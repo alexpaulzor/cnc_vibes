@@ -101,7 +101,7 @@ def _header(
     title: str,
     material_id: str,
     extra: list[str] | None = None,
-    mode: str = "dynamic",
+    mode: str = "static",
 ) -> list[str]:
     out = [
         f"; {title}",
@@ -179,28 +179,51 @@ def decimate_min_segment(
     return out
 
 
-def _append_lead_in_overlap(
-    coords: list[tuple[float, float]], lead_in_mm: float, tol: float = 0.05
-) -> list[tuple[float, float]]:
-    """If `coords` is a CLOSED loop, re-trace its first lead_in_mm at the
-    end. The diode ramps up over the first few mm of every laser-on run,
-    so the start of a loop is cut cold/incomplete; continuing past the
-    start (laser still on, now hot) re-cuts that opening segment to finish
-    it. Open paths are returned unchanged (nowhere safe to overlap)."""
-    if lead_in_mm <= 0 or len(coords) < 3:
-        return coords
-    if math.hypot(coords[-1][0] - coords[0][0], coords[-1][1] - coords[0][1]) > tol:
-        return coords  # not a closed loop
-    out = list(coords)
+def _points_up_to(coords, dist):
+    """Polyline from coords[0] forward along coords until arclength `dist`,
+    ending at the interpolated point exactly at `dist` (or the last point if the
+    path is shorter)."""
+    out = [coords[0]]
     acc = 0.0
-    prev = coords[0]
-    for p in coords[1:]:
-        out.append(p)
-        acc += math.hypot(p[0] - prev[0], p[1] - prev[1])
-        prev = p
-        if acc >= lead_in_mm:
-            break
+    for a, b in zip(coords, coords[1:]):
+        seg = math.hypot(b[0] - a[0], b[1] - a[1])
+        if acc + seg >= dist and seg > 1e-9:
+            t = (dist - acc) / seg
+            out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+            return out
+        out.append(b)
+        acc += seg
     return out
+
+
+def _warmup_wiggle(coords, warmup_mm):
+    """Front-loaded diode warmup: motion points (starting AND ending at
+    coords[0]) that trace back and forth over the START of the path so the laser
+    reaches full power by the time it returns to coords[0] — then the real cut
+    runs full-power over every mm, including this start zone.
+
+    50/50 split: run forward warmup_mm/2, then back to the start (warmup_mm/2),
+    so full power is hit exactly on the return. On a path too short for that,
+    oscillate the whole path end-to-end until warmup_mm is covered, always
+    landing back at coords[0]. Returns [] (no wiggle) if warmup_mm<=0.
+    """
+    if warmup_mm <= 0 or len(coords) < 2:
+        return []
+    total = 0.0
+    for a, b in zip(coords, coords[1:]):
+        total += math.hypot(b[0] - a[0], b[1] - a[1])
+    if total <= 1e-9:
+        return []
+    half = warmup_mm / 2.0
+    if total >= half:  # long enough: forward half, back to start
+        fwd = _points_up_to(coords, half)
+        return fwd[1:] + list(reversed(fwd))[1:]
+    # short path: oscillate end-to-end (round trips return to start) until covered
+    trips = max(1, math.ceil(warmup_mm / (2.0 * total)))
+    seq = []
+    for _ in range(trips):
+        seq += list(coords[1:]) + list(reversed(coords))[1:]
+    return seq
 
 
 def emit_cut_gcode_simple(
@@ -208,7 +231,7 @@ def emit_cut_gcode_simple(
     material: dict,
     cfg: PuzzleConfig,
     word: str,
-    mode: str = "dynamic",
+    mode: str = "static",
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
@@ -597,12 +620,46 @@ def chain_contiguous_paths(
     return paths
 
 
+def _order_chains_min_travel(chains, start, panel_w, panel_h):
+    """Reorder cut chains to minimize pen-up (laser-off) travel: greedy
+    nearest-neighbor, entering each chain from whichever end is closest
+    (reversing if needed). The panel-border loop(s) — chains whose bbox spans
+    most of the panel — are kept LAST so the stock stays attached until the end.
+    Cuts travel less and stop hopping across the whole panel between pieces."""
+
+    def is_border(ch):
+        xs = [p[0] for p in ch]
+        ys = [p[1] for p in ch]
+        return (max(xs) - min(xs) > 0.8 * panel_w) and (
+            max(ys) - min(ys) > 0.8 * panel_h
+        )
+
+    border = [c for c in chains if is_border(c)]
+    remaining = [c for c in chains if not is_border(c)]
+    out = []
+    cur = start
+    while remaining:
+        best_i, best_rev, best_d = 0, False, None
+        for i, ch in enumerate(remaining):
+            for rev in (False, True):
+                p = ch[-1] if rev else ch[0]
+                d = (p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2
+                if best_d is None or d < best_d:
+                    best_d, best_i, best_rev = d, i, rev
+        ch = remaining.pop(best_i)
+        if best_rev:
+            ch = ch[::-1]
+        out.append(ch)
+        cur = ch[-1]
+    return out + border
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
     cfg: PuzzleConfig,
     word: str,
-    mode: str = "dynamic",
+    mode: str = "static",
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
@@ -664,6 +721,12 @@ def emit_cut_gcode_full(
         for edge, rev in ordered
     ]
     chains = chain_contiguous_paths(ordered_mm, tol_px=0.1)
+    chains = _order_chains_min_travel(
+        chains,
+        start=(0.0, 0.0),
+        panel_w=cfg.puzzle_w_px / cfg.px_per_mm,
+        panel_h=cfg.puzzle_h_px / cfg.px_per_mm,
+    )
 
     extra = [
         "loose-fit: centerline cuts, laser kerf becomes the clearance",
@@ -674,8 +737,9 @@ def emit_cut_gcode_full(
     ]
     if lead_in_mm > 0:
         extra.append(
-            f"ramp: {ramp_ms:.0f}ms = {lead_in_mm:.1f}mm at F{feed}; closed "
-            "loops re-trace that start distance at the end (laser warm)"
+            f"warmup: {ramp_ms:.0f}ms = {lead_in_mm:.1f}mm at F{feed}; each cut "
+            "runs fwd half / back to start first (laser at full power on return), "
+            "then cuts the whole path at full power"
         )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
@@ -693,7 +757,7 @@ def emit_cut_gcode_full(
         coords_mm = decimate_min_segment(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
             continue
-        coords_mm = _append_lead_in_overlap(coords_mm, lead_in_mm)
+        warm = _warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
         x0, y0 = coords_mm[0]
         lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
@@ -705,6 +769,12 @@ def emit_cut_gcode_full(
             if pass_n > 0:
                 lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
                 lines.append(f"{on} S{power_s}")
+            if pass_n == 0 and warm:  # cold-start warmup only on the first pass
+                lines.append(
+                    "; warmup: fwd half / back to start, then cut at full power"
+                )
+                for x, y in warm:
+                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
             for x, y in coords_mm[1:]:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
