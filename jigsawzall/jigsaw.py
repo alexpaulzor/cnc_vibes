@@ -101,6 +101,8 @@ def _apply_size_overrides(cfg, args):
         over["tab_bulb_elong_px"] = args.tab_bulb_elong_mm * cfg.px_per_mm
     if getattr(args, "letter_clearance_mm", None) is not None:
         over["letter_clearance_mm"] = args.letter_clearance_mm
+    if getattr(args, "banner_h_mm", None) is not None:
+        over["banner_target_h_mm"] = args.banner_h_mm
     return replace(cfg, **over) if over else cfg
 
 
@@ -143,6 +145,13 @@ def _add_size_override_flags(sub):
         default=None,
         help="minimum wall (mm) a tab keeps from any letter = the material bridge "
         "left beside it. Raise to kill brittle thin bridges (costs dropped tabs)",
+    )
+    sub.add_argument(
+        "--banner-h-mm",
+        type=float,
+        default=None,
+        help="target banner height (mm) for a fit_to_text banner; grows the "
+        "top/bottom rows so tabs have more room off the borders",
     )
 
 
@@ -356,8 +365,11 @@ def render_gcode_previews(
     between paths are drawn faintly so re-positioning is visible."""
     paths = _parse_gcode_paths(gcode)
     pad = 10.0
-    pw = cfg.panel_mm
-    ph = cfg.panel_height_mm
+    # Use the FITTED panel size (what the gcode actually spans), not the
+    # panel_mm/panel_h_mm bounds — else a fit_to_text banner is drawn short and
+    # flipped to the bottom of an over-tall canvas (dead space above).
+    pw = cfg.puzzle_w_px / cfg.px_per_mm
+    ph = cfg.puzzle_h_px / cfg.px_per_mm
     vw = pw + 2 * pad
     vh = ph + 2 * pad
     png_path = out_stem.with_suffix(".png")

@@ -100,6 +100,10 @@ class PuzzleConfig:
     # name reserves margin for its end-column tabs (a downstream step can place
     # the fitted panel within stock). panel_mm/panel_h_mm act as MAX bounds.
     fit_to_text: bool = False
+    # Optional target panel HEIGHT (mm) for a fit_to_text banner: the top/bottom
+    # rows grow so the panel reaches ~this tall, giving tabs more room off the
+    # borders. None = height follows the band (original behavior).
+    banner_target_h_mm: float | None = None
     # Explicit fitted panel size in px (set by the fitting pass; overrides the
     # cols*cell derivation for puzzle_w_px/puzzle_h_px when present).
     panel_w_px_fit: int | None = None
@@ -431,6 +435,11 @@ def _tab_bulb_polygon(
     return None
 
 
+# Minimum material wall (mm) a tab may leave against the panel border before it
+# is dropped to a straight edge instead — the sliver threshold.
+_BORDER_FLOOR_MM = 1.2
+
+
 def find_clear_tab_offset(
     edge_start,
     edge_dir,
@@ -439,18 +448,37 @@ def find_clear_tab_offset(
     direction,
     cfg: PuzzleConfig,
     tab_len: float | None = None,
-) -> float | None:
+    border=None,
+) -> tuple[float | None, bool]:
     """Walk candidate offsets (center first, then alternating left/right by
-    SHIFT_STEPS x SHIFT_STEP_FRAC * tab_len_px) and return the first one
-    where the tab bulb clears the letter union by letter_clearance_px.
-    Returns None if no clear position exists (caller should drop the tab).
+    SHIFT_STEPS x SHIFT_STEP_FRAC * tab_len_px) and choose where to place the
+    tab. The tab bulb must clear the letter union by letter_clearance_px, and —
+    when `border` (the panel outline) is given — it should also stay that far
+    from the outside edge so no brittle sliver is left against the border.
+
+    Returns (offset, cleared_border):
+      - (o, True):  a spot clearing letters and keeping the FULL wall from the
+                    border (letter_clearance_px).
+      - (o, False): letters clear and the border wall is at least a bulb-radius
+                    (no brittle sliver) but short of the full wall — the offset
+                    that MAXIMIZES the border wall. The caller may prefer a
+                    flipped direction that reaches (o, True).
+      - (None, False): letters can't be cleared, or every letter-clear spot
+                    leaves a sub-radius sliver against the border -> the caller
+                    flips or drops (a straight edge beats a brittle sliver).
     tab_len overrides cfg.tab_len_px (shorter tab for a short edge)."""
     L = cfg.tab_len_px if tab_len is None else tab_len
     max_offset = edge_length - L
     if max_offset <= 0:
-        return None
+        return None, False
     center = max_offset / 2
     step = L * cfg.shift_step_frac
+    clr = cfg.letter_clearance_px
+    # A wall thinner than this is the brittle sliver we're avoiding; never place
+    # a tab that leaves less than this against the border (drop to a straight
+    # edge instead). Scales with the bulb radius but capped so a big letter
+    # clearance doesn't force wholesale drops on a compact banner.
+    border_floor = min(clr, _BORDER_FLOOR_MM * cfg.px_per_mm)
 
     candidates = [center]
     for i in range(1, cfg.shift_steps + 1):
@@ -459,9 +487,7 @@ def find_clear_tab_offset(
             if 0 <= o <= max_offset:
                 candidates.append(o)
 
-    if letter_union is None:
-        return center
-
+    best = None  # (border_wall, offset) among letter-clear spots short of full
     for offset_u in candidates:
         bulb = _tab_bulb_polygon(
             edge_start, edge_dir, edge_length, direction, offset_u, cfg, tab_len=L
@@ -469,11 +495,19 @@ def find_clear_tab_offset(
         if bulb is None:
             continue
         try:
-            if bulb.distance(letter_union) >= cfg.letter_clearance_px:
-                return offset_u
+            if letter_union is not None and bulb.distance(letter_union) < clr:
+                continue
+            wall = bulb.distance(border) if border is not None else float("inf")
+            if wall >= clr:
+                return offset_u, True  # clears letters and the full border wall
+            if best is None or wall > best[0]:
+                best = (wall, offset_u)
         except Exception:
             continue
-    return None
+
+    if best is not None and best[0] >= border_floor:
+        return best[1], False  # best achievable wall, no brittle sliver
+    return None, False
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +655,14 @@ def build_pieces_with_shifted_tabs(
     wave_steps = cfg.wave_steps
     px, py = cfg.margin_px, cfg.margin_px
     cw, ch = cfg.cell_w_px, cfg.cell_h_px
+    # Panel outline used to keep tabs a wall's-width off the outside edge — only
+    # for the letter-aligned banner (the handled name-plate). Uniform grids pass
+    # None so their tab placement stays byte-identical to the phase scripts.
+    border = (
+        box(px, py, px + cfg.puzzle_w_px, py + cfg.puzzle_h_px).exterior
+        if cfg.letter_aligned_grid
+        else None
+    )
 
     def _edge_interior(c0, c1, tab_dir):
         """Build the point list strictly BETWEEN corners c0->c1 for one
@@ -636,21 +678,29 @@ def build_pieces_with_shifted_tabs(
         max_offset = length - cfg.tab_len_px
         offset = None
         used_dir = tab_dir
+
         if max_offset > 0:
-            offset = find_clear_tab_offset(
-                c0, edge_dir, length, letter_union, tab_dir, cfg
+            # Try the seeded direction; if it can't keep the tab off the outside
+            # border, try the flipped direction (which usually protrudes inward,
+            # away from the border). Prefer whichever clears the border; fall
+            # back to a border-best-effort placement; drop only if letters can't
+            # be cleared either way.
+            o_seed, seed_clear = find_clear_tab_offset(
+                c0, edge_dir, length, letter_union, tab_dir, cfg, border=border
             )
-            if offset is None and letter_union is not None:
-                # No clear slide with the seeded direction — try flipping the
-                # tab in/out before dropping it (a dropped tab leaves the joint
-                # held only by the piece's other edges). The edge is computed
-                # once and shared, so the flip stays consistent for both cells.
-                alt = find_clear_tab_offset(
-                    c0, edge_dir, length, letter_union, -tab_dir, cfg
+            if seed_clear:
+                offset = o_seed
+            else:
+                o_flip, flip_clear = find_clear_tab_offset(
+                    c0, edge_dir, length, letter_union, -tab_dir, cfg, border=border
                 )
-                if alt is not None:
-                    offset = alt
-                    used_dir = -tab_dir
+                if flip_clear:
+                    offset, used_dir = o_flip, -tab_dir
+                    stats["flipped"] += 1
+                elif o_seed is not None:
+                    offset = o_seed  # letters clear, border best-effort (centered)
+                elif o_flip is not None:
+                    offset, used_dir = o_flip, -tab_dir
                     stats["flipped"] += 1
         if offset is None:
             stats["dropped"] += 1
@@ -1161,6 +1211,11 @@ def _fit_panel_to_text(word: str, cfg: PuzzleConfig) -> PuzzleConfig:
     side_margin = _end_side_margin_px(cfg)
     row_min = cfg.tab_height_px + cfg.tab_circle_r_px
     row_h = max(row_min, int(m["band_h"] * 0.45))
+    # Optionally grow the top/bottom rows to reach a target panel height — taller
+    # rows give border-adjacent tabs more room to keep their wall.
+    if cfg.banner_target_h_mm is not None:
+        target_px = cfg.banner_target_h_mm * cfg.px_per_mm
+        row_h = max(row_h, int((target_px - m["band_h"]) / 2))
     fit_w = int(min(cfg.bounds_w_px, m["total"] + 2 * side_margin))
     fit_h = int(min(cfg.bounds_h_px, m["band_h"] + 2 * row_h))
     return replace(cfg, panel_w_px_fit=fit_w, panel_h_px_fit=fit_h)
@@ -1323,48 +1378,141 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
     return union, boxes, origins
 
 
-def _straight_edge_with_tab(c0, c1, tab_dir, letter_union, cfg, stats):
-    """Interior points (excluding endpoints) for a straight edge c0->c1 with
-    a lollipop tab that slides, then flips, then drops to clear letters.
-    Mirrors build_pieces_with_shifted_tabs._edge_interior but standalone and
-    wave-free — used by the letter-aligned builder for its (possibly sloped)
-    node-lattice edges. Updates `stats` in place."""
+def _straight_edge_with_tab(
+    c0, c1, tab_dir, letter_union, cfg, stats, avoid=None, full_scan=False
+):
+    """Interior points (excluding endpoints) for a straight edge c0->c1 with a
+    tab placed by this policy (banner needs every tab, so it never drops):
+
+      1. Keep the FULL wall (letter_clearance_px) everywhere around the whole tab
+         — from letters AND the panel border — aiming for the edge centerpoint.
+         Prefer the largest tab and the seeded direction.
+      2. If the full wall can't be met, CENTER the tab in the available space
+         (the offset that maximizes the min wall), trying the FLIPPED direction
+         first — keep the largest tab whose best wall is at least a sliver floor.
+      3. As a LAST resort, shrink the tab (down to a single circle) to fit.
+
+    `avoid` (a letter-counter/hole geometry) rejects any offset whose bulb sits
+    substantially inside it — a tab in a counter gives no real interlock.
+    `full_scan` scans the whole edge (end columns, whose only clear span is the
+    outer margin) rather than a center-out window. Used by the letter-aligned
+    builder for its (possibly sloped) node edges."""
+    from dataclasses import replace
+
     length = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
     if length < 1e-6:
         return []
     stats["total"] += 1
     edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
-    # Try the full tab first, then progressively shorter ones, so a tab still
-    # lands in a short CLEAR span of the edge (e.g. the narrow margin left of a
-    # letter that fills its column — pieces 1/2). Below ~2.4R the bulb won't fit.
-    min_tab = 2.4 * cfg.tab_circle_r_px
+    clr = cfg.letter_clearance_px
+    floor = min(clr, _BORDER_FLOOR_MM * cfg.px_per_mm)
+    R = cfg.tab_circle_r_px
+    border = box(
+        cfg.margin_px,
+        cfg.margin_px,
+        cfg.margin_px + cfg.puzzle_w_px,
+        cfg.margin_px + cfg.puzzle_h_px,
+    ).exterior
+    obstacles = unary_union([g for g in (letter_union, border) if g is not None])
+
+    # Tab size ladder, largest -> smallest. The last entry collapses the capsule
+    # to a plain circle (no elongation / default neck) so a tab can fit a tight
+    # clear span rather than being dropped.
     full = min(cfg.tab_len_px, 0.7 * length)
-    etabs = []
-    for e in (full, 0.75 * full, 0.55 * full, min_tab):
-        if e >= min_tab and e < length and e not in etabs:
-            etabs.append(e)
-    for etab in etabs:
-        offset, used = None, tab_dir
-        offset = find_clear_tab_offset(
-            c0, edge_dir, length, letter_union, tab_dir, cfg, tab_len=etab
-        )
-        if offset is None and letter_union is not None:
-            alt = find_clear_tab_offset(
-                c0, edge_dir, length, letter_union, -tab_dir, cfg, tab_len=etab
-            )
-            if alt is not None:
-                offset, used = alt, -tab_dir
-                stats["flipped"] += 1
-        if offset is None:
-            continue
-        if abs(offset - (length - etab) / 2) < 1.0:
+    ladder = []
+    for tl in (full, 0.8 * full, 0.6 * full):
+        if 2.4 * R <= tl < length:
+            ladder.append((cfg, tl))
+    circle_cfg = replace(cfg, tab_bulb_elong_px=0.0, tab_stem_w_px=None)
+    circ = min(max(2.4 * R, 0.0), 0.95 * length)
+    if 2.0 * R <= circ < length:
+        ladder.append((circle_cfg, circ))
+    if not ladder:
+        stats["dropped"] += 1
+        return []
+
+    def _in_avoid(poly):
+        if avoid is None or not poly.intersects(avoid):
+            return False
+        try:
+            return poly.intersection(avoid).area > 0.2 * poly.area
+        except Exception:
+            return False
+
+    def _scan(vcfg, tl, d):
+        """(full_off, best_off, best_wall): full_off = offset closest to edge
+        center whose whole tab keeps the full wall; best_off/best_wall = offset
+        that maximizes the min wall (centering the tab in the available space)."""
+        mo = length - tl
+        if mo <= 0:
+            return None, None, -1.0
+        center = mo / 2.0
+        if full_scan:  # scan the whole edge (end column's span may be off-center)
+            step = max(2.0, tl * 0.15)
+            offs = [center]
+            o = 0.0
+            while o <= mo + 1e-6:
+                offs.append(min(o, mo))
+                o += step
+        else:
+            step = tl * cfg.shift_step_frac
+            offs = [center]
+            for i in range(1, cfg.shift_steps + 1):
+                for s in (-1, +1):
+                    o = center + s * i * step
+                    if 0 <= o <= mo:
+                        offs.append(o)
+        full_off, best_off, best_wall = None, None, -1.0
+        for o in offs:
+            poly = _tab_bulb_polygon(c0, edge_dir, length, d, o, vcfg, tab_len=tl)
+            if poly is None or _in_avoid(poly):
+                continue
+            wall = poly.distance(obstacles) if not obstacles.is_empty else 1e9
+            if wall >= clr and (
+                full_off is None or abs(o - center) < abs(full_off - center)
+            ):
+                full_off = o
+            if wall > best_wall:
+                best_wall, best_off = wall, o
+        return full_off, best_off, best_wall
+
+    def _emit(vcfg, tl, d, off):
+        if abs(off - (length - tl) / 2) < 1.0:
             stats["centered"] += 1
         else:
             stats["shifted"] += 1
-        tw = place_tab_at_offset(c0, edge_dir, length, used, offset, cfg, tab_len=etab)
+        if d != tab_dir:
+            stats["flipped"] += 1
+        tw = place_tab_at_offset(c0, edge_dir, length, d, off, vcfg, tab_len=tl)
         return list(tw[1:-1])
+
+    # 1) Full wall everywhere: largest tab, centre-most offset, seed dir first.
+    for vcfg, tl in ladder:
+        for d in (tab_dir, -tab_dir):
+            full_off, _, _ = _scan(vcfg, tl, d)
+            if full_off is not None:
+                return _emit(vcfg, tl, d, full_off)
+    # 2) Best effort: largest tab whose centred wall clears the sliver floor,
+    #    flipping first (pick the direction with the larger wall).
+    for vcfg, tl in ladder:
+        pick = None
+        for d in (tab_dir, -tab_dir):
+            _, best_off, best_wall = _scan(vcfg, tl, d)
+            if best_off is not None and (pick is None or best_wall > pick[1]):
+                pick = (best_off, best_wall, d)
+        if pick is not None and pick[1] >= floor:
+            return _emit(vcfg, tl, pick[2], pick[0])
+    # 3) Never drop: place the smallest tab at its best (most central) spot.
+    for vcfg, tl in reversed(ladder):
+        pick = None
+        for d in (tab_dir, -tab_dir):
+            _, best_off, best_wall = _scan(vcfg, tl, d)
+            if best_off is not None and (pick is None or best_wall > pick[1]):
+                pick = (best_off, best_wall, d)
+        if pick is not None:
+            return _emit(vcfg, tl, pick[2], pick[0])
     stats["dropped"] += 1
-    return []  # no tab fits any clear span
+    return []
 
 
 def _clear_tab_offsets_full(
@@ -1410,65 +1558,14 @@ def _end_column_h_edge(
 
     Unlike the interior edges (`_straight_edge_with_tab`, a center-out search
     over a bounded window), this scans the full edge and REJECTS tabs whose bulb
-    falls inside a letter counter, then places the tab in the clear span nearest
-    the panel border — the outer margin that both end pieces always share, so the
-    top/bottom end pieces are guaranteed to interlock. Shrinks the tab and flips
-    its direction to fit a narrow clear span; drops only if genuinely nothing
-    fits. `outer_at_c1` picks which end is the panel border (True => c1)."""
-    length = math.hypot(c1[0] - c0[0], c1[1] - c0[1])
-    if length < 1e-6:
-        return []
-    stats["total"] += 1
-    edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
-    min_tab = 2.4 * cfg.tab_circle_r_px
-    full = min(cfg.tab_len_px, 0.7 * length)
-    # Keep a wall of material (~1.5 stem widths) between the bulb and the panel
-    # border, else the thin sliver of wood/card just snaps off (MARIA's left tab).
-    border_x = c0[0] if not outer_at_c1 else c1[0]
-    border_clear = 1.0 * cfg.tab_circle_r_px
-    etabs = []
-    for e in (full, 0.75 * full, 0.55 * full, min_tab):
-        if e >= min_tab and e < length and e not in etabs:
-            etabs.append(e)
-    for etab in etabs:
-        for direction, is_flip in ((tab_dir, False), (-tab_dir, True)):
-            offs = _clear_tab_offsets_full(
-                c0, edge_dir, length, letter_union, hole_union, direction, cfg, etab
-            )
-            # drop offsets whose bulb crowds the panel border (thin-wall break)
-            kept = []
-            for o in offs:
-                bulb = _tab_bulb_polygon(
-                    c0, edge_dir, length, direction, o, cfg, tab_len=etab
-                )
-                if bulb is None:
-                    continue
-                gap = (
-                    bulb.bounds[0] - border_x
-                    if not outer_at_c1
-                    else border_x - bulb.bounds[2]
-                )
-                if gap >= border_clear:
-                    kept.append(o)
-            offs = kept
-            if not offs:
-                continue
-            max_off = length - etab
-            # nearest the panel border (outer margin is shared by both pieces).
-            key = (lambda o: max_off - o) if outer_at_c1 else (lambda o: o)
-            offset = min(offs, key=key)
-            if is_flip:
-                stats["flipped"] += 1
-            if abs(offset - max_off / 2) < 1.0:
-                stats["centered"] += 1
-            else:
-                stats["shifted"] += 1
-            tw = place_tab_at_offset(
-                c0, edge_dir, length, direction, offset, cfg, tab_len=etab
-            )
-            return list(tw[1:-1])
-    stats["dropped"] += 1
-    return []
+    falls inside a letter counter, then applies the same wall-keeping, centre-
+    seeking, never-drop policy as the interior edges — so the end tab sits in the
+    middle of its clear outer margin (a wall off the border, not jammed against
+    it), while still guaranteeing the top/bottom end pieces interlock through
+    that shared margin. `outer_at_c1` is unused now (kept for call compatibility)."""
+    return _straight_edge_with_tab(
+        c0, c1, tab_dir, letter_union, cfg, stats, avoid=hole_union, full_scan=True
+    )
 
 
 def build_pieces_letter_aligned(seed, letter_union, cfg, origins):
