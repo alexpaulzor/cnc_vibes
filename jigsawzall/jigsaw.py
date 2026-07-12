@@ -40,6 +40,7 @@ from encoder import (  # noqa: E402
     load_and_preprocess,
 )
 from emitter import (  # noqa: E402
+    WARMUP_MS,
     combined_raster_and_cut,
     emit_cut_gcode_full,
     emit_cut_gcode_simple,
@@ -103,6 +104,8 @@ def _apply_size_overrides(cfg, args):
         over["letter_clearance_mm"] = args.letter_clearance_mm
     if getattr(args, "banner_h_mm", None) is not None:
         over["banner_target_h_mm"] = args.banner_h_mm
+    if getattr(args, "font", None) is not None:
+        over["font_path"] = args.font
     return replace(cfg, **over) if over else cfg
 
 
@@ -153,6 +156,12 @@ def _add_size_override_flags(sub):
         help="target banner height (mm) for a fit_to_text banner; grows the "
         "top/bottom rows so tabs have more room off the borders",
     )
+    sub.add_argument(
+        "--font",
+        default=None,
+        help="letter font: alias (bold/black/impact/narrow) or a .ttf path; "
+        "'black' is chunkier than the default bold",
+    )
 
 
 def _apply_origin(cfg, origin: str):
@@ -175,7 +184,7 @@ def _emit_cut_for(
     feed_override=None,
     min_segment_mm=0.0,
     power_percent=None,
-    ramp_ms=1000.0,
+    ramp_ms=WARMUP_MS,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -518,77 +527,326 @@ def cmd_cut(args):
     print(f"-> {svg_path}")
 
 
+_SEVEN_SEG = {
+    # segments: a top, b top-right, c bot-right, d bottom, e bot-left, f top-left, g mid
+    "0": "abcdef",
+    "1": "bc",
+    "2": "abged",
+    "3": "abgcd",
+    "4": "fgbc",
+    "5": "afgcd",
+    "6": "afgecd",
+    "7": "abc",
+    "8": "abcdefg",
+    "9": "abgfcd",
+}
+
+
+def _seg_endpoints(w, h):
+    return {
+        "a": ((0, h), (w, h)),
+        "b": ((w, h), (w, h / 2)),
+        "c": ((w, h / 2), (w, 0)),
+        "d": ((0, 0), (w, 0)),
+        "e": ((0, h / 2), (0, 0)),
+        "f": ((0, h), (0, h / 2)),
+        "g": ((0, h / 2), (w, h / 2)),
+    }
+
+
+def _seven_seg_segments(text, x, y, h):
+    """7-segment strokes for `text` (digits), bottom-left at (x, y), height h.
+    Returns a list of ((x0,y0),(x1,y1)) segments in absolute coords."""
+    w = h * 0.55
+    gap = h * 0.35
+    segd = _seg_endpoints(w, h)
+    out = []
+    cx = x
+    for ch in text:
+        for s in _SEVEN_SEG.get(ch, ""):
+            (x0, y0), (x1, y1) = segd[s]
+            out.append(((cx + x0, y + y0), (cx + x1, y + y1)))
+        cx += w + gap
+    return out
+
+
+def _engrave_number(text, x, y, h, power_s, feed):
+    """G-code lines that engrave `text` (digits) with a 7-segment stroke font,
+    bottom-left at (x, y), glyph height h. Each stroke is its own M3..M5 so there
+    are no stray marks between segments. Marks (light) rather than cuts."""
+    w = h * 0.55
+    gap = h * 0.35
+    segd = _seg_endpoints(w, h)
+    out = []
+    cx = x
+    for ch in text:
+        for s in _SEVEN_SEG.get(ch, ""):
+            (x0, y0), (x1, y1) = segd[s]
+            out += [
+                f"G0 X{cx + x0:.3f} Y{y + y0:.3f}",
+                f"M3 S{power_s}",
+                f"F{feed}",
+                f"G1 X{cx + x1:.3f} Y{y + y1:.3f}",
+                "M5",
+            ]
+        cx += w + gap
+    return out
+
+
+def _render_warmup_key(radii, feeds, order, cx, cy, r_max, T, m):
+    """Annotated key PNG for the warmup ring test: each ring drawn to scale in
+    its own color with a start-angle marker, plus a legend (color -> cut#, feed,
+    start angle, radius). Reference this on-screen to read a compact card."""
+    import math
+
+    S = 14  # px/mm
+    n = len(radii)
+    diag = int(2 * (r_max + m) * S)
+    legw = 240
+    H = max(diag, 40 + n * 26)
+    img = Image.new("RGB", (diag + legw, H), "white")
+    d = ImageDraw.Draw(img)
+    palette = [
+        (200, 40, 40),
+        (210, 120, 20),
+        (180, 165, 20),
+        (40, 160, 60),
+        (30, 120, 200),
+        (120, 60, 190),
+        (200, 40, 140),
+        (90, 90, 90),
+    ]
+
+    def px(mx, my):
+        return (mx * S, H - my * S)
+
+    tf, sf = _load_font(15), _load_font(13)
+    d.text(
+        (6, 6),
+        f"CUT-THROUGH KEY  loop={T:.1f}s/ring, cut inner->outer",
+        fill=(0, 0, 0),
+        font=tf,
+    )
+    for k, i in enumerate(order):
+        r, col = radii[i], palette[k % len(palette)]
+        x0, y0 = px(cx - r, cy + r)
+        x1, y1 = px(cx + r, cy - r)
+        d.ellipse([x0, y0, x1, y1], outline=col, width=2)
+    # radial cross-section slices: 0deg (common spiral start) and join_ang (where
+    # the spiral meets the circle = start of the pure single-pass cut) — matches
+    # the gcode's radials.
+    join_ang = 360.0 * (WARMUP_MS / 1000.0) / T
+    rout = r_max + 2
+    for a in (0.0, join_ang):
+        c0 = px(cx, cy)
+        e = px(
+            cx + rout * math.cos(math.radians(a)), cy + rout * math.sin(math.radians(a))
+        )
+        d.line([c0[0], c0[1], e[0], e[1]], fill=(120, 120, 120), width=1)
+    d.text((diag + 8, 6), "cut# feed   r", fill=(0, 0, 0), font=sf)
+    for k, i in enumerate(order):
+        col, yy = palette[k % len(palette)], 30 + k * 26
+        d.rectangle([diag + 8, yy, diag + 22, yy + 14], fill=col)
+        d.text(
+            (diag + 28, yy),
+            f"#{k + 1}   {feeds[i]}   r{radii[i]:.0f}",
+            fill=(20, 20, 20),
+            font=sf,
+        )
+    p = BUILD_DIR / "warmup_ring_test_key.png"
+    img.save(p, "PNG", optimize=True)
+    return p
+
+
+def _render_gcode_png(lines, out_path, px_per_mm=14):
+    """Render a gcode toolpath (G0/G1 lines + G2/G3 arcs) to a PNG. Cuts (laser
+    on) are red, rapids (laser off) faint gray. Handles negative coords (center
+    origin) by shifting to the bbox. Standalone — no cfg needed."""
+    import math
+    import re
+
+    segs = []  # (x0, y0, x1, y1, is_cut)
+    x = y = None
+    laser = False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith(("M3", "M4")):
+            laser = True
+        elif s.startswith("M5"):
+            laser = False
+        m = re.match(r"^(G[0123])\b", s)
+        if not m:
+            continue
+        g = m.group(1)
+        mx, my = re.search(r"X([-.\d]+)", s), re.search(r"Y([-.\d]+)", s)
+        nx = float(mx.group(1)) if mx else x
+        ny = float(my.group(1)) if my else y
+        if x is not None and nx is not None:
+            if g in ("G0", "G1"):
+                segs.append((x, y, nx, ny, g == "G1" and laser))
+            else:  # G2 (CW) / G3 (CCW) arc via I/J center offset
+                mi, mj = re.search(r"I([-.\d]+)", s), re.search(r"J([-.\d]+)", s)
+                ccx = x + (float(mi.group(1)) if mi else 0.0)
+                ccy = y + (float(mj.group(1)) if mj else 0.0)
+                rad = math.hypot(x - ccx, y - ccy)
+                a0 = math.atan2(y - ccy, x - ccx)
+                a1 = math.atan2(ny - ccy, nx - ccx)
+                if g == "G2":  # CW
+                    while a1 >= a0:
+                        a1 -= 2 * math.pi
+                else:  # CCW
+                    while a1 <= a0:
+                        a1 += 2 * math.pi
+                steps = max(8, int(abs(a1 - a0) / (math.pi / 60)))
+                prev = (x, y)
+                for k in range(1, steps + 1):
+                    aa = a0 + (a1 - a0) * k / steps
+                    cur = (ccx + rad * math.cos(aa), ccy + rad * math.sin(aa))
+                    segs.append((prev[0], prev[1], cur[0], cur[1], laser))
+                    prev = cur
+        x, y = nx, ny
+    if not segs:
+        return out_path
+    xs = [c for s in segs for c in (s[0], s[2])]
+    ys = [c for s in segs for c in (s[1], s[3])]
+    minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
+    S, pad = px_per_mm, 2
+    W = int((maxx - minx + 2 * pad) * S)
+    H = int((maxy - miny + 2 * pad) * S)
+    img = Image.new("RGB", (W, H), "white")
+    d = ImageDraw.Draw(img)
+
+    def to(px_, py_):
+        return ((px_ - minx + pad) * S, H - (py_ - miny + pad) * S)
+
+    for x0, y0, x1, y1, cut in segs:
+        a, b = to(x0, y0), to(x1, y1)
+        d.line(
+            [a[0], a[1], b[0], b[1]],
+            fill=(180, 30, 30) if cut else (215, 215, 215),
+            width=2 if cut else 1,
+        )
+    img.save(out_path, "PNG", optimize=True)
+    return out_path
+
+
 def cmd_warmuptest(args):
-    """Emit a cold-start ramp test: parallel lines at increasing feeds, each
-    from a cold laser, at full static M3 power. Measure how far into each line
-    the burn reaches full depth/darkness; that fade-in length / feed = the ramp
-    time. It should be ~constant across feeds if the ramp is time-based."""
-    feeds = [int(f) for f in args.feeds.split(",")]
-    length = args.length_mm
+    """Single-pass CUT-THROUGH feed test: concentric rings, WCS origin at the
+    CENTER of the rings (zero the machine in the middle of a scrap). Each ring is
+    warmed up first (WARMUP_MS, front-loaded fwd-half/back-to-start at full power)
+    then its loop is cut in --time-s seconds, so feed = circumference / time-s.
+    The innermost (slowest) is cut FIRST and each ring outward is faster.
+
+    Cut inner->outer and STOP when a ring no longer falls free — the last one
+    that dropped is your fastest clean single-pass feed. Rings are native G3 arcs
+    (constant feed, no short-segment stutter). No engraving; read the KEY png. It
+    is fine for the fast outer rings to overrun the scrap edge."""
+    import math
+
+    n = args.circles
+    r_min, r_max = args.min_r, args.max_r
+    T = args.time_s  # loop seconds per ring (EXCLUDING the WARMUP_MS warmup)
     power_s = int(round(args.power_percent * 10))
-    cool_ms = args.cool_ms
-    x0, y0 = 10.0, 10.0
-    dy = 8.0
+    radii = [r_min + (r_max - r_min) * i / max(1, n - 1) for i in range(n)]
+    feeds = [int(round(120 * math.pi * r / T)) for r in radii]  # circumference/(T/60)
+    gap = (r_max - r_min) / max(1, n - 1) if n > 1 else r_min  # inter-ring spacing
+    delta = gap / 2.0  # spiral starts this far INSIDE the target ring (half the gap)
+    # A ring's circumference is covered in T seconds, so 1s of travel sweeps this
+    # many degrees. The spiral lead-in climbs delta over the WARMUP_MS window while
+    # sweeping join_ang, joining the target circle exactly when the laser is warm.
+    join_ang = 360.0 * (WARMUP_MS / 1000.0) / T
+    K = 6  # chained-arc steps approximating the spiral (arcs stutter-free; the tiny
+    # radial connectors happen mid-warmup, low power, in scrap — stutter irrelevant)
+
     lines = [
-        "; warmup-delay test — cold-start ramp measurement",
-        "; each line starts cold (laser off + dwell), full static M3 power.",
-        "; MEASURE: fade-in length from the start of each line to full-depth cut;",
-        ";          ramp_time_ms = fade_mm / (feed_mm_per_min/60) * 1000.",
-        f"; feeds (mm/min), bottom->top: {feeds}",
-        f"; line length {length}mm, power {args.power_percent}%, cooldown {cool_ms}ms",
-        ";",
-        "$32=1   ; GRBL laser mode",
-        "G21",
-        "G90",
-        "M5",
-        "G0 X0 Y0",
-        "",
+        "; cut-through feed test — concentric rings, WCS origin at CENTER",
+        f"; per ring: {WARMUP_MS:.0f}ms spiral warmup ({delta:.1f}mm inside, sweeping "
+        f"{join_ang:.0f}deg) joins the circle, then one full-power loop.",
+        f"; feed = circumference / {T:.1f}s. Cut order INNER (slow) -> OUTER (fast).",
+        "; STOP when a ring stops falling free -> last clean = fastest single-pass feed.",
+        "; spiral shows the warmup gradient (backlight, read the degrees where it first",
+        "; cuts through). Rings/spiral are G2/G3 arcs (no segment stutter). Use KEY png.",
+        "; cut# (inner->outer): radius mm -> feed mm/min:",
     ]
-    # A warm reference ruler along the bottom with 5mm ticks (cut after a wiggle
-    # so it's full-depth throughout) to read fade-in distances against.
-    ry = y0 - 6.0
-    lines += [
-        "; --- reference ruler (pre-warmed), ticks every 5mm ---",
-        f"G0 X{x0:.3f} Y{ry:.3f}",
-        "M3 S{}".format(power_s),
-        f"F{feeds[0]}",
-        # warm the ruler start so ticks are accurate
-        f"G1 X{x0 + 6:.3f} Y{ry:.3f}",
-        f"G1 X{x0:.3f} Y{ry:.3f}",
-        f"G1 X{x0 + length:.3f} Y{ry:.3f}",
-        "M5",
-    ]
-    tick = 0.0
-    while tick <= length + 1e-6:
-        tx = x0 + tick
+    for j, (r, feed) in enumerate(zip(radii, feeds), 1):
+        lines.append(f";   #{j}  r={r:.1f}mm  feed={feed}")
+    lines += ["$32=1   ; GRBL laser mode", "G21", "G90", "M5", "G0 X0 Y0", ""]
+
+    for r, feed in zip(radii, feeds):  # ascending radius = inner/slow first
+        rs = r - delta  # spiral start radius (inside the target ring)
         lines += [
-            f"G0 X{tx:.3f} Y{ry:.3f}",
-            f"M3 S{power_s}",
-            f"G1 X{tx:.3f} Y{ry - 2.0:.3f}",
-            "M5",
-        ]
-        tick += 5.0
-    lines.append("")
-    for i, feed in enumerate(feeds):
-        y = y0 + i * dy
-        lines += [
-            f"; --- feed {feed} mm/min (cold start) ---",
-            f"G0 X{x0:.3f} Y{y:.3f}",
-            f"G4 P{cool_ms / 1000.0:.2f}   ; let the diode cool -> cold start",
+            f"; --- ring r={r:.1f}mm feed={feed} ---",
+            f"G0 X{rs:.3f} Y0.000",  # spiral start: 3 o'clock, delta inside the ring
             f"M3 S{power_s}",
             f"F{feed}",
-            f"G1 X{x0 + length:.3f} Y{y:.3f}",
+            f"; spiral warmup: {rs:.1f}->{r:.1f}mm over {join_ang:.0f}deg (~{WARMUP_MS:.0f}ms)",
+        ]
+        cur_r, cur_a = rs, 0.0
+        for j in range(K):  # chained concentric arcs stepping outward
+            na = join_ang * (j + 1) / K
+            cx0, cy0 = (
+                cur_r * math.cos(math.radians(cur_a)),
+                cur_r * math.sin(math.radians(cur_a)),
+            )
+            ex, ey = (
+                cur_r * math.cos(math.radians(na)),
+                cur_r * math.sin(math.radians(na)),
+            )
+            lines.append(  # CCW arc at cur_r about center
+                f"G3 X{ex:.3f} Y{ey:.3f} I{-cx0:.3f} J{-cy0:.3f}"
+            )
+            nr = rs + delta * (j + 1) / K
+            lines.append(  # radial step outward to next radius (at same angle)
+                f"G1 X{nr * math.cos(math.radians(na)):.3f} "
+                f"Y{nr * math.sin(math.radians(na)):.3f}"
+            )
+            cur_r, cur_a = nr, na
+        # now joined the circle at (r, join_ang); cut one full loop ending there so
+        # every point on the circle is cut exactly once at full power.
+        jx, jy = (
+            r * math.cos(math.radians(join_ang)),
+            r * math.sin(math.radians(join_ang)),
+        )
+        lines += [
+            "; full-power loop (ends exactly at the spiral join)",
+            f"G3 X{-jx:.3f} Y{-jy:.3f} I{-jx:.3f} J{-jy:.3f}",  # half 1 CCW
+            f"G3 X{jx:.3f} Y{jy:.3f} I{jx:.3f} J{jy:.3f}",  # half 2 CCW back to join
             "M5",
             "",
         ]
+
+    # Two radial slices (from center out past the outer ring) to expose the ring
+    # cross-sections at the two informative angles: 0deg = the common spiral start,
+    # and join_ang = where the spiral meets the circle, i.e. the start of the pure
+    # single-pass full-power cut. Cut last (an early stop skips them) at the
+    # slowest, most reliable feed.
+    slow = min(feeds)
+    rout = r_max + 2
+    a2 = math.radians(join_ang)
+    lines += [
+        f"; --- radial cross-section slices at 0deg and {join_ang:.0f}deg (feed {slow}) ---",
+        f"G0 X{rout:.3f} Y0.000",  # outer edge at 0deg (common spiral start)
+        f"M3 S{power_s}",
+        f"F{slow}",
+        "G1 X0.000 Y0.000",  # radial in to center
+        f"G1 X{rout * math.cos(a2):.3f} Y{rout * math.sin(a2):.3f}",  # out at join_ang
+        "M5",
+        "",
+    ]
     lines += ["G0 X0 Y0", ""]
+
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    out = BUILD_DIR / "warmup_ramp_test.gcode"
+    out = BUILD_DIR / "warmup_ring_test.gcode"
     out.write_text("\n".join(lines))
-    print(f"feeds: {feeds}  length: {length}mm  power: {args.power_percent}%")
-    print("cut on scrap; measure each line's fade-in length against the ruler,")
-    print("then ramp_ms = fade_mm / (feed/60) * 1000 (average across feeds).")
+    key_path = _render_warmup_key(
+        radii, feeds, list(range(n)), r_max, r_max, r_max, T, 0.0
+    )
+    png_path = _render_gcode_png(lines, BUILD_DIR / "warmup_ring_test.png")
+    print(f"circles: {n}  radii: {r_min}-{r_max}mm  loop={T}s  feeds: {feeds}")
+    print("origin at CENTER; cut inner->outer, stop when a ring stops dropping free.")
     print(f"-> {out}")
+    print(f"-> {png_path}  (toolpath)")
+    print(f"-> {key_path}  (lookup key)")
 
 
 def cmd_raster(args):
@@ -1034,11 +1292,11 @@ def main():
         "--ramp-ms",
         dest="ramp_ms",
         type=float,
-        default=1000.0,
+        default=WARMUP_MS,
         help="diode warmup duration (ms): before each cut the head runs forward "
         "ramp_ms/2 then back to the start (laser at full power on return), so the "
-        "cut then runs full-power over the whole path. Measure it with the "
-        "warmup-test command; default 1000 (conservative — tune down once measured)",
+        "cut then runs full-power over the whole path. Fixed machine constant "
+        "(WARMUP_MS); ~1000ms measured — you shouldn't need to change it",
     )
     cu.add_argument(
         "--feed",
@@ -1074,22 +1332,21 @@ def main():
     _add_size_override_flags(cu)
     cu.set_defaults(func=cmd_cut)
 
-    # warmup-test — cold-start ramp measurement pattern
+    # warmup-test — single-pass cut-through feed test (concentric rings)
     wt = subs.add_parser(
         "warmup-test",
-        help="emit a cold-start ramp test (parallel lines at increasing feeds)",
+        help="single-pass cut-through feed test: concentric rings, center origin",
     )
+    wt.add_argument("--circles", type=int, default=12, help="number of rings")
+    wt.add_argument("--min-r", type=float, default=3.0, help="smallest ring radius mm")
+    wt.add_argument("--max-r", type=float, default=24.0, help="largest ring radius mm")
     wt.add_argument(
-        "--feeds",
-        default="200,400,600,800,1200",
-        help="comma-separated feeds (mm/min) to test, bottom->top",
-    )
-    wt.add_argument("--length-mm", type=float, default=40.0, help="test line length")
-    wt.add_argument(
-        "--cool-ms",
+        "--time-s",
+        dest="time_s",
         type=float,
-        default=2000.0,
-        help="laser-off dwell before each line so it starts cold",
+        default=3.0,
+        help="loop seconds per ring, EXCLUDING the warmup (feed = circumference / "
+        "time-s). 3s + r_min=3mm gives a ~377mm/min slowest ring",
     )
     wt.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
     wt.set_defaults(func=cmd_warmuptest)

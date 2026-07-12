@@ -104,6 +104,10 @@ class PuzzleConfig:
     # rows grow so the panel reaches ~this tall, giving tabs more room off the
     # borders. None = height follows the band (original behavior).
     banner_target_h_mm: float | None = None
+    # Optional font override for the lettering: an absolute path or an alias in
+    # _FONT_ALIASES ('bold' default, 'black' for chunkier, 'impact', 'narrow').
+    # None = the default bold list (keeps existing geometry byte-identical).
+    font_path: str | None = None
     # Explicit fitted panel size in px (set by the fitting pass; overrides the
     # cols*cell derivation for puzzle_w_px/puzzle_h_px when present).
     panel_w_px_fit: int | None = None
@@ -264,7 +268,7 @@ def banner_puzzle_config() -> PuzzleConfig:
         tab_stem_w_px=25,
         tab_bulb_elong_px=25,
         wave_amplitude_px=0,
-        corner_radius_mm=3.0,
+        corner_radius_mm=5.0,
         letter_aligned_grid=True,
         fit_to_text=True,
     )
@@ -511,15 +515,30 @@ def find_clear_tab_offset(
 # ---------------------------------------------------------------------------
 
 
-def find_font(size: int) -> ImageFont.ImageFont:
-    for path in (
+_FONT_ALIASES = {
+    "bold": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "black": "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+    "impact": "/System/Library/Fonts/Supplemental/Impact.ttf",
+    "narrow": "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+}
+
+
+def find_font(size: int, path: str | None = None) -> ImageFont.ImageFont:
+    """Load a bold sans face at `size`. `path` (an absolute path or an alias in
+    _FONT_ALIASES, e.g. 'black' for a chunkier Arial Black) is tried first; falls
+    back to the default bold list so behavior is unchanged when path is None."""
+    candidates = []
+    if path is not None:
+        candidates.append(_FONT_ALIASES.get(path, path))
+    candidates += [
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "C:\\Windows\\Fonts\\arialbd.ttf",
-    ):
+    ]
+    for p in candidates:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(p, size)
         except (OSError, IOError):
             continue
     return ImageFont.load_default()
@@ -535,7 +554,7 @@ def render_letter_polygons(word: str, cfg: PuzzleConfig):
 
     target_letter_h = int(puzzle_h * 0.70)
     font_size = int(target_letter_h * 1.4)
-    font = find_font(font_size)
+    font = find_font(font_size, cfg.font_path)
 
     tmp = Image.new("L", (img_w, img_h), 0)
     td = ImageDraw.Draw(tmp)
@@ -547,7 +566,7 @@ def render_letter_polygons(word: str, cfg: PuzzleConfig):
     if tw > max_text_w:
         scale = max_text_w / tw
         font_size = int(font_size * scale)
-        font = find_font(font_size)
+        font = find_font(font_size, cfg.font_path)
         bbox = ImageDraw.Draw(tmp).textbbox((0, 0), word, font=font)
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
@@ -1161,10 +1180,10 @@ def _measure_text(word: str, cfg: PuzzleConfig):
         return None
 
     font_size = max(10, int(init_band * 1.4))
-    font = find_font(font_size)
+    font = find_font(font_size, cfg.font_path)
     pen2 = bbox = None
     for _ in range(6):
-        font = find_font(font_size)
+        font = find_font(font_size, cfg.font_path)
         adv = [font.getlength(c) for c in chars]
         bbox = [font.getbbox(c) for c in chars]
         pen = [0.0]

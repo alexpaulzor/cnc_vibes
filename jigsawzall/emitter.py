@@ -39,6 +39,11 @@ from geometry import PuzzleConfig
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# Diode cold-start ramp: time to reach full optical power after the beam fires.
+# Fixed for this machine regardless of material/lesson — every cut warms up for
+# this long (front-loaded as a fwd-half / back-half wiggle = 500ms each way).
+WARMUP_MS = 1000.0
+
 
 # ---------------------------------------------------------------------------
 # Materials
@@ -620,22 +625,13 @@ def chain_contiguous_paths(
     return paths
 
 
-def _order_chains_min_travel(chains, start, panel_w, panel_h):
-    """Reorder cut chains to minimize pen-up (laser-off) travel: greedy
-    nearest-neighbor, entering each chain from whichever end is closest
-    (reversing if needed). The panel-border loop(s) — chains whose bbox spans
-    most of the panel — are kept LAST so the stock stays attached until the end.
-    Cuts travel less and stop hopping across the whole panel between pieces."""
-
-    def is_border(ch):
-        xs = [p[0] for p in ch]
-        ys = [p[1] for p in ch]
-        return (max(xs) - min(xs) > 0.8 * panel_w) and (
-            max(ys) - min(ys) > 0.8 * panel_h
-        )
-
-    border = [c for c in chains if is_border(c)]
-    remaining = [c for c in chains if not is_border(c)]
+def _order_chains_min_travel(chains, start):
+    """Greedy nearest-neighbor order of cut chains to minimize pen-up (laser-off)
+    travel, entering each chain from whichever end is closest (reversing if
+    needed). Ordering only — the caller decides which GROUP (interior vs the
+    panel border) to run, and runs the border group LAST so the stock stays
+    attached to the surrounding stock until the very end."""
+    remaining = list(chains)
     out = []
     cur = start
     while remaining:
@@ -650,8 +646,8 @@ def _order_chains_min_travel(chains, start, panel_w, panel_h):
         if best_rev:
             ch = ch[::-1]
         out.append(ch)
-        cur = ch[-1]
-    return out + border
+        cur = ch[-1] if out else start
+    return out
 
 
 def emit_cut_gcode_full(
@@ -663,7 +659,7 @@ def emit_cut_gcode_full(
     feed_override: int | None = None,
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
-    ramp_ms: float = 1000.0,
+    ramp_ms: float = WARMUP_MS,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -701,32 +697,45 @@ def emit_cut_gcode_full(
     start_pt = (cfg.margin_px, cfg.margin_px)
     # Eulerian routing keeps the laser cutting continuously through grid
     # junctions (fewest laser-on events), which matters when the diode
-    # ramps up over the first few mm after every restart. Letters /
-    # interior / panel are still ordered as tiers (panel last so stock
-    # stays attached), but each tier is walked as continuous trails.
-    ordered = (
-        eulerian_order(letters, start_pt)
-        + eulerian_order(interior, start_pt)
-        + eulerian_order(panel, start_pt)
-    )
+    # ramps up over the first few mm after every restart. Interior and panel
+    # border are fused/ordered separately below so the border can run last.
 
     # Convert each ordered edge to machine mm (honoring greedy_order's
     # direction), then fuse contiguous edges into single continuous cuts so
     # the laser doesn't lift / re-dwell / re-fire mid-line. tol is in mm.
-    ordered_mm = [
-        (
-            LineString([img_to_machine_mm(x, y, cfg) for x, y in edge.coords]),
-            rev,
-        )
-        for edge, rev in ordered
-    ]
-    chains = chain_contiguous_paths(ordered_mm, tol_px=0.1)
-    chains = _order_chains_min_travel(
-        chains,
-        start=(0.0, 0.0),
-        panel_w=cfg.puzzle_w_px / cfg.px_per_mm,
-        panel_h=cfg.puzzle_h_px / cfg.px_per_mm,
+    def _to_mm(edges):
+        return [
+            (LineString([img_to_machine_mm(x, y, cfg) for x, y in edge.coords]), rev)
+            for edge, rev in edges
+        ]
+
+    # Fuse ALL edges into continuous chains, then split by GEOMETRY (not the
+    # per-edge panel test, which misses rounded corners): any chain that runs
+    # along the panel perimeter is part of the outside profile and must be cut
+    # LAST, so the workpiece stays attached to the surrounding stock until the
+    # end. Interior chains (letters + cells) are cut first. Nearest-neighbor
+    # within each group trims pen-up travel.
+    all_edges = (
+        eulerian_order(letters, start_pt)
+        + eulerian_order(interior, start_pt)
+        + eulerian_order(panel, start_pt)
     )
+    all_chains = chain_contiguous_paths(_to_mm(all_edges), tol_px=0.1)
+    pw = cfg.puzzle_w_px / cfg.px_per_mm
+    ph = cfg.puzzle_h_px / cfg.px_per_mm
+    eps = 1.0
+
+    def _perim_frac(ch):
+        on = sum(1 for x, y in ch if x < eps or x > pw - eps or y < eps or y > ph - eps)
+        return on / len(ch)
+
+    border_chains = [c for c in all_chains if _perim_frac(c) > 0.15]
+    inner_chains = [c for c in all_chains if _perim_frac(c) <= 0.15]
+    inner_chains = _order_chains_min_travel(inner_chains, start=(0.0, 0.0))
+    last = inner_chains[-1][-1] if inner_chains else (0.0, 0.0)
+    border_chains = _order_chains_min_travel(border_chains, start=last)
+    chains = inner_chains + border_chains
+    n_edges = len(all_edges)
 
     extra = [
         "loose-fit: centerline cuts, laser kerf becomes the clearance",
@@ -747,7 +756,7 @@ def emit_cut_gcode_full(
     lines = _header(
         title=f"full puzzle: word={word}, "
         f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm, "
-        f"{len(chains)} continuous cut paths ({len(ordered)} edges after dedup)",
+        f"{len(chains)} continuous cut paths ({n_edges} edges after dedup)",
         material_id=material["id"],
         extra=extra,
         mode=mode,
