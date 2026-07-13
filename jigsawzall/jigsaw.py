@@ -523,11 +523,16 @@ def cmd_vgrid(args):
     prm = vg.VGParams(gap_mm=args.gap_mm)
     res = vg.build(args.word, args.seed, prm, auto_gap=not args.no_auto_gap)
     out = args.out or (FIG_DIR / f"vgrid_{args.word.lower()}_seed{args.seed}.png")
+    laser = load_material(args.material)["laser"]
+    feed = args.feed or laser["feed_mm_per_min"]
     title = (
-        f"{args.word.upper()} — vertex-grid: {len(res.pieces)} pieces + "
-        f"{len(res.letters)} letters + {len(res.counters)} counters | "
-        f"1 tab/edge | durable={'YES' if res.durable else 'NO'} | "
-        f"{res.w_mm:.0f}x{res.h_mm:.0f}mm gap={res.gap_mm:.0f}"
+        f"{args.word.upper()} — vertex-grid   "
+        f"{len(res.pieces)} pieces + {len(res.letters)} letters + "
+        f"{len(res.counters)} counters   |   1 tab/edge   "
+        f"durable={'YES' if res.durable else 'NO'}   |   {res.w_mm:.0f}x{res.h_mm:.0f}mm\n"
+        f"{args.material} @ {feed}mm/min, static M3 {args.power_percent:.0f}%, 1 pass   "
+        f"|   letters cut out + encased, no seam crosses a letter   "
+        f"|   WCS bottom-left, interior-first, rounded plaque"
     )
     vg.render_preview(res, out, title)
     print(

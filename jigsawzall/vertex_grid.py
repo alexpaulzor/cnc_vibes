@@ -74,6 +74,8 @@ class VGParams:
     tab_depth_mm: float = 5.0
     tab_width_mm: float = 8.0
     font_size_mm: float = 44.0
+    corner_radius_mm: float = 5.0  # rounded plaque corners (banner standard)
+    simplify_mm: float = 0.15  # decimate cut segments below this (anti-stutter)
 
 
 @dataclass
@@ -89,6 +91,7 @@ class VGResult:
     px_per_mm: float
     w_px: int
     h_px: int
+    plaque: object = None  # rounded-corner plaque polygon (px space)
     meta: dict = field(default_factory=dict)
 
     @property
@@ -202,7 +205,9 @@ def _build_one(word, seed, prm):
     counter_polys = [sg.Polygon(c.reshape(-1, 2)).buffer(0) for c in counters]
     counters_u = unary_union(counter_polys) if counter_polys else sg.Point(-9, -9)
     letters_ring = letters_solid.difference(counters_u)
-    plaque = sg.box(0, 0, W, Hh)
+    # rounded-corner plaque (banner standard): shrink then round-expand a box.
+    cr = prm.corner_radius_mm * ppm
+    plaque = sg.box(cr, cr, W - cr, Hh - cr).buffer(cr, join_style=1)
     background = plaque.difference(letters_solid)
 
     # nodes: decimated convex vertices + border ring
@@ -446,6 +451,7 @@ def _build_one(word, seed, prm):
         px_per_mm=ppm,
         w_px=W,
         h_px=Hh,
+        plaque=plaque,
     )
 
 
@@ -508,7 +514,8 @@ def emit_gcode(res: VGResult, feed_mm_min=600, power_percent=100.0):
 
     ppm, H = res.px_per_mm, res.h_px
     S = int(round(power_percent * 10))
-    plaque = sg.box(0, 0, res.w_px, res.h_px)
+    plaque = res.plaque if res.plaque is not None else sg.box(0, 0, res.w_px, res.h_px)
+    tol = 0.15 * ppm  # decimate per-pixel contour noise -> no short-segment stutter
     net = unary_union(
         [p.boundary for p in res.pieces]
         + [ln.boundary for ln in res.letters]
@@ -520,17 +527,79 @@ def emit_gcode(res: VGResult, feed_mm_min=600, power_percent=100.0):
     def paths(geom):
         m = linemerge(geom) if geom.geom_type == "MultiLineString" else geom
         gs = list(m.geoms) if m.geom_type == "MultiLineString" else [m]
+        # NO simplify here — keep exact endpoints so chaining can join segments.
         return [g for g in gs if g.geom_type == "LineString" and g.length > 1]
 
-    ordered = paths(interior) + paths(plaque.exterior)  # interior first, border last
-    warm_mm = feed_mm_min * (WARMUP_MS / 1000.0) / 60.0
+    interior_paths = paths(interior)
+    border_paths = paths(plaque.exterior)
+
+    # continuous-cut chaining (repo standard): fuse segments into long strokes so
+    # each stroke gets ONE warmup (walk the network through junctions; edges deduped).
+    def chain(segs):
+        from collections import defaultdict
+
+        coords = [list(s.coords) for s in segs]
+
+        def k(p):
+            return (round(p[0], 1), round(p[1], 1))
+
+        ends = defaultdict(list)
+        for i, c in enumerate(coords):
+            ends[k(c[0])].append(i)
+            ends[k(c[-1])].append(i)
+        used = [False] * len(coords)
+        chains = []
+        for start in range(len(coords)):
+            if used[start]:
+                continue
+            used[start] = True
+            ch = list(coords[start])
+            while True:  # extend tail
+                kk = k(ch[-1])
+                nxt = next((i for i in ends[kk] if not used[i]), None)
+                if nxt is None:
+                    break
+                used[nxt] = True
+                c = coords[nxt]
+                ch += c[1:] if k(c[0]) == kk else c[-2::-1]
+            while True:  # extend head
+                kk = k(ch[0])
+                nxt = next((i for i in ends[kk] if not used[i]), None)
+                if nxt is None:
+                    break
+                used[nxt] = True
+                c = coords[nxt]
+                ch = (c[:-1] if k(c[-1]) == kk else c[:0:-1]) + ch
+            chains.append(ch)
+        return chains
+
+    def order_nn(chains):
+        remaining = list(chains)
+        cur, out = (0.0, 0.0), []
+        while remaining:
+            i = min(
+                range(len(remaining)),
+                key=lambda i: (
+                    (remaining[i][0][0] - cur[0]) ** 2
+                    + (remaining[i][0][1] - cur[1]) ** 2
+                ),
+            )
+            g = remaining.pop(i)
+            out.append(g)
+            cur = g[-1]
+        return out
+
+    # interior chained + travel-ordered FIRST, plaque border chained LAST
+    ordered = order_nn(chain(interior_paths)) + chain(border_paths)
+    warm_mm = feed_mm_min * (WARMUP_MS / 1000.0) / 60.0  # 1s of travel
 
     lines = [
         "; vertex-grid puzzle — GRBL laser, static M3, WCS origin bottom-left",
         f"; {res.meta.get('word', '')} {res.w_mm:.0f}x{res.h_mm:.0f}mm  "
-        f"feed={feed_mm_min}mm/min  power={power_percent:.0f}%  "
+        f"feed={feed_mm_min}mm/min  power={power_percent:.0f}%  passes=1  "
         f"pieces={len(res.pieces)} letters={len(res.letters)} counters={len(res.counters)}",
         "; cut order: interior seams + letters + counters FIRST, plaque border LAST.",
+        "; continuous-cut chains; front-loaded out-and-back warmup (~1s) per chain.",
         "; VERIFY feed/warmup with a hardware test-cut before real stock.",
         "$32=1",
         "G21",
@@ -539,17 +608,21 @@ def emit_gcode(res: VGResult, feed_mm_min=600, power_percent=100.0):
         "G0 X0.000 Y0.000",
         "",
     ]
-    for path in ordered:
-        pm = _mm_ring(list(path.coords), ppm, H)
+    for ch in ordered:
+        if len(ch) >= 2:  # decimate the final stroke (anti-stutter), keep endpoints
+            simp = sg.LineString(ch).simplify(tol, preserve_topology=False)
+            if simp.geom_type == "LineString" and len(simp.coords) >= 2:
+                ch = list(simp.coords)
+        pm = _mm_ring(ch, ppm, H)
         if len(pm) < 2:
             continue
         sx, sy = pm[0]
-        wpt = _advance(pm, warm_mm)
+        wpt = _advance(pm, warm_mm / 2.0)  # out warm/2 + back warm/2 = ~1s total
         lines += [
             f"G0 X{sx:.3f} Y{sy:.3f}",
             f"M3 S{S}",
             f"F{feed_mm_min}",
-            "; warmup: out-and-back (~1s to full power) before the real cut",
+            "; warmup out-and-back (~1s)",
             f"G1 X{wpt[0]:.3f} Y{wpt[1]:.3f}",
             f"G1 X{sx:.3f} Y{sy:.3f}",
         ]
@@ -561,32 +634,37 @@ def emit_gcode(res: VGResult, feed_mm_min=600, power_percent=100.0):
 
 
 def render_preview(res: VGResult, out_path: Path, title=None):
-    """Render a colored preview PNG (pieces + cut-out letters + counters)."""
-    img = Image.new("RGB", (res.w_px, res.h_px), "white")
+    """Render a colored preview PNG (pieces + cut-out letters + counters) with a
+    white title band on top (title may contain newlines)."""
+    fnt = _load_font(max(13, int(2.6 * res.px_per_mm)))
+    n_lines = (title.count("\n") + 1) if title else 0
+    line_h = int(fnt.size * 1.35)
+    header = (n_lines * line_h + 14) if title else 0
+    img = Image.new("RGB", (res.w_px, res.h_px + header), "white")
     d = ImageDraw.Draw(img, "RGBA")
+    if title:
+        d.multiline_text((10, 7), title, fill=(0, 0, 0), font=fnt, spacing=6)
+        d.line([0, header - 1, res.w_px, header - 1], fill=(210, 210, 210), width=1)
+
+    def shift(coords):
+        return [(x, y + header) for x, y in coords]
+
     for i, c in enumerate(res.pieces):
         for poly in _polys(c):
             d.polygon(
-                list(poly.exterior.coords),
+                shift(poly.exterior.coords),
                 fill=_PAL[i % len(_PAL)] + (180,),
                 outline=(50, 50, 50),
             )
     for c in res.outer_contours:
         d.polygon(
-            [tuple(map(int, q)) for q in c.reshape(-1, 2)],
+            shift([tuple(map(int, q)) for q in c.reshape(-1, 2)]),
             fill=(158, 46, 46, 235),
             outline=(90, 20, 20),
         )
     for c in res.counter_contours:
-        d.polygon(
-            [tuple(map(int, q)) for q in c.reshape(-1, 2)],
-            fill=(250, 250, 250, 255),
-            outline=(120, 90, 90),
-        )
-    if title:
-        d.text(
-            (10, 6), title, fill=(0, 0, 0), font=_load_font(int(3.2 * res.px_per_mm))
-        )
+        d.polygon(shift([tuple(map(int, q)) for q in c.reshape(-1, 2)]),
+                  fill=(250, 250, 250, 255), outline=(120, 90, 90))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_path, "PNG")
     return out_path
