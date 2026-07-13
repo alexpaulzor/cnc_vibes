@@ -46,11 +46,25 @@ def test_one_tab_per_edge_no_dense_tabs():
     assert full + circle >= 1
 
 
-def test_auto_gap_widens_for_durability():
-    # auto_gap should try progressively wider gaps; recorded in meta.
+def test_fits_stock_envelope():
+    # long words auto-shrink font/gap so the panel fits the 300x150mm stock.
     res = vg.build("KARSON", seed=7)
     assert "gap_tries" in res.meta
-    assert res.gap_mm >= 22.0
+    assert res.w_mm <= 300.5 and res.h_mm <= 150.5
+    assert res.meta["fits_envelope"]
+
+
+def test_pieces_are_reasonably_sized():
+    # no needlessly tiny slivers survive the merge pass.
+    res = vg.build("NORA", seed=7)
+    for p in res.pieces:
+        assert p.area >= (10.0 * res.px_per_mm) ** 2  # >= ~10mm x 10mm
+
+
+def test_gcode_is_static_m3_never_m4():
+    res = vg.build("KAI", seed=7)
+    g = vg.emit_gcode(res, feed_mm_min=600, power_percent=100.0)
+    assert "M3 S1000" in g and "M4" not in g  # weak diode: static M3, never M4
 
 
 def test_gcode_is_wcs_bottom_left_and_balanced():

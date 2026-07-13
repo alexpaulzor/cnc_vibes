@@ -542,8 +542,8 @@ def cmd_vgrid(args):
     )
     if not res.durable:
         print(
-            "  WARNING: not durable — a piece has a <4mm neck; try a wider --gap-mm "
-            "or fewer/less-crowded letters."
+            "  WARNING: not durable — a piece has a <4mm neck (crowded word); try a "
+            "different --seed, a shorter name, or nudge --gap-mm."
         )
     print(f"-> {out}")
     if args.gcode:
@@ -655,14 +655,14 @@ def main():
         "--gap-mm",
         dest="gap_mm",
         type=float,
-        default=22.0,
-        help="uniform inter-letter gap in mm (auto-widened if needed for durability)",
+        default=26.0,
+        help="nominal inter-letter gap in mm (font/gap auto-shrink to fit 300x150mm)",
     )
     vgp.add_argument(
         "--no-auto-gap",
         dest="no_auto_gap",
         action="store_true",
-        help="disable automatic gap widening for durability",
+        help="disable the automatic font/gap shrink-to-fit for long words",
     )
     vgp.add_argument("--out", type=Path, default=None)
     vgp.add_argument(
