@@ -43,19 +43,20 @@ continuous-cut chaining (NN travel order, edges deduped) · 0.15mm decimation ·
 rounded plaque corners (5mm) · Arial Black. Verified: `$32=1`, `M3 S1000`, `F600`,
 no `M4`, M3/M5 balanced, all coords ≥0 within panel.
 
-## CURRENT STATUS (per name, seed 7)
-| word   | pieces | tabs | durable | size (mm) |
-|--------|--------|------|---------|-----------|
-| WOJO   | 11     | 14   | YES     | 248×95    |
-| KAIDEN | 18     | 23   | YES     | 294×90    |
-| NORA   | 14     | 17   | YES     | 244×95    |
-| KAI    | 11     | 13   | YES     | 166×94    |
-| AYANA  | 17     | 21   | YES     | 294×94    |
-| KARSON | 16     | 21   | **NO(1)** | 294×90  |
+## CURRENT STATUS (per name, seed 7) — ALL DURABLE
+| word   | pieces | tabs | durable | size (mm) | relief |
+|--------|--------|------|---------|-----------|--------|
+| WOJO   | 11     | 14   | YES     | 248×95    | 0 |
+| KAIDEN | 18     | 23   | YES     | 294×90    | 0 |
+| NORA   | 14     | 17   | YES     | 244×95    | 0 |
+| KAI    | 11     | 13   | YES     | 166×94    | 0 |
+| AYANA  | 17     | 20   | YES     | 294×94    | 0 |
+| KARSON | 15     | 20   | YES     | 293×82    | 3 |
 
-KARSON: one crowded piece still pinches after shrink-to-fit (6 letters into 300mm).
-Honestly reported as durable=False. Needs per-piece nudging / seed search / a spacing
-floor — the one open durability case.
+Tabs are REAL interlocking knobs (owner tab pokes into neighbor's socket); each tab
+is only committed if BOTH resulting pieces still pass the wall erosion (a socket that
+would over-thin a neighbor is rejected / shrunk / skipped). KARSON self-heals via 3
+durability-relief steps (smaller font + wider gap). All build durable at seed 7.
 
 ## KEY CODE (vertex_grid.py)
 `_render_letters` → cv2 outer/counter contours · `_build_seams` (cap/gap/end + gap tab
@@ -68,14 +69,13 @@ static-M3-never-M4.
 
 ## OPEN / NEXT
 - **Hardware test-cut** a vgrid gcode (e.g. KAIDEN) — validate feed/warmup/tab-fit/kerf
-  on real 3mm birch before trusting. (Only real unknown left.)
-- **KARSON-class** crowded words: add a seed search or per-piece nudge for the last pinch.
+  on real 3mm birch before trusting. (The one real unknown left.)
+- Kerf/fit clearance for the cut-out letters + counters (currently exact outline; a
+  real cut needs the pocket slightly larger than the piece — revisit at test-cut).
 - **Frame/holder** feature — DEFERRED (see memory `vgrid-frame-holder-idea` +
   build/VERTEX_GRID_SCRATCH.md): outer profile at 150mm, puzzle <130mm, leftover =tray.
 - Decide if/when vgrid becomes the banner default (currently opt-in; keep both paths
   until the test-cut validates vgrid).
-- Kerf/fit clearance for the cut-out letters + counters (currently exact outline; a
-  real cut needs the pocket slightly larger than the piece — revisit at test-cut).
 
 ## DON'T
 - Don't push without an explicit ask (2 remotes: github, origin/gitlab).

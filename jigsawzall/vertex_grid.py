@@ -391,33 +391,47 @@ def _durable(pieces, prm):
 
 def _place_knob(pieces, mid, tv, rng, knobs, letters_solid, prm):
     ppm = prm.px_per_mm
-    neck, bulb, reach = prm.neck_mm * ppm, prm.bulb_mm * ppm, prm.reach_mm * ppm
     wall = prm.wall_mm * ppm
 
     def piece_at(pt):
         cand = [k for k, p in enumerate(pieces) if p.distance(sg.Point(pt)) < 1.5]
         return cand[0] if cand else None
 
-    for side in (1, -1) if rng.random() < 0.5 else (-1, 1):
-        kb = knob((mid[0], mid[1]), tv, side, neck, bulb, reach)
-        if kb.distance(letters_solid) < wall * 0.5:
-            continue
-        if any(kb.intersects(pk) for pk in knobs):
-            continue
-        nx, ny = -tv[1] * side, tv[0] * side
-        recv = piece_at((mid[0] + nx * 3, mid[1] + ny * 3))
-        donor = piece_at((mid[0] - nx * 3, mid[1] - ny * 3))
-        if recv is None or donor is None or recv == donor:
-            continue
-        try:
-            pieces[recv] = unary_union([pieces[recv], kb]).buffer(0)
-            d = pieces[donor].difference(kb)
-            dp = _polys(d)
-            pieces[donor] = max(dp, key=lambda p: p.area) if dp else pieces[donor]
+    def ok_piece(g):  # single polygon that survives a wall/2 erosion (>= wall bridge)
+        er = g.buffer(-wall / 2)
+        return (not er.is_empty) and len(_polys(er)) == 1
+
+    # try a full knob, then a smaller one (shrink-to-circle last resort)
+    sizes = [
+        (prm.neck_mm * ppm, prm.bulb_mm * ppm, prm.reach_mm * ppm),
+        (prm.neck_mm * 0.8 * ppm, prm.bulb_mm * 0.7 * ppm, prm.reach_mm * 0.7 * ppm),
+    ]
+    for neck, bulb, reach in sizes:
+        for side in (1, -1) if rng.random() < 0.5 else (-1, 1):
+            kb = knob((mid[0], mid[1]), tv, side, neck, bulb, reach)
+            if kb.distance(letters_solid) < wall * 0.5:
+                continue
+            if any(kb.intersects(pk) for pk in knobs):
+                continue
+            nx, ny = -tv[1] * side, tv[0] * side  # knob protrudes toward (nx,ny)
+            loser = piece_at((mid[0] + nx * 3, mid[1] + ny * 3))
+            owner = piece_at((mid[0] - nx * 3, mid[1] - ny * 3))
+            if owner is None or loser is None or owner == loser:
+                continue
+            try:
+                new_owner = unary_union([pieces[owner], kb]).buffer(0)
+                dp = _polys(pieces[loser].difference(kb))
+            except Exception:
+                continue
+            if len(dp) != 1:  # socket split the neighbor -> reject this tab
+                continue
+            new_loser = dp[0]
+            if not (ok_piece(new_owner) and ok_piece(new_loser)):
+                continue  # tab would over-thin a piece; try another side/size
+            pieces[owner] = new_owner
+            pieces[loser] = new_loser
             knobs.append(kb)
             return True
-        except Exception:
-            return False
     return False
 
 
@@ -489,25 +503,48 @@ def _build_one(word, seed, prm):
 
 def build(word, seed=7, params=None, auto_gap=True):
     """Build a vertex-grid puzzle. `auto_gap` (kept for API compat) enables the
-    width auto-fit: font/gap/margin shrink together until the panel fits 300mm."""
+    width auto-fit (font/gap/margin shrink together until the panel fits 300mm)
+    plus a durability-relief fallback (shrink font / grow gap for crowded words
+    until every piece is durable)."""
     word = word.upper()
     prm = params or VGParams()
     tries = []
-    res = _build_one(word, seed, prm)
-    tries.append(prm.gap_mm)
-    if auto_gap:
+
+    def fit_width(p):
+        r = _build_one(word, seed, p)
         for _ in range(5):
-            if res.w_mm <= MAX_W_MM:
+            if r.w_mm <= MAX_W_MM or not auto_gap:
                 break
-            scale = (MAX_W_MM / res.w_mm) * 0.98
-            prm = VGParams(**{**prm.__dict__,
-                              "font_size_mm": prm.font_size_mm * scale,
-                              "gap_mm": prm.gap_mm * scale,
-                              "margin_mm": prm.margin_mm * scale})
-            res = _build_one(word, seed, prm)
-            tries.append(prm.gap_mm)
+            sc = (MAX_W_MM / r.w_mm) * 0.98
+            p = VGParams(
+                **{
+                    **p.__dict__,
+                    "font_size_mm": p.font_size_mm * sc,
+                    "gap_mm": p.gap_mm * sc,
+                    "margin_mm": p.margin_mm * sc,
+                }
+            )
+            r = _build_one(word, seed, p)
+        return p, r
+
+    prm, res = fit_width(prm)
+    tries.append(round(prm.gap_mm, 1))
+    # durability relief: crowded words get a smaller font + wider gap until durable
+    relief = 0
+    while auto_gap and not res.durable and relief < 6:
+        relief += 1
+        prm = VGParams(
+            **{
+                **prm.__dict__,
+                "font_size_mm": prm.font_size_mm * 0.9,
+                "gap_mm": prm.gap_mm * 1.12,
+            }
+        )
+        prm, res = fit_width(prm)
+        tries.append(round(prm.gap_mm, 1))
     res.meta["word"] = word
     res.meta["gap_tries"] = tries
+    res.meta["relief_steps"] = relief
     res.meta["fits_envelope"] = (res.w_mm <= MAX_W_MM and res.h_mm <= MAX_H_MM)
     if not res.durable:
         res.meta["durable_failed"] = True
