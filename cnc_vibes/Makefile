@@ -8,7 +8,7 @@
 OPENSCAD     ?= openscad
 FREECAD_CMD  ?= FreeCADCmd
 PYTHON       ?= python3
-PROFILE      ?= profiles/anolex_4030_evo_ultra2.yaml
+PROFILE      ?= profiles/default.yaml
 TOOLS        ?= profiles/tools.yaml
 
 EXAMPLES := hole_in_sheet

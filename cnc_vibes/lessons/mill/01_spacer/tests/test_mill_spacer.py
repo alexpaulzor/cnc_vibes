@@ -25,7 +25,7 @@ PROFILES = REPO_ROOT / "profiles"
 
 @pytest.fixture(scope="module")
 def machine():
-    return load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    return load_yaml(PROFILES / "default.yaml")
 
 
 @pytest.fixture(scope="module")

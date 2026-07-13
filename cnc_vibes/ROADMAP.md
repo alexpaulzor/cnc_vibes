@@ -16,8 +16,7 @@ What's done, what's in flight, what's next. Maintained alongside the lessons. Th
 | 3b | [Laser calibration pattern (power × passes × speed)](lessons/laser/02_calibration/) | ✅ |
 | 3c | Photo-engraved wooden jigsaw with name-preserving cuts — **moved to `~/src/vibes/jigsawzall`** | ➡️ Now its own repo (letter-aligned grid, dither raster, standalone CLI). |
 | 3d | [Laser-cut spoilboard with M6 hole grid](lessons/laser/04_spoilboard/) | ✅ Parametric grid + auto-tiling for stock larger than design. Default matches Anolex 4030 bed (400×500mm, 9×10 holes @ 45mm). |
-| 3e | [Laser test card (kerf / tram / dimensional)](lessons/laser/05_test_card/) | ✅ Small square-in-square cut centered on WCS origin. Quick pre-flight before any real cut — measure outer + inner with calipers to back out kerf and confirm tram. |
-| 3f | [Spiral laser calibration card](lessons/laser/06_spiral_cal/) | ✅ Hex spiral of 15mm double-spiral patches starting at WCS origin. Sweeps power, feed, or passes on a scrap material; through-cut visually confirmed by pieces falling out. Exposed as `cnc.py cal-laser`. |
+| — | **Concentric spiral laser calibration** — `cnc.py cal-laser` (backed by `scripts/spiral_cal.py`) | ✅ Recommended laser calibration. One small disc of concentric rings cut inner→outer at feeds = circumference/loop-time; STOP when a ring stops falling free = your max clean single-pass feed. Each ring has a spiral warmup lead-in that records the cold-start ramp. Center origin; outputs gcode + toolpath PNG + a self-explanatory key PNG. Supersedes the old square test card + hex-spiral cal. |
 
 ## Mill
 
@@ -64,22 +63,15 @@ A code-first CAM library that produces validator-clean GCode for the common 2.5D
 - ✅ `scripts/laser_cam.py` — laser-mode counterparts (`laser_profile`, `laser_engrave`) for the cam-cli shim; reuses `cam._text_to_contours` for glyph rasterization.
 - 📋 V-carve (medial-axis variable-depth) for `engrave_text` — bigger algorithmic problem; constant-depth handles most cases
 
-## Suggested learning order
+## Pick by task (not in order)
 
-The lessons build on each other. Recommended sequence:
-1. **3a** (laser spacer) — establishes the parametric Python→GCode pattern + laser preflight
-2. **3b** (laser calibration) — characterize your laser; values feed back into `profiles/laser_materials.yaml`
-3. **4a** (router spacer) — same parametric idea with spindle + Z motion
-4. **4c** (center-punch) — confirm spindle works on metal
-5. **4d** (aluminum) — hardest 3-axis; don't attempt before 4a is solid
-6. **4b** (PCB) — combines all prior lessons + FreeCAD CAM workflow
-7. **4e** (generic CAM) — code-first multi-op composition with the `scripts/cam.py` library; no FreeCAD
-8. **Int-01** (inspect) — first machine-talking tool; small scope, big preflight win
-9. **Int-03** (probe-corner) — automates per-job WCS ritual; depends on Int-01
-10. **Int-04** (laser cal) — interactive iteration; depends on Int-01
-11. **3d** (spoilboard) — generic auto-tiling pattern for designs larger than stock
-12. **Int-02** (snapshot) — useful but lower priority; defer until camera bracket exists
-13. **5** (plasma) — separate workstream
+These recipes don't build into a curriculum — grab the one that matches the
+job in front of you. The [Where to start](../README.md#where-to-start-pick-by-task)
+table in the README is the primary situation → start-here map; the tables above
+are the full capability matrix. A rough sense of dependencies, if you want it:
+the machine-talking tools (Int-03, Int-04) reuse the serial pattern from Int-01,
+and the harder metal work (4d aluminum) assumes you're comfortable with the
+parametric spindle path from 4a. Everything else stands alone.
 
 (jigsaw moved to its own repo, `~/src/vibes/jigsawzall`)
 

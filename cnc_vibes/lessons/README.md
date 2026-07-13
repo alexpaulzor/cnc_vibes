@@ -1,8 +1,8 @@
 # Lessons
 
-Progressive CNC and laser projects, each demonstrating a technique you can lift into your own jobs. Assumes you've run `python cnc.py doctor` and read at least the top-level [README](../README.md). The conceptual guide [cnc_for_the_scad.md](../cnc_for_the_scad.md) is the deeper dive on the FreeCAD-based workflow.
+A practical (and safe-enough) choose-your-own-adventure cheat-sheet for deterministic, headless CAM: turn ideas and code into good physical parts, navigate the gotchas per task/material/operation, and automate the boring conversions, table lookups, and calibration. Each entry is a self-contained recipe you can lift into your own jobs — pick by what you're cutting, not by order. Aimed at busy makers who'd rather run a command than click through dialogs. Assumes you've run `python cnc.py doctor` and skimmed the top-level [README](../README.md) (its [Where to start](../README.md#where-to-start-pick-by-task) table is the primary situation → start-here map). The conceptual guide [cnc_for_the_scad.md](../cnc_for_the_scad.md) is the deeper dive on the FreeCAD-based workflow.
 
-Each lesson directory has its own `README.md` (user-facing: goal, prereqs, usage, extensions) and optionally a `SPEC.md` (design rationale for future maintainers).
+Each directory has its own `README.md` (user-facing: goal, prereqs, usage, extensions) and optionally a `SPEC.md` (design rationale for future maintainers).
 
 ## Laser
 
@@ -12,8 +12,7 @@ Each lesson directory has its own `README.md` (user-facing: goal, prereqs, usage
 | 3b | [Laser calibration pattern (power × passes × speed)](laser/02_calibration/) | ✅ | Fully automated. Pure Python → GCode with engraved labels. |
 | 3c | Wooden jigsaw with name-preserving cuts + photo raster — **moved to `~/src/vibes/jigsawzall`** | ➡️ | Now its own repo. |
 | 3d | [Laser-cut spoilboard with M6 hole grid](laser/04_spoilboard/) | ✅ | Parametric grid + auto-tiling for designs larger than stock. Pure Python → GCode. |
-| 3e | [Laser test card (kerf / tram / dimensional)](laser/05_test_card/) | ✅ | Small square-in-square cut, centered on WCS origin. Measure outer + inner with calipers to back out effective kerf and check tram. Fast pre-flight before any real cut. |
-| 3f | [Spiral laser calibration card](laser/06_spiral_cal/) | ✅ | Hex spiral of 15mm double-spiral patches starting at origin. Sweeps power / feed / passes on scrap material; bits falling out = visual through-cut confirmation. Top-level shim: `cnc.py cal-laser`. |
+| — | **Concentric spiral laser calibration** — `cnc.py cal-laser` (`scripts/spiral_cal.py`) | ✅ | Recommended laser calibration. One small disc of concentric rings cut inner→outer at feeds = circumference/loop-time; stop when a ring stops falling free = max clean single-pass feed. Each ring has a spiral warmup lead-in recording the cold-start ramp. Center origin; outputs gcode + toolpath PNG + a self-explanatory key PNG. Supersedes the old square test card + hex-spiral cal. |
 
 ## Mill
 
@@ -53,26 +52,17 @@ For one-off shell-driven cuts (rrect + holes, circle pocket, label engrave), use
 
 The **ArcFony Cut53M Pro** as a third tool head. **Not for this iteration; requires mechanical fabrication** (outrigger mount, opto-isolated electrical interface). Lesson removed; machine noted here for context.
 
-## Suggested reading order
+## Pick by task (not in order)
 
-Lessons build on each other. Recommended sequence for a new reader:
-
-1. **3a (laser spacer)** — establishes the Python → GCode pattern, the laser-mode preflight, the CAM-as-code idea.
-2. **3b (laser calibration)** — uses the same pattern to characterize your laser; values feed back into `profiles/laser_materials.yaml`.
-3. **4a (router spacer)** — same parametric-part idea with spindle + Z motion.
-4. **4c (steel center-punch)** — natural extension of 4a; confirms spindle path works on metal even if only superficially.
-5. **4d (aluminum trochoidal)** — hardest 3-axis lesson; don't attempt before 4a is solid.
-6. **4b (PCB drill)** — combines prior lessons + FlatCAM for isolation routing.
-7. **4e (generic CAM)** — composes `profile_cut` + `pocket_mill` + `drill_array` from `scripts/cam.py` into one part. The canonical example for the code-first CAM workflow (no FreeCAD).
-8. **Int-01 (inspect)** — first machine-talking tool; small scope, big preflight win. Builds the serial pattern Int-03 + Int-04 depend on.
-9. **Int-03 (probe-corner)** — automates the per-job WCS ritual.
-10. **Int-04 (interactive laser cal)** — interactive iteration for focus/power/feed dialing.
-11. **3c (jigsaw)** — the productionized end-to-end example: text + photo + cut, full lesson layout to mirror.
-12. **3d (spoilboard)** — generic auto-tiling pattern for designs larger than stock.
-13. **Int-02 (snapshot)** — lower priority; useful once a camera bracket exists.
-14. **5 (plasma)** — separate workstream, hardware-blocked.
-
-## Adding a new lesson
+These recipes don't form a curriculum — grab whichever matches the job in front of
+you. The [Where to start](../README.md#where-to-start-pick-by-task) table in the
+top-level README maps situation → start-here → why, and the tables above are the
+full capability matrix. If you want a sense of what leans on what: the
+machine-talking tools (Int-03 probe-corner, Int-04 laser cal) reuse the serial
+pattern from Int-01 inspect, and the harder metal work (4d aluminum trochoidal)
+assumes you're comfortable with the parametric spindle path from 4a. New to the
+parametric Python → GCode idea? 3a (laser spacer) is the smallest end-to-end
+example. Everything else stands alone.
 
 ```
 lessons/<category>/NN_<short_name>/

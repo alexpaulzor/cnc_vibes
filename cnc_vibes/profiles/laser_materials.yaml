@@ -2,11 +2,14 @@
 #
 # Per-material starting parameters for a 10W optical-power diode laser
 # (e.g. LaserTree 10W) running through a GRBL controller in laser mode
-# ($32=1, M4 dynamic power).
+# ($32=1). All cuts use STATIC M3 constant power (this weak diode under-fires
+# on M4 dynamic mode) at 100% power, with a 1s out-and-back warmup lead-in to
+# cover the cold-start ramp. Feeds calibrated with the concentric warmup ring
+# test (cnc.py cal-laser).
 #
 # Values are PUBLISHED STARTING POINTS. They are not calibrated for your
 # specific machine, lens condition, bed height, or current air-assist
-# pressure. Lesson 3b (laser calibration pattern) refines these values
+# pressure. The concentric spiral cal (cnc.py cal-laser) refines these values
 # empirically. Always cut a small test before committing to a real part.
 #
 # Schema per entry:
@@ -15,8 +18,8 @@
 #   thickness_mm       material thickness in mm
 #   laser:
 #     power_percent    S value as percent of 1000 (so 100 -> S1000)
-#     feed_mm_per_min  cut feedrate; M4 dynamic mode scales power with
-#                      actual speed so feed is the dominant heat control
+#     feed_mm_per_min  cut feedrate at static M3 100% power; the dominant
+#                      cut-through control (slower = deeper)
 #     passes           cut-through passes (1 = single pass; more = deeper)
 #     notes            free-form safety / quality / technique notes
 
@@ -25,11 +28,15 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 400
-    passes: 2
+    feed_mm_per_min: 600
+    passes: 1
     notes: |
       Reliable workhorse. Air assist strongly recommended.
-      First pass scores, second pass cuts through.
+      600mm/min SINGLE pass, calibrated with the concentric warmup ring test:
+      581mm/min severed cleanly with only a faint edge char, so 600 is the
+      always-clean-plus-margin single-pass speed. Static M3 at 100% with the 1s
+      out-and-back warmup lead-in handles the cold-start zone. Drop feed or add a
+      pass only for stubborn/thicker stock.
 
 - id: plywood_baltic_birch_6mm
   family: wood
@@ -135,7 +142,7 @@
       cuts through; if the bottom liner survives, prefer a second
       pass over raising power (high power chars + flares the
       kerf). Good cheap stock for puzzle-fit tolerance tests.
-      Verify dwell/min-power with lesson 06 (cal-laser) before a
+      Verify dwell/min-power with cnc.py cal-laser before a
       real cut on this stock.
 
 - id: cardstock_0.3mm

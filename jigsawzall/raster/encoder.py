@@ -1,4 +1,4 @@
-"""Image encoders for the jigsaw lesson's raster engraving.
+"""Image encoders for jigsawzall's raster engraving.
 
 Pure-function module: take a source image + a target pixel grid,
 produce an L-mode image ready for raster GCode emission. Two modes:
@@ -11,9 +11,7 @@ produce an L-mode image ready for raster GCode emission. Two modes:
   laser power per pixel based on darkness. Needs an empirical gamma
   LUT (on the roadmap) for accurate tonal reproduction.
 
-Lifted from scratch/phase7_raster.py with the same algorithms, removing
-the phase6_small import-time dependency so the encoder pairs with any
-puzzle size.
+The encoder is size-agnostic: it pairs with any puzzle config.
 """
 
 from __future__ import annotations

@@ -87,4 +87,4 @@ A spindle-routed version is intentionally NOT in this lesson. Routing M6 holes r
 
 Implemented and tested. 27 unit tests cover hole-position math, axis-splits-between-holes, tile-area conservation, hole-assignment-once-only, and the GCode shape (M4 not M3, S in range, holes-before-perimeter, coords within tile envelope, pass count matches material).
 
-GCode validates clean against `profiles/anolex_4030_evo_ultra2.yaml` (`cnc.py validate`).
+GCode validates clean against `profiles/default.yaml` (`cnc.py validate`).

@@ -49,7 +49,7 @@ python lessons/integration/04_interactive_laser_cal/interactive_cal.py \
 | `--patch-line-spacing` | 0.20 mm | Raster line spacing in engrave mode (matches phase7_raster's default so cal mirrors real engrave behavior). |
 | `--max-iterations` | 24 | Hard safety stop. |
 | `--max-z-offset` | 10 mm | Reject Z values whose absolute value exceeds this. Bounds the blast radius of a typo at the prompt. |
-| `--machine-profile` | `profiles/anolex_4030_evo_ultra2.yaml` | Profile read for the envelope check. |
+| `--machine-profile` | `profiles/default.yaml` | Profile read for the envelope check. |
 | `--skip-envelope-check` | off | Bypass the layout-vs-envelope check (use only if your profile is unrepresentative). |
 | `--dry-run` | off | Print GCode without opening port. |
 

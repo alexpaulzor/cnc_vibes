@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
-"""Jigsaw 3c — single canonical CLI for the wooden-jigsaw lesson.
+"""jigsawzall — single canonical CLI for the wooden name-puzzle tool.
 
-Replaces the scratch/ phase scripts (phase6_small, phase7_raster,
-phase8_full_puzzle, mockup_photo_puzzle) with one entry point built on
-the productionized geometry / encoder / emitter modules.
+Built on the productionized geometry / emitter modules.
 
 Subcommands:
   preview   — render a verification image (no GCode)
   cut       — emit cut GCode (--size small or full)
-  raster    — emit raster engrave + cut, three output files
-  mockup    — comparison visualization of halftone vs grayscale
 
-Validator-clean GRBL laser G-code (M3/M4 dynamic power).
+Validator-clean GRBL laser G-code (static M3 constant power).
 
 Examples:
   jigsaw.py preview --word NORA
   jigsaw.py cut --size full --word NORA --seed 7 --material mdf_3mm
   jigsaw.py cut --size small --word N --seed 7
-  jigsaw.py raster --image kitten.jpg --size small --mode halftone
-  jigsaw.py mockup --image kitten.jpg --word NORA
 """
 
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -34,23 +27,14 @@ from shapely.geometry import MultiPolygon
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from encoder import (  # noqa: E402
-    grayscale_quantize,
-    halftone_encode,
-    load_and_preprocess,
-)
 from emitter import (  # noqa: E402
     WARMUP_MS,
-    combined_raster_and_cut,
     emit_cut_gcode_full,
     emit_cut_gcode_simple,
-    emit_raster_gcode,
     load_material,
-    raster_only_gcode,
 )
 from geometry import (  # noqa: E402
     banner_puzzle_config,
-    find_font,
     fit_config,
     full_puzzle_config,
     generate_pieces,
@@ -58,7 +42,6 @@ from geometry import (  # noqa: E402
     mini_puzzle_config,
     small_puzzle_config,
 )
-import glyph_origins as glyph_origins_mod  # noqa: E402
 
 BUILD_DIR = SCRIPT_DIR / "build"
 FIG_DIR = SCRIPT_DIR / "figs"
@@ -160,7 +143,7 @@ def _add_size_override_flags(sub):
         "--font",
         default=None,
         help="letter font: alias (bold/black/impact/narrow) or a .ttf path; "
-        "'black' is chunkier than the default bold",
+        "default is 'black' (Arial Black), which cuts cleaner in wood than bold",
     )
 
 
@@ -527,728 +510,37 @@ def cmd_cut(args):
     print(f"-> {svg_path}")
 
 
-_SEVEN_SEG = {
-    # segments: a top, b top-right, c bot-right, d bottom, e bot-left, f top-left, g mid
-    "0": "abcdef",
-    "1": "bc",
-    "2": "abged",
-    "3": "abgcd",
-    "4": "fgbc",
-    "5": "afgcd",
-    "6": "afgecd",
-    "7": "abc",
-    "8": "abcdefg",
-    "9": "abgfcd",
-}
-
-
-def _seg_endpoints(w, h):
-    return {
-        "a": ((0, h), (w, h)),
-        "b": ((w, h), (w, h / 2)),
-        "c": ((w, h / 2), (w, 0)),
-        "d": ((0, 0), (w, 0)),
-        "e": ((0, h / 2), (0, 0)),
-        "f": ((0, h), (0, h / 2)),
-        "g": ((0, h / 2), (w, h / 2)),
-    }
-
-
-def _seven_seg_segments(text, x, y, h):
-    """7-segment strokes for `text` (digits), bottom-left at (x, y), height h.
-    Returns a list of ((x0,y0),(x1,y1)) segments in absolute coords."""
-    w = h * 0.55
-    gap = h * 0.35
-    segd = _seg_endpoints(w, h)
-    out = []
-    cx = x
-    for ch in text:
-        for s in _SEVEN_SEG.get(ch, ""):
-            (x0, y0), (x1, y1) = segd[s]
-            out.append(((cx + x0, y + y0), (cx + x1, y + y1)))
-        cx += w + gap
-    return out
-
-
-def _engrave_number(text, x, y, h, power_s, feed):
-    """G-code lines that engrave `text` (digits) with a 7-segment stroke font,
-    bottom-left at (x, y), glyph height h. Each stroke is its own M3..M5 so there
-    are no stray marks between segments. Marks (light) rather than cuts."""
-    w = h * 0.55
-    gap = h * 0.35
-    segd = _seg_endpoints(w, h)
-    out = []
-    cx = x
-    for ch in text:
-        for s in _SEVEN_SEG.get(ch, ""):
-            (x0, y0), (x1, y1) = segd[s]
-            out += [
-                f"G0 X{cx + x0:.3f} Y{y + y0:.3f}",
-                f"M3 S{power_s}",
-                f"F{feed}",
-                f"G1 X{cx + x1:.3f} Y{y + y1:.3f}",
-                "M5",
-            ]
-        cx += w + gap
-    return out
-
-
-def _render_warmup_key(radii, feeds, order, cx, cy, r_max, T, m):
-    """Annotated key PNG for the warmup ring test: each ring drawn to scale in
-    its own color with a start-angle marker, plus a legend (color -> cut#, feed,
-    start angle, radius). Reference this on-screen to read a compact card."""
-    import math
-
-    S = 14  # px/mm
-    n = len(radii)
-    diag = int(2 * (r_max + m) * S)
-    legw = 240
-    H = max(diag, 40 + n * 26)
-    img = Image.new("RGB", (diag + legw, H), "white")
-    d = ImageDraw.Draw(img)
-    palette = [
-        (200, 40, 40),
-        (210, 120, 20),
-        (180, 165, 20),
-        (40, 160, 60),
-        (30, 120, 200),
-        (120, 60, 190),
-        (200, 40, 140),
-        (90, 90, 90),
-    ]
-
-    def px(mx, my):
-        return (mx * S, H - my * S)
-
-    tf, sf = _load_font(15), _load_font(13)
-    d.text(
-        (6, 6),
-        f"CUT-THROUGH KEY  loop={T:.1f}s/ring, cut inner->outer",
-        fill=(0, 0, 0),
-        font=tf,
-    )
-    for k, i in enumerate(order):
-        r, col = radii[i], palette[k % len(palette)]
-        x0, y0 = px(cx - r, cy + r)
-        x1, y1 = px(cx + r, cy - r)
-        d.ellipse([x0, y0, x1, y1], outline=col, width=2)
-    # radial cross-section slices: 0deg (common spiral start) and join_ang (where
-    # the spiral meets the circle = start of the pure single-pass cut) — matches
-    # the gcode's radials.
-    join_ang = 360.0 * (WARMUP_MS / 1000.0) / T
-    rout = r_max + 2
-    for a in (0.0, join_ang):
-        c0 = px(cx, cy)
-        e = px(
-            cx + rout * math.cos(math.radians(a)), cy + rout * math.sin(math.radians(a))
-        )
-        d.line([c0[0], c0[1], e[0], e[1]], fill=(120, 120, 120), width=1)
-    d.text((diag + 8, 6), "cut# feed   r", fill=(0, 0, 0), font=sf)
-    for k, i in enumerate(order):
-        col, yy = palette[k % len(palette)], 30 + k * 26
-        d.rectangle([diag + 8, yy, diag + 22, yy + 14], fill=col)
-        d.text(
-            (diag + 28, yy),
-            f"#{k + 1}   {feeds[i]}   r{radii[i]:.0f}",
-            fill=(20, 20, 20),
-            font=sf,
-        )
-    p = BUILD_DIR / "warmup_ring_test_key.png"
-    img.save(p, "PNG", optimize=True)
-    return p
-
-
-def _render_gcode_png(lines, out_path, px_per_mm=14):
-    """Render a gcode toolpath (G0/G1 lines + G2/G3 arcs) to a PNG. Cuts (laser
-    on) are red, rapids (laser off) faint gray. Handles negative coords (center
-    origin) by shifting to the bbox. Standalone — no cfg needed."""
-    import math
-    import re
-
-    segs = []  # (x0, y0, x1, y1, is_cut)
-    x = y = None
-    laser = False
-    for ln in lines:
-        s = ln.strip()
-        if s.startswith(("M3", "M4")):
-            laser = True
-        elif s.startswith("M5"):
-            laser = False
-        m = re.match(r"^(G[0123])\b", s)
-        if not m:
-            continue
-        g = m.group(1)
-        mx, my = re.search(r"X([-.\d]+)", s), re.search(r"Y([-.\d]+)", s)
-        nx = float(mx.group(1)) if mx else x
-        ny = float(my.group(1)) if my else y
-        if x is not None and nx is not None:
-            if g in ("G0", "G1"):
-                segs.append((x, y, nx, ny, g == "G1" and laser))
-            else:  # G2 (CW) / G3 (CCW) arc via I/J center offset
-                mi, mj = re.search(r"I([-.\d]+)", s), re.search(r"J([-.\d]+)", s)
-                ccx = x + (float(mi.group(1)) if mi else 0.0)
-                ccy = y + (float(mj.group(1)) if mj else 0.0)
-                rad = math.hypot(x - ccx, y - ccy)
-                a0 = math.atan2(y - ccy, x - ccx)
-                a1 = math.atan2(ny - ccy, nx - ccx)
-                if g == "G2":  # CW
-                    while a1 >= a0:
-                        a1 -= 2 * math.pi
-                else:  # CCW
-                    while a1 <= a0:
-                        a1 += 2 * math.pi
-                steps = max(8, int(abs(a1 - a0) / (math.pi / 60)))
-                prev = (x, y)
-                for k in range(1, steps + 1):
-                    aa = a0 + (a1 - a0) * k / steps
-                    cur = (ccx + rad * math.cos(aa), ccy + rad * math.sin(aa))
-                    segs.append((prev[0], prev[1], cur[0], cur[1], laser))
-                    prev = cur
-        x, y = nx, ny
-    if not segs:
-        return out_path
-    xs = [c for s in segs for c in (s[0], s[2])]
-    ys = [c for s in segs for c in (s[1], s[3])]
-    minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
-    S, pad = px_per_mm, 2
-    W = int((maxx - minx + 2 * pad) * S)
-    H = int((maxy - miny + 2 * pad) * S)
-    img = Image.new("RGB", (W, H), "white")
-    d = ImageDraw.Draw(img)
-
-    def to(px_, py_):
-        return ((px_ - minx + pad) * S, H - (py_ - miny + pad) * S)
-
-    for x0, y0, x1, y1, cut in segs:
-        a, b = to(x0, y0), to(x1, y1)
-        d.line(
-            [a[0], a[1], b[0], b[1]],
-            fill=(180, 30, 30) if cut else (215, 215, 215),
-            width=2 if cut else 1,
-        )
-    img.save(out_path, "PNG", optimize=True)
-    return out_path
-
-
-def cmd_warmuptest(args):
-    """Single-pass CUT-THROUGH feed test: concentric rings, WCS origin at the
-    CENTER of the rings (zero the machine in the middle of a scrap). Each ring is
-    warmed up first (WARMUP_MS, front-loaded fwd-half/back-to-start at full power)
-    then its loop is cut in --time-s seconds, so feed = circumference / time-s.
-    The innermost (slowest) is cut FIRST and each ring outward is faster.
-
-    Cut inner->outer and STOP when a ring no longer falls free — the last one
-    that dropped is your fastest clean single-pass feed. Rings are native G3 arcs
-    (constant feed, no short-segment stutter). No engraving; read the KEY png. It
-    is fine for the fast outer rings to overrun the scrap edge."""
-    import math
-
-    n = args.circles
-    r_min, r_max = args.min_r, args.max_r
-    T = args.time_s  # loop seconds per ring (EXCLUDING the WARMUP_MS warmup)
-    power_s = int(round(args.power_percent * 10))
-    radii = [r_min + (r_max - r_min) * i / max(1, n - 1) for i in range(n)]
-    feeds = [int(round(120 * math.pi * r / T)) for r in radii]  # circumference/(T/60)
-    gap = (r_max - r_min) / max(1, n - 1) if n > 1 else r_min  # inter-ring spacing
-    delta = gap / 2.0  # spiral starts this far INSIDE the target ring (half the gap)
-    # A ring's circumference is covered in T seconds, so 1s of travel sweeps this
-    # many degrees. The spiral lead-in climbs delta over the WARMUP_MS window while
-    # sweeping join_ang, joining the target circle exactly when the laser is warm.
-    join_ang = 360.0 * (WARMUP_MS / 1000.0) / T
-    K = 6  # chained-arc steps approximating the spiral (arcs stutter-free; the tiny
-    # radial connectors happen mid-warmup, low power, in scrap — stutter irrelevant)
-
-    lines = [
-        "; cut-through feed test — concentric rings, WCS origin at CENTER",
-        f"; per ring: {WARMUP_MS:.0f}ms spiral warmup ({delta:.1f}mm inside, sweeping "
-        f"{join_ang:.0f}deg) joins the circle, then one full-power loop.",
-        f"; feed = circumference / {T:.1f}s. Cut order INNER (slow) -> OUTER (fast).",
-        "; STOP when a ring stops falling free -> last clean = fastest single-pass feed.",
-        "; spiral shows the warmup gradient (backlight, read the degrees where it first",
-        "; cuts through). Rings/spiral are G2/G3 arcs (no segment stutter). Use KEY png.",
-        "; cut# (inner->outer): radius mm -> feed mm/min:",
-    ]
-    for j, (r, feed) in enumerate(zip(radii, feeds), 1):
-        lines.append(f";   #{j}  r={r:.1f}mm  feed={feed}")
-    lines += ["$32=1   ; GRBL laser mode", "G21", "G90", "M5", "G0 X0 Y0", ""]
-
-    for r, feed in zip(radii, feeds):  # ascending radius = inner/slow first
-        rs = r - delta  # spiral start radius (inside the target ring)
-        lines += [
-            f"; --- ring r={r:.1f}mm feed={feed} ---",
-            f"G0 X{rs:.3f} Y0.000",  # spiral start: 3 o'clock, delta inside the ring
-            f"M3 S{power_s}",
-            f"F{feed}",
-            f"; spiral warmup: {rs:.1f}->{r:.1f}mm over {join_ang:.0f}deg (~{WARMUP_MS:.0f}ms)",
-        ]
-        cur_r, cur_a = rs, 0.0
-        for j in range(K):  # chained concentric arcs stepping outward
-            na = join_ang * (j + 1) / K
-            cx0, cy0 = (
-                cur_r * math.cos(math.radians(cur_a)),
-                cur_r * math.sin(math.radians(cur_a)),
-            )
-            ex, ey = (
-                cur_r * math.cos(math.radians(na)),
-                cur_r * math.sin(math.radians(na)),
-            )
-            lines.append(  # CCW arc at cur_r about center
-                f"G3 X{ex:.3f} Y{ey:.3f} I{-cx0:.3f} J{-cy0:.3f}"
-            )
-            nr = rs + delta * (j + 1) / K
-            lines.append(  # radial step outward to next radius (at same angle)
-                f"G1 X{nr * math.cos(math.radians(na)):.3f} "
-                f"Y{nr * math.sin(math.radians(na)):.3f}"
-            )
-            cur_r, cur_a = nr, na
-        # now joined the circle at (r, join_ang); cut one full loop ending there so
-        # every point on the circle is cut exactly once at full power.
-        jx, jy = (
-            r * math.cos(math.radians(join_ang)),
-            r * math.sin(math.radians(join_ang)),
-        )
-        lines += [
-            "; full-power loop (ends exactly at the spiral join)",
-            f"G3 X{-jx:.3f} Y{-jy:.3f} I{-jx:.3f} J{-jy:.3f}",  # half 1 CCW
-            f"G3 X{jx:.3f} Y{jy:.3f} I{jx:.3f} J{jy:.3f}",  # half 2 CCW back to join
-            "M5",
-            "",
-        ]
-
-    # Two radial slices (from center out past the outer ring) to expose the ring
-    # cross-sections at the two informative angles: 0deg = the common spiral start,
-    # and join_ang = where the spiral meets the circle, i.e. the start of the pure
-    # single-pass full-power cut. Cut last (an early stop skips them) at the
-    # slowest, most reliable feed.
-    slow = min(feeds)
-    rout = r_max + 2
-    a2 = math.radians(join_ang)
-    lines += [
-        f"; --- radial cross-section slices at 0deg and {join_ang:.0f}deg (feed {slow}) ---",
-        f"G0 X{rout:.3f} Y0.000",  # outer edge at 0deg (common spiral start)
-        f"M3 S{power_s}",
-        f"F{slow}",
-        "G1 X0.000 Y0.000",  # radial in to center
-        f"G1 X{rout * math.cos(a2):.3f} Y{rout * math.sin(a2):.3f}",  # out at join_ang
-        "M5",
-        "",
-    ]
-    lines += ["G0 X0 Y0", ""]
-
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    out = BUILD_DIR / "warmup_ring_test.gcode"
-    out.write_text("\n".join(lines))
-    key_path = _render_warmup_key(
-        radii, feeds, list(range(n)), r_max, r_max, r_max, T, 0.0
-    )
-    png_path = _render_gcode_png(lines, BUILD_DIR / "warmup_ring_test.png")
-    print(f"circles: {n}  radii: {r_min}-{r_max}mm  loop={T}s  feeds: {feeds}")
-    print("origin at CENTER; cut inner->outer, stop when a ring stops dropping free.")
-    print(f"-> {out}")
-    print(f"-> {png_path}  (toolpath)")
-    print(f"-> {key_path}  (lookup key)")
-
-
-def cmd_raster(args):
-    cfg = _config_for_size(args.size)
-    word = args.word.upper()
-    stem = args.image.stem if args.image else "test_pattern"
-    image_label = str(args.image) if args.image else "test-pattern"
-
-    # 1. Pieces + cut block
-    pieces, stats = generate_pieces(word, args.seed, cfg)
-    material = load_material(args.material)
-    cut_block = _emit_cut_for(pieces, material, cfg, word, args.size)
-
-    # 2. Image + encode
-    src = load_and_preprocess(
-        args.image, cfg.panel_mm, args.line_spacing_mm, args.test_pattern
-    )
-    if args.mode == "halftone":
-        encoded = halftone_encode(src)
-    else:
-        encoded = grayscale_quantize(src, args.grayscale_levels)
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
-    preview_path = FIG_DIR / f"raster_preview_{args.size}_{stem}_{args.mode}.png"
-    encoded.save(preview_path)
-
-    # 3. Raster GCode + three output files
-    raster_lines = emit_raster_gcode(
-        encoded,
-        args.mode,
-        cfg,
-        args.line_spacing_mm,
-        args.engrave_power_percent,
-        args.engrave_feed,
-    )
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    base = f"{args.size}_{stem}_{args.mode}"
-    raster_path = BUILD_DIR / f"{base}_raster.gcode"
-    cut_path = BUILD_DIR / f"{base}_cut.gcode"
-    full_path = BUILD_DIR / f"{base}_full.gcode"
-    raster_path.write_text(
-        raster_only_gcode(raster_lines, args.material, image_label, args.mode)
-    )
-    cut_path.write_text(cut_block)
-    full_path.write_text(
-        combined_raster_and_cut(
-            raster_lines, cut_block, args.material, image_label, args.mode
-        )
-    )
-
-    print(f"pieces: {len(pieces)}  tabs: {stats}")
-    print(f"raster: {len(raster_lines)} lines  encoded preview: {preview_path}")
-    print(f"-> {raster_path}")
-    print(f"-> {cut_path}")
-    print(f"-> {full_path}")
-
-
-def cmd_mockup(args):
-    """Thin wrapper around scratch/mockup_photo_puzzle.py for now —
-    the wood-color mockup logic + zoom inset isn't worth re-extracting
-    until productionization is complete. Reuses the same image-based
-    comparison the scratch script produces."""
-    import subprocess
-
-    scratch_script = SCRIPT_DIR / "scratch" / "mockup_photo_puzzle.py"
-    cmd = [
-        sys.executable,
-        str(scratch_script),
-        "--image",
-        str(args.image),
-        "--word",
-        args.word,
-        "--seed",
-        str(args.seed),
-    ]
-    if args.out:
-        cmd += ["--out", str(args.out)]
-    sys.exit(subprocess.run(cmd).returncode)
-
-
-GLYPH_SHEET_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-_GLYPH_SHEET_COLS = 6
-_GLYPH_SHEET_CELL = 220
-_GLYPH_SHEET_LABEL_H = 34
-_GLYPH_SHEET_FONT_PX = 150
-
-
-def _glyph_sheet_layout():
-    """Deterministic layout shared by the renderer and the dot-reader.
-
-    Returns (width, height, cells) where cells is a list of
-    (char, cell_x, cell_y, pen_xy, ink_bbox); pen_xy is where the glyph is
-    drawn, ink_bbox = (l, t, r, b) its ink box in image space. Because
-    render and read use the SAME layout, a dot placed on the rendered sheet
-    maps back to exact normalized ink-bbox coordinates."""
-    n = len(GLYPH_SHEET_CHARS)
-    cols = _GLYPH_SHEET_COLS
-    rows = (n + cols - 1) // cols
-    cell = _GLYPH_SHEET_CELL
-    label_h = _GLYPH_SHEET_LABEL_H
-    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
-
-    cells = []
-    for i, ch in enumerate(GLYPH_SHEET_CHARS):
-        cx, cy = (i % cols) * cell, (i // cols) * cell
-        l, t, r, b = glyph_font.getbbox(ch)
-        gw, gh = r - l, b - t
-        area_h = cell - label_h
-        ox = cx + (cell - gw) // 2 - l
-        oy = cy + (area_h - gh) // 2 - t
-        ink_bbox = (ox + l, oy + t, ox + r, oy + b)
-        cells.append((ch, cx, cy, (ox, oy), ink_bbox))
-    return cols * cell, rows * cell, cells
-
-
-def _draw_crosshair(d, x, y, color, r=13, w=2):
-    d.line([x - r, y, x + r, y], fill=color, width=w)
-    d.line([x, y - r, x, y + r], fill=color, width=w)
-
-
-def _snap_to_ink(ink, gx, gy, band=8):
-    """Nudge a hand-placed point onto the local stroke's centerline, moving
-    PERPENDICULAR to the stroke and keeping the along-stroke axis where the
-    user put it. `ink` is a bool array (True = glyph pixel).
-
-    At the point, measure the ink run width across the row (horizontal) and
-    down the column (vertical). The thinner direction is the stroke's cross
-    section, so snap that axis to the run center and keep the other: on a
-    vertical stem -> snap x only; on a horizontal bar -> snap y only; on a
-    small junction -> snap both. Off ink (an open counter/gap) -> keep the
-    point as placed, so deliberate center anchors like O/C are trusted."""
-    h, w = ink.shape
-    ix = min(max(int(round(gx)), 0), w - 1)
-    iy = min(max(int(round(gy)), 0), h - 1)
-
-    if not ink[iy, ix]:
-        # snap onto the nearest ink pixel within a small band, else keep raw
-        best = None
-        for dy in range(-band, band + 1):
-            for dx in range(-band, band + 1):
-                y, x = iy + dy, ix + dx
-                if 0 <= y < h and 0 <= x < w and ink[y, x]:
-                    dist = dx * dx + dy * dy
-                    if best is None or dist < best[0]:
-                        best = (dist, x, y)
-        if best is None:
-            return gx, gy  # open space: trust the placement
-        _d, ix, iy = best
-
-    lo = ix
-    while lo > 0 and ink[iy, lo - 1]:
-        lo -= 1
-    hi = ix
-    while hi < w - 1 and ink[iy, hi + 1]:
-        hi += 1
-    run_w = hi - lo + 1
-
-    tlo = iy
-    while tlo > 0 and ink[tlo - 1, ix]:
-        tlo -= 1
-    thi = iy
-    while thi < h - 1 and ink[thi + 1, ix]:
-        thi += 1
-    run_h = thi - tlo + 1
-
-    sx, sy = float(ix), float(iy)
-    if run_w <= run_h:  # vertical-ish stroke -> center across its width
-        sx = (lo + hi) / 2.0
-    if run_h <= run_w:  # horizontal-ish stroke -> center across its height
-        sy = (tlo + thi) / 2.0
-    return sx, sy
-
-
-def _read_green_dots(path: Path, snap=True):
-    """Detect the green dot in each glyph cell of an edited contact sheet
-    and convert to normalized ink-bbox origins. Hand-placed dots are
-    snapped to the glyph's ink midpoints (see _snap_to_ink) unless
-    snap=False. Returns {char: {"raw": (nx,ny), "snapped": (nx,ny)}}."""
-    import numpy as np
-
-    _w, _h, cells = _glyph_sheet_layout()
-    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
-    src = Image.open(path).convert("RGB")
-    if src.size != (_w, _h):
-        # Tolerate any export size / Retina scaling / PDF round-trip: the
-        # sheet is a fixed grid, so rescaling to canonical preserves every
-        # dot's relative position. (Assumes the image is the sheet only.)
-        src = src.resize((_w, _h), Image.BILINEAR)
-    arr = np.asarray(src, dtype=np.int16)
-    R, G, B = arr[..., 0], arr[..., 1], arr[..., 2]
-    green = (G > 140) & (R < 120) & (B < 120)  # tolerant "green dot" mask
-
-    found = {}
-    label_h = _GLYPH_SHEET_LABEL_H
-    cell = _GLYPH_SHEET_CELL
-    for ch, cx, cy, (ox, oy), (l, t, r, b) in cells:
-        y0, y1 = cy, cy + cell - label_h  # glyph area, excluding label strip
-        x0, x1 = cx, cx + cell
-        ys, xs = np.nonzero(green[y0:y1, x0:x1])
-        if len(xs) == 0:
-            continue
-        gx, gy = x0 + xs.mean(), y0 + ys.mean()
-
-        sx, sy = gx, gy
-        if snap:
-            # clean glyph mask in cell-local coords (no dot to interfere)
-            m = Image.new("L", (cell, cell - label_h), 0)
-            ImageDraw.Draw(m).text((ox - cx, oy - cy), ch, fill=255, font=glyph_font)
-            ink = np.asarray(m) > 80
-            lx, ly = _snap_to_ink(ink, gx - cx, gy - cy)
-            sx, sy = lx + cx, ly + cy
-
-        def norm(px, py):
-            nx = (px - l) / (r - l) if r > l else 0.5
-            ny = (py - t) / (b - t) if b > t else 0.5
-            return (round(float(nx), 3), round(float(ny), 3))
-
-        found[ch] = {"raw": norm(gx, gy), "snapped": norm(sx, sy)}
-    return found
-
-
-def cmd_glyphs(args):
-    """Render a contact sheet of every glyph with crosshairs at its grid
-    origin (RED = baseline guess, BLUE = adopted value), for reviewing and
-    correcting glyph_origins.py.
-
-    With --read <edited.png>: detect green dots the user drew on a copy of
-    the sheet, print the corresponding normalized origins to paste into
-    USER_ORIGIN_OVERRIDES, then (re)render the sheet."""
-    if getattr(args, "read", None):
-        detected = _read_green_dots(args.read)
-        if not detected:
-            print(f"no green dots detected in {args.read}")
-            print("draw a solid green dot (#00FF00) in each cell to override")
-            return
-        use_snap = getattr(args, "snap", False)
-        which = "snapped" if use_snap else "raw"
-        print(f"detected {len(detected)} green dot(s) in {args.read} (using {which}):")
-        print("paste into USER_ORIGIN_OVERRIDES in glyph_origins.py:")
-        for ch in sorted(detected):
-            base = glyph_origins_mod.baseline_grid_origin(ch)
-            vx, vy = detected[ch][which]
-            other = detected[ch]["snapped" if not use_snap else "raw"]
-            print(
-                f'    "{ch}": ({vx:.3f}, {vy:.3f}),'
-                f"   # {'raw' if not use_snap else 'snapped'}; "
-                f"{'snapped' if not use_snap else 'raw'} {other}, was {base}"
-            )
-        return
-
-    _w, _h, cells = _glyph_sheet_layout()
-    glyph_font = find_font(_GLYPH_SHEET_FONT_PX)
-    label_font = find_font(22)
-    img = Image.new("RGB", (_w, _h), (250, 250, 250))
-    d = ImageDraw.Draw(img)
-    import numpy as np
-
-    for ch, cx, cy, (ox, oy), ink_bbox in cells:
-        d.rectangle(
-            [cx, cy, cx + _GLYPH_SHEET_CELL - 1, cy + _GLYPH_SHEET_CELL - 1],
-            outline=(215, 215, 215),
-        )
-        l, t, r, b = ink_bbox
-        d.text((ox, oy), ch, fill=(120, 120, 120), font=glyph_font)
-        d.rectangle([l, t, r, b], outline=(185, 205, 235))
-
-        # Operative anchors from the general rules (glyph_seam / glyph_hcut_y).
-        m = Image.new(
-            "L", (_GLYPH_SHEET_CELL, _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H), 0
-        )
-        ImageDraw.Draw(m).text((ox - cx, oy - cy), ch, fill=255, font=glyph_font)
-        ink = np.asarray(m) > 80
-        nx, through = glyph_origins_mod.glyph_seam(ink)
-        hcy = glyph_origins_mod.glyph_hcut_y(ink)
-        seam_px = l + nx * (r - l)
-        cxc = (l + r) / 2.0
-
-        if through:
-            # vertical seam (blue) x horizontal row boundary (green); dot = anchor
-            d.line([(seam_px, t), (seam_px, b)], fill=(30, 90, 220), width=2)
-            hy = t + hcy * (b - t)
-            d.line([(l, hy), (r, hy)], fill=(20, 160, 60), width=2)
-            _draw_crosshair(d, seam_px, hy, (220, 30, 30))
-            kind = "split"
-        else:
-            # capped-open (C, G): no vertical slice (dashed grey at center), row
-            # boundary cuts just inside an arm — mark BOTH alternating anchors.
-            for yy in range(int(t), int(b), 8):
-                d.line(
-                    [(cxc, yy), (cxc, min(yy + 4, b))], fill=(170, 170, 170), width=1
-                )
-            for f in (0.25, 0.75):
-                ay = t + f * (b - t)
-                d.line([(l, ay), (r, ay)], fill=(230, 140, 20), width=2)
-                _draw_crosshair(d, cxc, ay, (230, 140, 20), r=8)
-            kind = "glob"
-
-        d.text(
-            (cx + 6, cy + _GLYPH_SHEET_CELL - _GLYPH_SHEET_LABEL_H + 6),
-            f"{ch}  {kind}  seam {nx:.2f}",
-            fill=(40, 40, 40),
-            font=label_font,
-        )
-
-    FIG_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIG_DIR / "glyph_origins.png"
-    img.save(out, "PNG", optimize=True)
-    print(f"glyph anchors: {len(cells)} glyphs")
-    print(
-        "  blue=vertical seam  green=row boundary  red=anchor  "
-        "orange=capped-open arm cuts  grey dashes=no vertical slice"
-    )
-    print(f"-> {out}")
-
-
-# ---------------------------------------------------------------------------
-# Versioned image save + banner demo suite
-# ---------------------------------------------------------------------------
-
-BANNER_DEMO_NAMES = ["NORA", "AYANA", "KARSON", "KAI", "KADE", "SLOAN", "LEO"]
-# Extra names for testing coverage only — NOT cut in real material. Handy for
-# exercising the letter-splitting / spacing / tab logic across more glyphs.
-BONUS_DEMO_NAMES = [
-    "ALEX",
-    "REBECCA",
-    "CLEM",
-    "AIDA",
-    "KYLE",
-    "CHELSEA",
-    "ERIC",
-    "MARIA",
-]
-
-
-def save_versioned(path: Path, img: Image.Image) -> str:
-    """Save `img` to `path`, first archiving any existing (different) file
-    into `<dir>/.history/<stem>/NNNN.ext`. Dedup by pixel hash: if the new
-    image is identical to the current file, nothing is archived. History
-    lives under build/ so it stays out of git. Returns a status string."""
-    import hashlib
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    new_hash = hashlib.md5(img.convert("RGB").tobytes()).hexdigest()
-    status = "written"
-    if path.exists():
-        try:
-            cur = Image.open(path).convert("RGB")
-            cur_hash = hashlib.md5(cur.tobytes()).hexdigest()
-        except Exception:
-            cur_hash = None
-        if cur_hash == new_hash:
-            return "unchanged"
-        hist = path.parent / ".history" / path.stem
-        hist.mkdir(parents=True, exist_ok=True)
-        existing = sorted(hist.glob(f"[0-9]*{path.suffix}"))
-        n = 1 + (int(existing[-1].stem) if existing else 0)
-        shutil.copy2(path, hist / f"{n:04d}{path.suffix}")
-        status = f"versioned (prev -> .history/{path.stem}/{n:04d}{path.suffix})"
-    img.save(path, "PNG", optimize=True)
-    return status
-
-
-def _render_banner_demo(name: str, annotate_origins: bool) -> Path:
-    cfg = fit_config(name, _config_for_size("banner"))
-    pieces, stats = generate_pieces(name, 7, cfg)
-    origins = None
-    if annotate_origins:
-        from geometry import letter_auto_origins
-
-        origins = letter_auto_origins(name, cfg)
-    fw = cfg.puzzle_w_px / cfg.px_per_mm
-    fh = cfg.puzzle_h_px / cfg.px_per_mm
-    title = f"{name} — banner ({fw:.0f}x{fh:.0f}mm), {len(pieces)} pcs"
-    out = BUILD_DIR / "name_grids" / "banner" / f"{name}.png"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    # render_preview saves internally; capture to an Image via a temp render
-    tmp = out.with_suffix(".tmp.png")
-    render_preview(pieces, cfg, title, tmp, origins=origins)
-    img = Image.open(tmp).convert("RGB")
-    status = save_versioned(out, img)
-    tmp.unlink(missing_ok=True)
-    print(f"  {name}: {len(pieces)} pcs — {status}")
-    return out
-
-
-def cmd_bannerdemos(args):
-    """Render the banner demo previews, versioning any prior copy into a
-    git-ignored history folder. --origins overlays the auto grid-origin;
-    --bonus also renders the non-critical test names (not cut in material)."""
-    names = list(BANNER_DEMO_NAMES)
-    if args.bonus:
-        names += BONUS_DEMO_NAMES
-    print(
-        f"banner demos ({len(names)} names, origins={'on' if args.origins else 'off'}):"
-    )
-    for name in names:
-        _render_banner_demo(name, args.origins)
-    print(f"-> {BUILD_DIR / 'name_grids' / 'banner'}/")
-
-
 # ---------------------------------------------------------------------------
 # CLI plumbing
 # ---------------------------------------------------------------------------
+
+
+def cmd_vgrid(args):
+    """Vertex-grid banner preview: letters cut out, background tiled into
+    interlocking pieces that encase them (no seam crosses a letter)."""
+    import vertex_grid as vg
+
+    prm = vg.VGParams(gap_mm=args.gap_mm)
+    res = vg.build(args.word, args.seed, prm, auto_gap=not args.no_auto_gap)
+    out = args.out or (FIG_DIR / f"vgrid_{args.word.lower()}_seed{args.seed}.png")
+    title = (
+        f"{args.word.upper()} — vertex-grid: {len(res.pieces)} pieces + "
+        f"{len(res.letters)} letters + {len(res.counters)} counters | "
+        f"1 tab/edge | durable={'YES' if res.durable else 'NO'} | "
+        f"{res.w_mm:.0f}x{res.h_mm:.0f}mm gap={res.gap_mm:.0f}"
+    )
+    vg.render_preview(res, out, title)
+    print(
+        f"{args.word.upper()}: {len(res.pieces)} bg + {len(res.letters)} letters + "
+        f"{len(res.counters)} counters | tabs {res.tabs} | durable {res.durable} | "
+        f"gap {res.gap_mm:.0f}mm | {res.w_mm:.0f}x{res.h_mm:.0f}mm"
+    )
+    if not res.durable:
+        print(
+            "  WARNING: not durable — a piece has a <4mm neck; try a wider --gap-mm "
+            "or fewer/less-crowded letters."
+        )
+    print(f"-> {out}")
 
 
 def main():
@@ -1332,85 +624,28 @@ def main():
     _add_size_override_flags(cu)
     cu.set_defaults(func=cmd_cut)
 
-    # warmup-test — single-pass cut-through feed test (concentric rings)
-    wt = subs.add_parser(
-        "warmup-test",
-        help="single-pass cut-through feed test: concentric rings, center origin",
+    # vgrid — vertex-grid banner preview (opt-in tiling: letters cut out,
+    # background pieces encase them; no seam crosses a letter)
+    vgp = subs.add_parser(
+        "vgrid", help="vertex-grid banner preview (letters cut out + encased)"
     )
-    wt.add_argument("--circles", type=int, default=12, help="number of rings")
-    wt.add_argument("--min-r", type=float, default=3.0, help="smallest ring radius mm")
-    wt.add_argument("--max-r", type=float, default=24.0, help="largest ring radius mm")
-    wt.add_argument(
-        "--time-s",
-        dest="time_s",
+    vgp.add_argument("--word", default="NORA")
+    vgp.add_argument("--seed", type=int, default=7)
+    vgp.add_argument(
+        "--gap-mm",
+        dest="gap_mm",
         type=float,
-        default=3.0,
-        help="loop seconds per ring, EXCLUDING the warmup (feed = circumference / "
-        "time-s). 3s + r_min=3mm gives a ~377mm/min slowest ring",
+        default=22.0,
+        help="uniform inter-letter gap in mm (auto-widened if needed for durability)",
     )
-    wt.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
-    wt.set_defaults(func=cmd_warmuptest)
-
-    # raster
-    ra = subs.add_parser("raster", help="emit raster engrave + cut GCode (3 files)")
-    ra.add_argument("--size", default="small", choices=("small", "full"))
-    ra.add_argument("--word", default="N")
-    ra.add_argument("--seed", type=int, default=7)
-    ra.add_argument("--material", default="mdf_3mm")
-    src = ra.add_mutually_exclusive_group(required=True)
-    src.add_argument("--image", type=Path)
-    src.add_argument("--test-pattern", action="store_true")
-    ra.add_argument("--mode", choices=("halftone", "grayscale"), default="halftone")
-    ra.add_argument("--line-spacing-mm", type=float, default=0.20)
-    ra.add_argument("--engrave-power-percent", type=int, default=30)
-    ra.add_argument("--engrave-feed", type=int, default=3000)
-    ra.add_argument("--grayscale-levels", type=int, default=16)
-    ra.set_defaults(func=cmd_raster)
-
-    # mockup
-    mo = subs.add_parser(
-        "mockup", help="halftone vs grayscale comparison visualization"
-    )
-    mo.add_argument("--image", type=Path, required=True)
-    mo.add_argument("--word", default="NORA")
-    mo.add_argument("--seed", type=int, default=7)
-    mo.add_argument("--out", type=Path, default=None)
-    mo.set_defaults(func=cmd_mockup)
-
-    # glyphs — contact sheet of grid origins for LUT review
-    gl = subs.add_parser(
-        "glyphs", help="render a contact sheet of glyph grid-origins for review"
-    )
-    gl.add_argument(
-        "--read",
-        type=Path,
-        default=None,
-        help="read green dots from an edited copy of the sheet and print "
-        "snapped origins for USER_ORIGIN_OVERRIDES",
-    )
-    gl.add_argument(
-        "--snap",
+    vgp.add_argument(
+        "--no-auto-gap",
+        dest="no_auto_gap",
         action="store_true",
-        help="snap dots to local stroke centers (default: use raw placement, "
-        "which is usually more faithful — snapping misfires at junctions)",
+        help="disable automatic gap widening for durability",
     )
-    gl.set_defaults(func=cmd_glyphs)
-
-    # bannerdemos — render the 7 banner demo previews (versioned)
-    bd = subs.add_parser(
-        "bannerdemos", help="render the 7 banner demo previews (versioned history)"
-    )
-    bd.add_argument(
-        "--origins",
-        action="store_true",
-        help="overlay the automatic grid-origin crosshair on each letter",
-    )
-    bd.add_argument(
-        "--bonus",
-        action="store_true",
-        help="also render the non-critical bonus test names (not cut in material)",
-    )
-    bd.set_defaults(func=cmd_bannerdemos)
+    vgp.add_argument("--out", type=Path, default=None)
+    vgp.set_defaults(func=cmd_vgrid)
 
     args = p.parse_args()
     args.func(args)

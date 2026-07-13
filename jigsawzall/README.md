@@ -1,4 +1,4 @@
-# Lesson 3c — Wooden jigsaw with name-preserving cuts
+# jigsawzall — Wooden jigsaw with name-preserving cuts
 
 Generate cuttable GCode for a wooden jigsaw puzzle that embeds a name into the cut pattern. Letters become intact pieces that nest into pockets carved from the surrounding cells. Optional photo raster engraving overlays a continuous image across the assembled puzzle.
 

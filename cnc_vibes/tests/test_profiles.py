@@ -20,7 +20,7 @@ def _load(name: str):
 
 
 def test_machine_profile_required_keys():
-    p = _load("anolex_4030_evo_ultra2.yaml")
+    p = _load("default.yaml")
     assert p["name"]
     assert p["controller"]["dialect"].startswith("grbl")
     for axis in ("x", "y", "z"):

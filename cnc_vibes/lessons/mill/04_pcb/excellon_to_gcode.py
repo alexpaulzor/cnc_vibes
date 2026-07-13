@@ -242,7 +242,7 @@ def main() -> None:
 
     text = args.drill_file.read_text()
     drl = parse_excellon(text)
-    machine = load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    machine = load_yaml(PROFILES / "default.yaml")
 
     gcode = generate_drill_gcode(
         drl=drl,

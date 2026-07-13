@@ -2,7 +2,7 @@
 
 A guide for software engineers who already know OpenSCAD + FDM 3D printing and want to make their CNC router cut holes in things — not print plastic in the shape of "thing-with-holes."
 
-> **Read this if you're going Workflow B (FreeCAD CAM).** This guide is the conceptual deep-dive for the OpenSCAD → FreeCAD CAM workbench → GCode path. If you're going Workflow A (pure Python via `scripts/cam.py` or one of the parametric lessons in `lessons/`), most of this doesn't apply — go straight to the [top README's lesson list](README.md#lessons) and pick a starter. The vocabulary in §2 is useful regardless of workflow.
+> **Read this if you're going Workflow B (FreeCAD CAM).** This guide is the conceptual deep-dive for the OpenSCAD → FreeCAD CAM workbench → GCode path. If you're going Workflow A (pure Python via `scripts/cam.py` or one of the parametric recipes in `lessons/`), most of this doesn't apply — go straight to the [top README's "Where to start" table](README.md#where-to-start-pick-by-task) and pick by task. The vocabulary in §2 is useful regardless of workflow.
 >
 > **Status: v2.** Spindle-only this iteration. Laser and FDM are deferred but the architecture accommodates them as additional pipeline branches (see §3 and §4). CAM tool is **FreeCAD's CAM workbench**; geometry export + GCode validation are CLI; CAM setup itself is GUI.
 
@@ -58,7 +58,7 @@ Almost any 2.5D job is one or more of:
 - **Drill.** Single-point holes at coordinates. Often "peck drilled" — plunge, retract, plunge deeper, retract — to clear chips.
 - **Engrave / V-carve.** Trace lines (raster or vector). With a V-bit and varying Z, you get the classic "carved sign" look where line width = depth.
 - **Surface / 3D contour.** Parallel passes following a 3D surface. Usually preceded by a roughing pass that leaves uniform stock for finishing to remove.
-- **Adaptive clearing / trochoidal.** Modern roughing strategy that keeps the tool's engagement angle constant by using curved looping motion. Lets you push DOC much deeper at lower WOC. Worth learning once you outgrow simple pocketing.
+- **Adaptive clearing / trochoidal.** Modern roughing strategy that keeps the tool's engagement angle constant by using curved looping motion. Lets you push DOC much deeper at lower WOC. Reach for it once you outgrow simple pocketing.
 
 ### 2.5 Things that exist in CNC and not in FDM
 
@@ -126,7 +126,7 @@ Three things worth calling out:
 
 A foundational principle of this repo: **nothing about your specific machine should be hardcoded.** The guide and the automation target *a GRBL 1.1+ class router described by a profile*. Replacing the machine means swapping a YAML file, not editing scripts.
 
-The profile lives at `profiles/anolex_4030_evo_ultra2.yaml` and follows this shape (placeholder values flagged with `# TODO` — fill in from your machine's documentation, gSender's status screen, or by running `$$` in your sender):
+The repo's default profile lives at `profiles/default.yaml` (generic placeholder values). A filled-in, real-world example — shown below — lives at `../custom_setups/anolex/anolex_4030_evo_ultra2.yaml`; both follow this shape (placeholder values flagged with `# TODO` — fill in from your machine's documentation, gSender's status screen, or by running `$$` in your sender):
 
 ```yaml
 name: Anolex 4030-Evo Ultra 2
@@ -462,7 +462,7 @@ python cnc.py validate examples/hole_in_sheet/build/hole_in_sheet.gcode
 | `max_plunge` | Step 5 vertical feed was set higher than the tool's `max_plunge_mm_per_min` |
 | `bounds` | Step 4 WCS ended up somewhere other than stock front-left-top |
 | `spindle_on` | The grbl post-processor has "Output spindle commands" disabled — toggle it in the Output tab |
-| `safe_z_rapid` | Safe height in step 6 was below the default 5 mm in `profiles/anolex_4030_evo_ultra2.yaml`; raise one or change the other to match |
+| `safe_z_rapid` | Safe height in step 6 was below the default 5 mm in `profiles/default.yaml`; raise one or change the other to match |
 
 </details>
 
@@ -476,7 +476,7 @@ cnc_vibes/
 ├── cnc.py                          ← task runner (Windows + macOS + Linux)
 ├── requirements.txt                 ← pyyaml, pytest
 ├── profiles/
-│   ├── anolex_4030_evo_ultra2.yaml ← machine
+│   ├── default.yaml               ← machine (copy & edit)
 │   ├── tools.yaml                   ← endmills + bits
 │   └── materials.yaml               ← chipload tables, DOC fractions
 ├── examples/

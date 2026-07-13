@@ -1,4 +1,4 @@
-"""GCode emission for the jigsaw lesson.
+"""GCode emission for jigsawzall.
 
 Unifies what previously lived in three scratch scripts:
 - phase6_small.emit_gcode (per-polygon cut, simple ordering)
@@ -40,7 +40,7 @@ from geometry import PuzzleConfig
 REPO_ROOT = Path(__file__).resolve().parent
 
 # Diode cold-start ramp: time to reach full optical power after the beam fires.
-# Fixed for this machine regardless of material/lesson — every cut warms up for
+# Fixed for this machine regardless of material — every cut warms up for
 # this long (front-loaded as a fwd-half / back-half wiggle = 500ms each way).
 WARMUP_MS = 1000.0
 

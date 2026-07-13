@@ -81,7 +81,7 @@ FR4 drill cuttings are abrasive and pack tightly in the flutes if not cleared. P
 
 ## Reuses existing infrastructure
 
-- `profiles/anolex_4030_evo_ultra2.yaml` for envelope bounds.
+- `profiles/default.yaml` for envelope bounds.
 - `scripts/job_params.py` `load_yaml` helper.
 - `scripts/gcode_validate.py` bounds rule (catches holes outside the bed).
 - Standard spindle PREFLIGHT_CHECKLIST applies (mostly — PCB-specific items are an extension idea).

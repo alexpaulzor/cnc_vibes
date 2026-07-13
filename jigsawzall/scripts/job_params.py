@@ -28,7 +28,7 @@ class LaserJob:
     """Declarative laser-head job loaded from a job.yaml.
 
     `extras` carries head-specific config (e.g. the `jigsaw:` block) so
-    the loader stays head-agnostic — each lesson interprets its own
+    the loader stays head-agnostic — each tool interprets its own
     sub-schema.
     """
 

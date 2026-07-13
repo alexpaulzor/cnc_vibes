@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-LESSON_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(LESSON_DIR))
+PKG_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PKG_DIR))
 
 from geometry import (  # noqa: E402
     PuzzleConfig,
@@ -448,12 +448,15 @@ from glyph_origins import auto_glyph_origin  # noqa: E402
 
 
 def _glyph_ink(ch, size=140):
-    """Rasterize one bold glyph to a tight ink-bbox bool array (for seam tests)."""
+    """Rasterize one bold glyph to a tight ink-bbox bool array (for seam tests).
+    Pinned to the 'bold' face: these tests lock the glyph_origins ALGORITHM
+    behavior against a known letterform (the open-C case), independent of the
+    package default font (now Arial Black)."""
     import numpy as np
     from geometry import find_font
     from PIL import Image, ImageDraw
 
-    font = find_font(size)
+    font = find_font(size, "bold")
     gl, gt, gr, gb = font.getbbox(ch)
     im = Image.new("L", (max(int(gr - gl), 1), max(int(gb - gt), 1)), 0)
     ImageDraw.Draw(im).text((-gl, -gt), ch, fill=255, font=font)

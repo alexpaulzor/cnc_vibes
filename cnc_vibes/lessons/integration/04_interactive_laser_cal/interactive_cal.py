@@ -705,7 +705,7 @@ def main() -> int:
     p.add_argument(
         "--machine-profile",
         type=Path,
-        default=REPO_ROOT / "profiles" / "anolex_4030_evo_ultra2.yaml",
+        default=REPO_ROOT / "profiles" / "default.yaml",
         help="machine profile YAML for envelope check",
     )
     p.add_argument(

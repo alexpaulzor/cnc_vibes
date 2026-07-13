@@ -39,7 +39,7 @@ python lessons/integration/03_probe_corner/probe_corner.py \
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--plate-thickness` | from `profiles/anolex_4030_evo_ultra2.yaml` `probe.thickness_mm` | Z dimension of the touch plate; subtracted from probed Z to get stock-top Z=0. |
+| `--plate-thickness` | from `profiles/default.yaml` `probe.thickness_mm` | Z dimension of the touch plate; subtracted from probed Z to get stock-top Z=0. |
 | `--plate-x-offset` | 10.0 | Distance from plate's right edge to where you want WCS X=0 (typically: stock-front-left-corner X). |
 | `--plate-y-offset` | 10.0 | Same for Y. |
 | `--port` | `$CNC_PORT` env var | Serial port. |

@@ -7,7 +7,7 @@ macOS, and Linux. Run `python cnc.py --help` for the list of subcommands.
 Environment overrides:
   OPENSCAD     path to openscad executable (default: auto-detect)
   FREECAD_CMD  path to FreeCADCmd executable (default: auto-detect)
-  PROFILE      machine profile YAML (default: profiles/anolex_4030_evo_ultra2.yaml)
+  PROFILE      machine profile YAML (default: profiles/default.yaml)
   TOOLS        tool table YAML       (default: profiles/tools.yaml)
 """
 
@@ -115,9 +115,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     gcode = Path(args.gcode)
     if not gcode.exists():
         sys.exit(f"error: gcode not found: {gcode}")
-    profile = os.environ.get(
-        "PROFILE", str(ROOT / "profiles" / "anolex_4030_evo_ultra2.yaml")
-    )
+    profile = os.environ.get("PROFILE", str(ROOT / "profiles" / "default.yaml"))
     tools = os.environ.get("TOOLS", str(ROOT / "profiles" / "tools.yaml"))
     rc = subprocess.run(
         [
@@ -193,7 +191,7 @@ def _load_job_context(name: str):
     """Load job spec + machine + tool + material for a given example name."""
     job_dir = EXAMPLES / name
     job = load_job(job_dir)
-    machine = load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    machine = load_yaml(PROFILES / "default.yaml")
     tools = load_yaml(PROFILES / "tools.yaml")
     materials = load_yaml(PROFILES / "materials.yaml")
     tool = find_by_id(tools, job.tool, "tool")
@@ -554,9 +552,8 @@ def cmd_cam(args: argparse.Namespace) -> None:
 
 
 def cmd_cal_laser(args: argparse.Namespace) -> None:
-    """Dispatch to lessons/laser/06_spiral_cal/spiral_cal.py."""
-    sys.path.insert(0, str(ROOT / "lessons" / "laser" / "06_spiral_cal"))
-    import spiral_cal  # noqa: E402
+    """Dispatch to scripts/spiral_cal.py (concentric warmup + feed calibration)."""
+    import spiral_cal  # noqa: E402  (scripts/ is on sys.path)
 
     rc = spiral_cal.main(args.rest or None)
     if rc:
@@ -608,7 +605,7 @@ def main() -> None:
             import jog  # noqa: E402
 
             sys.exit(jog.main(sub_argv) or 0)
-        sys.path.insert(0, str(ROOT / "lessons" / "laser" / "06_spiral_cal"))
+        sys.path.insert(0, str(ROOT / "scripts"))
         import spiral_cal  # noqa: E402
 
         sys.exit(spiral_cal.main(sub_argv) or 0)
@@ -753,8 +750,8 @@ def main() -> None:
 
     cal = subs.add_parser(
         "cal-laser",
-        help="spiral laser calibration card (hex spiral of double-spiral "
-        "patches from origin); run with --help or 'interactive' for guided setup",
+        help="concentric spiral warmup + feed laser calibration (one disc finds "
+        "your max single-pass feed and cold-start ramp); run with --help",
         add_help=False,
     )
     cal.add_argument("rest", nargs=argparse.REMAINDER)

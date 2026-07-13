@@ -1,7 +1,7 @@
 # Jigsaw — rules & algorithms
 
-Accumulated design rules and high-level algorithms for the `03_jigsaw`
-lesson (`cnc.py jigsaw`). This is the "why" companion to the code in
+Accumulated design rules and high-level algorithms for jigsawzall (the
+standalone name-puzzle tool). This is the "why" companion to the code in
 `geometry.py` (piece generation) and `emitter.py` (G-code emission). If a
 rule here disagrees with the code, the code is the source of truth — fix
 one or the other.
@@ -257,7 +257,7 @@ so a `G4` dwell does NOT warm the diode (no motion = no beam, no scorch).
 Warmup must be done with MOTION, not dwells. Warmup-dwell flags have been
 removed from `jigsaw.py` AND the shared laser CAM (`scripts/laser_cam.py`,
 `cam_cli.py`, `help_topics.py`) entirely; cold-start fade is handled by
-RAMP (A7). (Lesson 06 `spiral_cal.py` still has a dwell sweep — pending
+RAMP (A7). (cnc_vibes `cnc.py cal-laser` still has a dwell sweep — pending
 scrub / repurpose to an ramp sweep.)
 
 ### R10. The diode ramps over the first few mm of every laser-on
@@ -352,8 +352,8 @@ without reading G-code. Emitted by default with every `cut`.
 - **T4 — Routing tuning.** Optional: optimal odd-node matching (Blossom)
   and/or allow a few lifts to reduce CPP re-trace overhead (A6).
 - **T5 — Scrub shared-CAM dwell flags.** DONE: warmup G4 dwell removed from
-  `scripts/laser_cam.py`, `cam_cli.py`, `help_topics.py`, and lesson 06
-  `spiral_cal.py` (all tests assert no dwell). Nothing left to scrub.
+  `scripts/laser_cam.py`, `cam_cli.py`, `help_topics.py`, and cnc_vibes
+  `cnc.py cal-laser` (all tests assert no dwell). Nothing left to scrub.
 - **T6 — Letter-aligned follow-ups.** (a) Letter *spacing*: currently the
   glyphs use PIL default tracking; add a gap sized to fit a full tab
   between letters. (b) Steep-slope rule: if adjacent origin-ys differ too

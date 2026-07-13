@@ -223,7 +223,7 @@ def main() -> None:
     args = p.parse_args()
 
     points = _build_points(args)
-    machine = load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    machine = load_yaml(PROFILES / "default.yaml")
     tools = load_yaml(PROFILES / "tools.yaml")
     tool = find_by_id(tools, args.tool, "tool")
 

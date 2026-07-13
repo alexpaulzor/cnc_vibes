@@ -25,9 +25,11 @@ python cnc.py validate build/cam_cli/<generated>.gcode   # machine-envelope safe
 
 Both paths share the same downstream tooling (`validate`, `preflight`, `preview`, `params`) and the same machine/tool/material profiles.
 
-## Where to start (new reader)
+## Where to start (pick by task)
 
-Pick the lesson that matches what you actually want to cut. Each link is a self-contained README with usage, dependencies, and "what's next" pointers.
+This table is the primary navigation: find the row that matches what you
+actually want to cut, and jump straight there. Each link is a self-contained
+README with usage, dependencies, and "what's next" pointers.
 
 | Your situation | Start here | Why |
 |---|---|---|
@@ -39,7 +41,7 @@ Pick the lesson that matches what you actually want to cut. Each link is a self-
 | **Cutting metal** | [4c steel center-punch](lessons/mill/02_steel_center_punch/), then [4d aluminum trochoidal](lessons/mill/03_aluminum/) | Sanity-check spindle on metal with no cutting first; then graduate to actual material removal. |
 | **Need to talk to the controller** (verify state, find IP, probe corners) | [Int-01 inspect](lessons/integration/01_inspect/), then [Int-03 probe-corner](lessons/integration/03_probe_corner/) | Same serial pattern, different scope. |
 
-If you don't know which workflow yet, **default to Workflow A** (code-first). The lessons under `lessons/laser/` and `lessons/mill/` mostly fit there, and you skip the FreeCAD learning curve until you genuinely need it.
+If you don't know which workflow yet, **default to Workflow A** (code-first). The recipes under `lessons/laser/` and `lessons/mill/` mostly fit there, and you skip the FreeCAD learning curve until you genuinely need it.
 
 ## Install
 
@@ -69,7 +71,7 @@ Use `python3` instead of `python` on macOS (or alias it). The same `cnc.py` comm
 
 ### Raspberry Pi (sender or full workstation)
 
-See [RASPBERRY_PI.md](RASPBERRY_PI.md) — Pi 4/5 with 64-bit Pi OS Lite runs the whole toolchain. RAM tiers, sender choice (bCNC vs FluidNC WebUI vs CNCjs caveats), CAMotics-doesn't-run-on-ARM workaround, and OS recommendation.
+See [RASPBERRY_PI.md](../custom_setups/anolex/RASPBERRY_PI.md) — Pi 4/5 with 64-bit Pi OS Lite runs the whole toolchain. RAM tiers, sender choice (bCNC vs FluidNC WebUI vs CNCjs caveats), CAMotics-doesn't-run-on-ARM workaround, and OS recommendation.
 
 ### Python deps (auto-installed via `requirements.txt`)
 
@@ -106,18 +108,19 @@ cnc_vibes/
 ├── cnc.py                             ← task runner CLI (cross-platform)
 ├── requirements.txt
 ├── profiles/                          ← machine-as-config (swap to retarget)
-│   ├── anolex_4030_evo_ultra2.yaml   ← machine envelope + feed limits
+│   ├── default.yaml                   ← machine envelope + feed limits (copy & edit; worked example in ../custom_setups/anolex/)
 │   ├── tools.yaml                     ← endmills, ball-ends, V-bits, drills
 │   ├── materials.yaml                 ← spindle chipload + DOC tables
 │   └── laser_materials.yaml           ← per-material laser power/feed/passes
 ├── examples/                          ← per-job parts (Workflow B)
 │   └── hole_in_sheet/                 ← reference example with worked CAM
-├── lessons/                           ← progressive tutorials — see lessons/README.md
-│   ├── laser/    {spacer, calibration, spoilboard, test-card, spiral-cal}
+├── lessons/                           ← task-oriented recipes — see lessons/README.md
+│   ├── laser/    {spacer, calibration, spoilboard}  (+ `cnc.py cal-laser` concentric spiral calibration)
 │   ├── mill/     {spacer, steel-center-punch, aluminum-trochoidal, pcb-drill}
 │   └── integration/  {inspect, snapshot, probe-corner, interactive-laser-cal}
 ├── scripts/
 │   ├── cam.py                          ← parametric 2.5D CAM library (profile/pocket/drill/engrave)
+│   ├── spiral_cal.py                  ← concentric spiral laser calibration (backs `cnc.py cal-laser`)
 │   ├── openscad_loader.py              ← OpenSCAD .scad/.svg → shapely Polygons (feeds cam.py)
 │   ├── gcode_validate.py               ← per-line GCode rules (spindle + laser)
 │   ├── job_params.py                   ← loaders, derived math, preflight checklists
@@ -127,12 +130,19 @@ cnc_vibes/
 └── tests/                              ← repo-wide pytest suite (currently ~490 passing)
 ```
 
-## Lessons
+## Recipes (lessons/)
 
-Progressive tutorials, each demonstrating a technique you can reuse on your own jobs. Full index + suggested reading order in [lessons/README.md](lessons/README.md); [ROADMAP.md](ROADMAP.md) is the at-a-glance status view.
+A practical (and safe-enough) choose-your-own-adventure cheat-sheet for
+deterministic, headless CAM: turn ideas and code into good physical parts,
+navigate the gotchas per task/material/operation, and automate the boring
+conversions, table lookups, and calibration. Aimed at busy makers who'd
+rather run a command than click through dialogs. Pick by task using the
+[Where to start](#where-to-start-pick-by-task) table above; the full
+capability index is in [lessons/README.md](lessons/README.md), and
+[ROADMAP.md](ROADMAP.md) is the at-a-glance status view.
 
 **Implemented and tested**:
-- **Laser**: [3a spacer](lessons/laser/01_spacer/), [3b calibration matrix](lessons/laser/02_calibration/), [3d spoilboard](lessons/laser/04_spoilboard/) — (jigsaw moved to `~/src/vibes/jigsawzall`)
+- **Laser**: [3a spacer](lessons/laser/01_spacer/), [3b calibration matrix](lessons/laser/02_calibration/), [3d spoilboard](lessons/laser/04_spoilboard/), plus `cnc.py cal-laser` (concentric spiral warmup + feed calibration, backed by `scripts/spiral_cal.py`) — (jigsaw moved to `~/src/vibes/jigsawzall`)
 - **Mill**: [4a router spacer](lessons/mill/01_spacer/), [4b PCB drill](lessons/mill/04_pcb/), [4c steel center-punch](lessons/mill/02_steel_center_punch/), [4d aluminum trochoidal](lessons/mill/03_aluminum/), [4e generic 2.5D CAM](lessons/mill/05_generic_cam/)
 - **Integration** (talk to the machine): [Int-01 inspect](lessons/integration/01_inspect/), [Int-02 snapshot](lessons/integration/02_snapshot/), [Int-03 probe-corner](lessons/integration/03_probe_corner/), [Int-04 interactive laser cal](lessons/integration/04_interactive_laser_cal/)
 
@@ -204,7 +214,7 @@ The conceptual guide (`cnc_for_the_scad.md` §6) is the click-by-click walkthrou
 
 The repo treats your machine as configuration. To retarget:
 
-1. Copy `profiles/anolex_4030_evo_ultra2.yaml` to `profiles/<your_machine>.yaml`.
+1. Copy `profiles/default.yaml` to `profiles/<your_machine>.yaml` (a filled-in, real-world example lives at `../custom_setups/anolex/anolex_4030_evo_ultra2.yaml`).
 2. Update envelope, max feed, spindle/laser range.
 3. Either edit `cnc.py` + `scripts/gcode_validate.py` to point at the new file (one constant in each), or set the `PROFILE` env var.
 
@@ -229,5 +239,5 @@ For everything else, the conceptual guide (`cnc_for_the_scad.md`) explains the *
 
 - **[cnc_for_the_scad.md](cnc_for_the_scad.md)** — conceptual guide. What CAM is, why CNC is harder than 3D printing, the FreeCAD object model. Read this first if you're new to CAM.
 - **[ROADMAP.md](ROADMAP.md)** — at-a-glance status of every lesson + what's pending.
-- **[lessons/README.md](lessons/README.md)** — lesson index with suggested reading order.
+- **[lessons/README.md](lessons/README.md)** — task-oriented recipe index (pick by what you're cutting).
 - **[lessons/JOURNAL.md](lessons/JOURNAL.md)** — session-by-session decision log.

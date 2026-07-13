@@ -1,4 +1,4 @@
-"""Pure-function geometry for the jigsaw lesson.
+"""Pure-function geometry for jigsawzall.
 
 Consolidates and parameterizes the polygon math that previously lived in
 scratch/diagram_word_phase2.py and scratch/diagram_word_phase5.py with
@@ -105,8 +105,8 @@ class PuzzleConfig:
     # borders. None = height follows the band (original behavior).
     banner_target_h_mm: float | None = None
     # Optional font override for the lettering: an absolute path or an alias in
-    # _FONT_ALIASES ('bold' default, 'black' for chunkier, 'impact', 'narrow').
-    # None = the default bold list (keeps existing geometry byte-identical).
+    # _FONT_ALIASES ('black' default, 'bold' for lighter, 'impact', 'narrow').
+    # None = the default black list (Arial Black, falling back to Bold).
     font_path: str | None = None
     # Explicit fitted panel size in px (set by the fitting pass; overrides the
     # cols*cell derivation for puzzle_w_px/puzzle_h_px when present).
@@ -224,14 +224,17 @@ class PuzzleConfig:
 
 # Two preset configs that match the scratch-era hard-coded sizes,
 # so the productionized code stays byte-equivalent for the same inputs.
+# They pin font_path="bold" because their locked geometry (and the phase-script
+# regression contracts) predate the Arial Black default; the heavier black face
+# would merge letters on these un-respaced grids.
 def small_puzzle_config() -> PuzzleConfig:
     """80x80mm panel with 40mm cells. Matches scratch/phase6_small.py."""
-    return PuzzleConfig(panel_mm=80, piece_mm=40, tab_circle_r_px=15)
+    return PuzzleConfig(panel_mm=80, piece_mm=40, tab_circle_r_px=15, font_path="bold")
 
 
 def full_puzzle_config() -> PuzzleConfig:
     """300x300mm panel with 50mm cells. Matches scratch/phase2.py defaults."""
-    return PuzzleConfig(panel_mm=300, piece_mm=50, tab_circle_r_px=22)
+    return PuzzleConfig(panel_mm=300, piece_mm=50, tab_circle_r_px=22, font_path="bold")
 
 
 def micro_puzzle_config() -> PuzzleConfig:
@@ -524,13 +527,18 @@ _FONT_ALIASES = {
 
 
 def find_font(size: int, path: str | None = None) -> ImageFont.ImageFont:
-    """Load a bold sans face at `size`. `path` (an absolute path or an alias in
-    _FONT_ALIASES, e.g. 'black' for a chunkier Arial Black) is tried first; falls
-    back to the default bold list so behavior is unchanged when path is None."""
+    """Load a heavy sans face at `size`. `path` (an absolute path or an alias in
+    _FONT_ALIASES, e.g. 'bold' for the lighter Arial Bold) is tried first. With
+    no path the default resolves to the BLACK weight (Arial Black) — it cuts
+    much cleaner in wood than Bold — falling back to Bold if Black is missing."""
     candidates = []
     if path is not None:
         candidates.append(_FONT_ALIASES.get(path, path))
     candidates += [
+        # Default weight: BLACK first (chunkier strokes cut cleaner in wood),
+        # then Bold fallbacks for platforms/installs without a black face.
+        "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+        "C:\\Windows\\Fonts\\ariblk.ttf",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",

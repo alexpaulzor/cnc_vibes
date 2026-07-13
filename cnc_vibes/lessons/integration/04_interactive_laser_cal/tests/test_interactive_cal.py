@@ -275,9 +275,7 @@ def test_load_envelope_falls_back_when_missing():
 
 
 def test_load_envelope_reads_real_profile():
-    profile = (
-        LESSON_DIR.parent.parent.parent / "profiles" / "anolex_4030_evo_ultra2.yaml"
-    )
+    profile = LESSON_DIR.parent.parent.parent / "profiles" / "default.yaml"
     if not profile.exists():
         pytest.skip("machine profile not in this checkout")
     env = load_machine_envelope(profile)

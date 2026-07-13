@@ -238,7 +238,7 @@ Plunge feed cap by tool.max_plunge_mm_per_min (discovered via validator
 flagging the initial demo output — added test for it).
 
 51 tests in tests/test_cam.py. All three ops produce validator-clean
-GCode against profiles/anolex_4030_evo_ultra2.yaml.
+GCode against ../custom_setups/anolex/anolex_4030_evo_ultra2.yaml.
 
 ### CAMotics integration (Tier 3)
 

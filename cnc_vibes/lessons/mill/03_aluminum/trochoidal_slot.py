@@ -156,7 +156,7 @@ def main() -> None:
     p.add_argument("--out", type=Path, default=None)
     args = p.parse_args()
 
-    machine = load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    machine = load_yaml(PROFILES / "default.yaml")
     tool = find_by_id(load_yaml(PROFILES / "tools.yaml"), args.tool, "tool")
     material = find_by_id(
         load_yaml(PROFILES / "materials.yaml"), args.material, "material"

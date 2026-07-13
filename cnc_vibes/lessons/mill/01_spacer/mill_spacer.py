@@ -54,7 +54,7 @@ SAFE_Z = 5.0
 
 
 def _load_machine() -> dict:
-    return load_yaml(PROFILES / "anolex_4030_evo_ultra2.yaml")
+    return load_yaml(PROFILES / "default.yaml")
 
 
 def _load_tools() -> list[dict]:

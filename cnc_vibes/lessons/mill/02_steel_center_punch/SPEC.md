@@ -57,7 +57,7 @@ These run before any GCode is written; bad inputs fail fast.
 
 ## Reuses existing infrastructure
 
-- `profiles/anolex_4030_evo_ultra2.yaml` (envelope)
+- `profiles/default.yaml` (envelope)
 - `profiles/tools.yaml` (tool limits)
 - `scripts/job_params.py` (`find_by_id`, `load_yaml`)
 - `scripts/gcode_validate.py` (bounds, max_feed, max_plunge — the `;TOOL:` marker enables max_plunge enforcement)

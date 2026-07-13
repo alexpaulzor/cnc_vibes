@@ -1,0 +1,51 @@
+# Machine profile: generic GRBL 1.1+ router / diode-laser (DEFAULT)
+#
+# This is the repo's default machine profile. Copy it and edit the values for
+# your own machine, then point at it with the PROFILE env var (or replace this
+# file). The validator in scripts/gcode_validate.py reads this; the rest of the
+# system (Makefile, FreeCAD post) is unaware of the machine specifics.
+#
+# A worked, real-world example lives at
+# ../../custom_setups/anolex/anolex_4030_evo_ultra2.yaml.
+#
+# Confirm the values below from your machine's manual or by running `$$` in your
+# sender and inspecting the output.
+
+name: Generic GRBL 1.1+ machine
+
+controller:
+  dialect: grbl-1.1+
+  # GRBL setting index that toggles laser mode ($32). 1 = laser, 0 = spindle.
+  # The validator uses this to enforce per-job head-mode correctness.
+  laser_mode_setting: 32
+
+envelope_mm:
+  x: 400
+  y: 300
+  z: 100  # confirm Z travel from your manual
+
+max_feed_mm_per_min:
+  xy: 3000  # confirm for your machine
+  z: 1000   # confirm for your machine
+
+spindle:
+  rpm_min: 8000   # confirm
+  rpm_max: 24000  # confirm
+  control: pwm    # M3/M5 + S0-1000 via GRBL spindle PWM pin
+
+probe:
+  has_touch_plate: true
+  thickness_mm: 0.0  # measure your touch plate
+
+heads:
+  primary: spindle
+  secondary: laser
+  # If a hardware switch routes the GRBL spindle-PWM pin to either the spindle
+  # controller or the laser TTL input, flip the switch *and* update $32 (see
+  # controller.laser_mode_setting) before sending a job for that head.
+  switch: rear_hardware
+
+# Per-job safe Z, in mm above stock top. Used by the validator to flag rapid
+# (G0) moves that traverse below this height — those are almost always a bug
+# (the tool would crash through stock or clamps).
+default_safe_z_mm: 5.0

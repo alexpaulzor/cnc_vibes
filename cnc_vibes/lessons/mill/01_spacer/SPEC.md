@@ -127,7 +127,7 @@ This lesson **adds nothing new** to the supporting infrastructure — it compose
 
 - `profiles/materials.yaml` (spindle materials, chipload tables): used as-is.
 - `profiles/tools.yaml`: used as-is.
-- `profiles/anolex_4030_evo_ultra2.yaml`: used as-is.
+- `profiles/default.yaml`: used as-is.
 - `scripts/job_params.py`: `compute_derived()` already does feed = chipload × flutes × rpm. Reused.
 - `scripts/gcode_validate.py`: spindle rules already cover everything. No changes.
 - `scripts/job_params.py` PREFLIGHT_CHECKLIST: covers spindle prep. No changes.

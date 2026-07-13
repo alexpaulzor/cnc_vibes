@@ -230,7 +230,7 @@ Examples:
     ),
     # ---- Configuration ----
     "machine-profile": (
-        "profiles/anolex_4030_evo_ultra2.yaml — machine profile",
+        "profiles/default.yaml — machine profile",
         """
 Defines the GRBL-class machine's envelope, feed limits, spindle range,
 and probe. Consumed by validate, params, and preflight to enforce
@@ -823,56 +823,50 @@ See also: cam-library, openscad-loader
 """,
     ),
     "cal-laser": (
-        "cnc.py cal-laser — spiral laser calibration card",
+        "cnc.py cal-laser — concentric spiral warmup + feed calibration",
         """
 Usage:
-  cnc.py cal-laser --material <id> --sweep {power,feed,passes} \\
-      --values v1,v2,... [--laser-mode static|dynamic] \\
-      [--power P] [--feed F] [--passes N]
-  cnc.py cal-laser interactive       # prompt-driven setup
+  cnc.py cal-laser [--circles N] [--min-r MM] [--max-r MM] \\
+      [--time-s S] [--power-percent P]
 
-Generates one GCode file with N test patches arranged in a hex spiral
-from WCS (0, 0) outward — drop a scrap of stock under the laser,
-park at its center, and run the file. Each patch is a 15mm circle
-with a double Archimedean spiral inside. When the cut goes through,
-the inside disk falls apart into several pie-slice pieces, giving you
-instant visual confirmation.
+Backed by scripts/spiral_cal.py. One small disc replaces the whole
+LaserGRBL/xTool material grid. Cuts concentric rings inner->outer, each
+ONE single pass, with the feed for ring K set so
+feed = circumference / time-s — every ring takes the same time and the
+only variable is feed (inner ring slow, outer ring fast).
 
-Defaults: --laser-mode static (M3 — constant power, easier to read
-results). The non-swept axes use the material's defaults from
-profiles/laser_materials.yaml unless you override them.
+WCS origin is at the CENTER of the rings, so zero the machine roughly in
+the middle of a scrap of stock — no measuring or squaring. Then run the
+file and WATCH THE CENTER: STOP when a ring stops falling free. The last
+ring that dropped is your fastest clean single-pass feed. No calipers,
+no reading scorch — the part tells you.
 
-Sweep options:
-  power   — laser power S-value as percent
-  feed    — cut feedrate in mm/min
-  passes  — number of times each ring is re-traced
-  z       — absolute WCS Z (mm); each patch emits G0 Z<value> first.
-            Use --values=-2,-1,0,1,2 (= form) since argparse rejects
-            bare leading-dash lists. CRASH RISK if Z too low.
+Each ring opens with a smooth spiral lead-in that starts ~half a gap
+inside the ring and joins the circle after exactly the diode's warmup
+window (~1s), so the circle is cut once at full power while the spiral
+itself records the cold-start ramp. Backlight it and read the angle
+where it starts biting to see the warmup gradient. Two radials mark
+t=0 (cold) and t=warm. Static M3 at 100% throughout (weak diode
+under-fires on M4 dynamic).
 
---z <mm>: set a fixed absolute Z for ALL patches (use when NOT
-sweeping Z but you want every patch to set the same focal height).
+Flags:
+  --circles        number of rings (default 12)
+  --min-r          smallest ring radius mm (default 3.0)
+  --max-r          largest ring radius mm (default 24.0)
+  --time-s         loop seconds per ring, EXCLUDING warmup; feed =
+                   circumference / time-s (default 3.0)
+  --power-percent  laser power as percent of S1000 (default 100)
 
-Layout:
-  Ring 0:        1 patch (origin)
-  Ring K:        6K patches on a circle of radius K * 17mm
-  Patches 15mm OD with 2mm gap → no overlap
+Outputs to build/cal_laser/:
+  cal_laser.gcode      the calibration cut
+  cal_laser.png        toolpath preview
+  cal_laser_key.png    self-explanatory "how to read it" key
 
 Examples:
-  cnc.py cal-laser --material cardboard_thin_1mm \\
-      --sweep power --values 30,40,50,60,70
-  cnc.py cal-laser --material plywood_baltic_birch_3mm \\
-      --sweep feed --values 1500,2000,2500,3000,3500 \\
-      --power 80
-  cnc.py cal-laser interactive       # walks every choice
+  cnc.py cal-laser
+  cnc.py cal-laser --circles 6 --min-r 4.8 --max-r 15.9 --time-s 6
 
-After cutting, evaluate each patch:
-  inside pieces fall out cleanly → setting works (pick the leanest)
-  top scored, back uncut         → underpowered or too fast
-  pieces fall, edges heavily charred → overpowered
-  inside fuses to outer ring     → M4 starving — try --laser-mode static
-
-See also: cam-cli, laser-materials, lesson-calibration
+See also: cam-cli, laser-materials, lesson-laser-cal
 """,
     ),
     "cam-library": (
@@ -1005,7 +999,7 @@ and emits one violation per rule per offending line.
                 M3 with S > 0 — would cut with the spindle off.
 
 Configuration sources:
-  --profile     machine profile YAML (default: anolex_4030_evo_ultra2)
+  --profile     machine profile YAML (default: default)
   --tools       tools.yaml
   --gcode       the GCode file to check
   ;TOOL: <id>   in-band tool declaration (optional, enables max_plunge)

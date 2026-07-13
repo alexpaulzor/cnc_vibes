@@ -25,7 +25,8 @@ Power mode:
       acceptable (light-touch engraving on cardboard, etc.). Emits a
       ;LASER_MODE: static header so gcode_validate.py allows M3.
 
-Emission style otherwise copies lessons/laser/05_test_card/test_card.py:
+Emission style is the standard validator-clean laser header used across the
+repo's laser emitters:
 ;HEAD: laser, ;MATERIAL: <id>, $32=1, M3|M4 S<power>, F<feed>, M5,
 absolute mm, no Z motion. Validator-clean.
 """
