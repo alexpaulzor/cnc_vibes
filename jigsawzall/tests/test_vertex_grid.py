@@ -51,3 +51,17 @@ def test_auto_gap_widens_for_durability():
     res = vg.build("KARSON", seed=7)
     assert "gap_tries" in res.meta
     assert res.gap_mm >= 22.0
+
+
+def test_gcode_is_wcs_bottom_left_and_balanced():
+    import re
+
+    res = vg.build("KAI", seed=7)
+    g = vg.emit_gcode(res, feed_mm_min=600, power_percent=100.0)
+    assert "$32=1" in g and "M3 S1000" in g and "F600" in g
+    # M3/M5 balanced (one M5 per M3 path, plus the header M5)
+    assert g.count("\nM3 ") == g.count("\nM5") - 1
+    xs = [float(m) for m in re.findall(r"X([-.\d]+)", g)]
+    ys = [float(m) for m in re.findall(r"Y([-.\d]+)", g)]
+    assert min(xs) >= -0.01 and min(ys) >= -0.01  # WCS bottom-left: no negatives
+    assert max(xs) <= res.w_mm + 0.5 and max(ys) <= res.h_mm + 0.5

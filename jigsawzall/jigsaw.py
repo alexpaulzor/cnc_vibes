@@ -541,6 +541,21 @@ def cmd_vgrid(args):
             "or fewer/less-crowded letters."
         )
     print(f"-> {out}")
+    if args.gcode:
+        material = load_material(args.material)
+        laser = material["laser"]
+        feed = args.feed or laser["feed_mm_per_min"]
+        power = args.power_percent
+        gpath = (
+            args.gcode
+            if isinstance(args.gcode, Path)
+            else (BUILD_DIR / f"vgrid_{args.word.lower()}_seed{args.seed}.gcode")
+        )
+        gpath.parent.mkdir(parents=True, exist_ok=True)
+        gpath.write_text(vg.emit_gcode(res, feed_mm_min=feed, power_percent=power))
+        print(
+            f"-> {gpath}  (GCode — VERIFY with a hardware test-cut before real stock)"
+        )
 
 
 def main():
@@ -645,6 +660,18 @@ def main():
         help="disable automatic gap widening for durability",
     )
     vgp.add_argument("--out", type=Path, default=None)
+    vgp.add_argument(
+        "--gcode",
+        nargs="?",
+        const=True,
+        default=False,
+        type=Path,
+        help="also emit cuttable GCode (optionally a path); interior-first, static "
+        "M3, WCS bottom-left. VERIFY with a hardware test-cut before real stock",
+    )
+    vgp.add_argument("--material", default="plywood_baltic_birch_3mm")
+    vgp.add_argument("--feed", type=int, default=None, help="override feed mm/min")
+    vgp.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
     vgp.set_defaults(func=cmd_vgrid)
 
     args = p.parse_args()

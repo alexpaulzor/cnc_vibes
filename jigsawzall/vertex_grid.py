@@ -463,6 +463,7 @@ def build(word, seed=7, params=None, auto_gap=True):
     for g in gaps:
         p = VGParams(**{**prm.__dict__, "gap_mm": g})
         res = _build_one(word, seed, p)
+        res.meta["word"] = word
         tried.append(res)
         if res.durable:
             res.meta["gap_tries"] = [t.gap_mm for t in tried]
@@ -471,6 +472,92 @@ def build(word, seed=7, params=None, auto_gap=True):
     best.meta["gap_tries"] = [t.gap_mm for t in tried]
     best.meta["durable_failed"] = True
     return best
+
+
+def _mm_ring(coords, ppm, h_px):
+    # px (Y-down, origin top-left) -> mm (Y-up, WCS origin at plaque bottom-left)
+    return [(x / ppm, (h_px - y) / ppm) for (x, y) in coords]
+
+
+def _advance(pts, dist):
+    """Point `dist` mm along polyline pts from its start (for the warmup lead-in)."""
+    acc = 0.0
+    for a, b in zip(pts, pts[1:]):
+        seg = ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+        if acc + seg >= dist:
+            t = (dist - acc) / seg if seg else 0
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        acc += seg
+    return pts[-1]
+
+
+WARMUP_MS = 1000.0  # machine constant (matches emitter.WARMUP_MS)
+
+
+def emit_gcode(res: VGResult, feed_mm_min=600, power_percent=100.0):
+    """Emit validator-shaped GRBL laser GCode for a vertex-grid puzzle.
+
+    Static M3 @ power_percent, WCS origin bottom-left, INTERIOR-FIRST cut order
+    (all seams + letters + counters, then the plaque border last so the panel
+    stays held), each path preceded by a 1s out-and-back warmup lead-in.
+
+    NOTE: correctness of feed/warmup for a given machine must be verified with a
+    hardware test-cut before trusting on real stock.
+    """
+    from shapely.ops import linemerge, unary_union
+
+    ppm, H = res.px_per_mm, res.h_px
+    S = int(round(power_percent * 10))
+    plaque = sg.box(0, 0, res.w_px, res.h_px)
+    net = unary_union(
+        [p.boundary for p in res.pieces]
+        + [ln.boundary for ln in res.letters]
+        + [c.boundary for c in res.counters]
+    )
+    border = net.intersection(plaque.exterior.buffer(1.0))
+    interior = net.difference(border)
+
+    def paths(geom):
+        m = linemerge(geom) if geom.geom_type == "MultiLineString" else geom
+        gs = list(m.geoms) if m.geom_type == "MultiLineString" else [m]
+        return [g for g in gs if g.geom_type == "LineString" and g.length > 1]
+
+    ordered = paths(interior) + paths(plaque.exterior)  # interior first, border last
+    warm_mm = feed_mm_min * (WARMUP_MS / 1000.0) / 60.0
+
+    lines = [
+        "; vertex-grid puzzle — GRBL laser, static M3, WCS origin bottom-left",
+        f"; {res.meta.get('word', '')} {res.w_mm:.0f}x{res.h_mm:.0f}mm  "
+        f"feed={feed_mm_min}mm/min  power={power_percent:.0f}%  "
+        f"pieces={len(res.pieces)} letters={len(res.letters)} counters={len(res.counters)}",
+        "; cut order: interior seams + letters + counters FIRST, plaque border LAST.",
+        "; VERIFY feed/warmup with a hardware test-cut before real stock.",
+        "$32=1",
+        "G21",
+        "G90",
+        "M5",
+        "G0 X0.000 Y0.000",
+        "",
+    ]
+    for path in ordered:
+        pm = _mm_ring(list(path.coords), ppm, H)
+        if len(pm) < 2:
+            continue
+        sx, sy = pm[0]
+        wpt = _advance(pm, warm_mm)
+        lines += [
+            f"G0 X{sx:.3f} Y{sy:.3f}",
+            f"M3 S{S}",
+            f"F{feed_mm_min}",
+            "; warmup: out-and-back (~1s to full power) before the real cut",
+            f"G1 X{wpt[0]:.3f} Y{wpt[1]:.3f}",
+            f"G1 X{sx:.3f} Y{sy:.3f}",
+        ]
+        for x, y in pm[1:]:
+            lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        lines += ["M5", ""]
+    lines += ["G0 X0.000 Y0.000", ""]
+    return "\n".join(lines)
 
 
 def render_preview(res: VGResult, out_path: Path, title=None):
