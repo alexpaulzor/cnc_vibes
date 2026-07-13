@@ -1832,60 +1832,68 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     glyphs = sorted([g for g in glyphs if g.area > 100], key=lambda g: g.centroid.x)
     solid = unary_union([Polygon(g.exterior) for g in glyphs])
     R = cfg.tab_circle_r_px
+    bulb_w = (cfg.tab_stem_w_px or R) + 2 * R  # capsule bulb width
 
     seams = []
-    # CAP seams: vertical, from top/bottom convex corners to the panel border.
+    sites = []  # (point, unit_tangent, seg_len) — one tab per site, axis-aligned
+
+    # CAP seams: vertical, from top/bottom convex corners (left, center, right) to
+    # the panel border. The tab rides the straight vertical, protruding horizontal.
     for g in glyphs:
         anchors = _convex_vertices(g, ppm)
         minx, _mn, maxx, _mx = g.bounds
         cx, cy = (minx + maxx) / 2, g.centroid.y
-        wide = (maxx - minx) > 30 * ppm
         for is_top in (True, False):
             grp = [a for a in anchors if (a[1] < cy) == is_top]
             if not grp:
                 continue
+            border_y = py if is_top else py + ph
             y_to = py - 20 if is_top else py + ph + 20
+            key = (lambda a: a[1]) if is_top else (lambda a: -a[1])
             left = [a for a in grp if a[0] <= cx]
             right = [a for a in grp if a[0] > cx]
-            key = (lambda a: a[1]) if is_top else (lambda a: -a[1])
             chosen = []
             if left:
                 chosen.append(min(left, key=key))
             if right:
                 chosen.append(min(right, key=key))
-            if wide:
-                chosen.append(min(grp, key=lambda a: abs(a[0] - cx)))
+            chosen.append(min(grp, key=lambda a: abs(a[0] - cx)))  # center cap always
+            seen_x = set()
             for a in chosen:
+                xr = round(a[0], 1)
+                if xr in seen_x:
+                    continue
+                seen_x.add(xr)
                 seams.append(LineString([(a[0], a[1]), (a[0], y_to)]))
+                sites.append(
+                    (
+                        (a[0], (a[1] + border_y) / 2),  # midway anchor->border
+                        (0.0, 1.0),
+                        abs(border_y - a[1]),
+                    )
+                )
 
-    # GAP seams: launch -> S -> straight flat (tab) -> S -> landing.
-    flat_len = (cfg.tab_stem_w_px or R) + 2 * R + 4
+    # GAP seams: perpendicular launch off each letter -> S-curve -> AXIS-ALIGNED
+    # horizontal FLAT (halfway between the two chosen vertices) that carries the
+    # one tab -> S-curve -> landing. The flat is horizontal (tab vertical); the
+    # S-sections absorb the height difference between the two vertices.
+    flat_len = bulb_w + 6
     for gi in range(len(glyphs) - 1):
-        a_i = _convex_vertices(glyphs[gi], ppm)
-        a_j = _convex_vertices(glyphs[gi + 1], ppm)
-        cxi = glyphs[gi].bounds[2]
-        cxj = glyphs[gi + 1].bounds[0]
-        mx = (cxi + cxj) / 2
-        my = (glyphs[gi].centroid.y + glyphs[gi + 1].centroid.y) / 2 + rng.uniform(
-            -6, 6
-        ) * ppm
-        theta = math.radians(rng.uniform(-22, 22))  # seed rotates the flat
-        dirv = (math.cos(theta), math.sin(theta))
-        ax, ay = mx - dirv[0] * flat_len / 2, my - dirv[1] * flat_len / 2
-        bx, by = mx + dirv[0] * flat_len / 2, my + dirv[1] * flat_len / 2
-        rside = [p for p in a_i if p[0] > (glyphs[gi].bounds[0] + cxi) / 2] or a_i
-        lside = [p for p in a_j if p[0] < (cxj + glyphs[gi + 1].bounds[2]) / 2] or a_j
-        lv = min(rside, key=lambda p: math.hypot(p[0] - ax, p[1] - ay))
-        rv = min(lside, key=lambda p: math.hypot(p[0] - bx, p[1] - by))
-        seams.append(LineString(_bezier_flat_seam(lv, rv, (mx, my), dirv, flat_len)))
+        rv = max(_convex_vertices(glyphs[gi], ppm), key=lambda p: p[0])  # rightmost
+        lv = min(_convex_vertices(glyphs[gi + 1], ppm), key=lambda p: p[0])  # leftmost
+        mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2  # halfway between vertices
+        seams.append(
+            LineString(_bezier_flat_seam(rv, lv, (mx, my), (1.0, 0.0), flat_len))
+        )
+        sites.append(((mx, my), (1.0, 0.0), flat_len))
 
-    # END seams: outer letters -> L/R border.
-    a0 = _convex_vertices(glyphs[0], ppm)
-    l0 = min(a0, key=lambda p: p[0])
+    # END seams: outer letters -> L/R border (horizontal; tab vertical).
+    l0 = min(_convex_vertices(glyphs[0], ppm), key=lambda p: p[0])
     seams.append(LineString([(l0[0], l0[1]), (px - 20, l0[1])]))
-    aN = _convex_vertices(glyphs[-1], ppm)
-    rN = max(aN, key=lambda p: p[0])
+    sites.append((((l0[0] + px) / 2, l0[1]), (1.0, 0.0), abs(l0[0] - px)))
+    rN = max(_convex_vertices(glyphs[-1], ppm), key=lambda p: p[0])
     seams.append(LineString([(rN[0], rN[1]), (px + pw + 20, rN[1])]))
+    sites.append((((rN[0] + px + pw) / 2, rN[1]), (1.0, 0.0), abs(px + pw - rN[0])))
 
     # Planar subdivision: panel + letter outlines + seams -> faces.
     background = panel.difference(letter_union)  # includes counter islands
@@ -1901,63 +1909,61 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         for f in polygonize(net)
         if background.contains(f.representative_point()) and f.area > (5 * ppm) ** 2
     ]
-
     surround = [f for f in faces if not solid.contains(f.representative_point())]
     counters = [f for f in faces if solid.contains(f.representative_point())]
 
-    # One fat-capsule tab per shared edge (reuse the grid path's tab machinery:
-    # find_clear_tab_offset keeps letters + border clear; _tab_bulb_polygon is the
-    # exact cfg tab). Center-first placement lands the tab on the gap seam's flat.
-    border = panel.boundary
-    for i in range(len(surround)):
-        for j in range(i + 1, len(surround)):
-            sh = surround[i].intersection(surround[j])
-            if sh.geom_type == "MultiLineString":
-                sh = max(sh.geoms, key=lambda s: s.length)
-            if sh.geom_type != "LineString" or sh.length < cfg.tab_len_px * 0.9:
+    # ONE fat-capsule tab per seam, at its designated site (flat center / cap mid),
+    # protruding perpendicular. Deterministic (no dropped edges unless a letter or
+    # the border is in the way), and no two tabs are allowed to touch.
+    placed_tabs = []
+    clr = cfg.letter_clearance_px
+    border_floor = min(clr, _BORDER_FLOOR_MM * ppm)
+    for (sx, sy), (tx, ty), seg in sites:
+        stats["total"] += 1
+        Lfoot = min(cfg.tab_len_px, seg)
+        if Lfoot < bulb_w + 2:  # no room for the capsule -> straight edge
+            stats["dropped"] += 1
+            continue
+        edge_start = (sx - tx * Lfoot / 2, sy - ty * Lfoot / 2)
+        edir = (tx, ty)
+        placed = False
+        for direction in (1, -1) if rng.random() < 0.5 else (-1, 1):
+            bulb = _tab_bulb_polygon(
+                edge_start, edir, Lfoot, direction, 0.0, cfg, tab_len=Lfoot
+            )
+            if bulb is None:
                 continue
-            p0 = sh.coords[0]
-            p1 = sh.coords[-1]
-            L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-            if L < 1:
+            if solid.distance(bulb) < clr:
                 continue
-            edir = ((p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L)
-            out = (edir[1], -edir[0])
-            mid = ((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)
-            stats["total"] += 1
-            placed = False
-            for direction in (1, -1) if rng.random() < 0.5 else (-1, 1):
-                off, _ok = find_clear_tab_offset(
-                    p0, edir, L, solid, direction, cfg, border=border
+            if panel.boundary.distance(bulb) < border_floor:
+                continue
+            if any(bulb.intersects(t) for t in placed_tabs):
+                continue  # tabs must never touch
+            # bulb protrudes toward direction*out where out=(edir[1],-edir[0]);
+            # that side LOSES a socket, the opposite side OWNS the protruding tab.
+            nx, ny = ty * direction, -tx * direction  # protrusion direction
+            own = Point(sx - nx * 3, sy - ny * 3)
+            lose = Point(sx + nx * 3, sy + ny * 3)
+            oi = next((k for k, f in enumerate(surround) if f.contains(own)), None)
+            li = next((k for k, f in enumerate(surround) if f.contains(lose)), None)
+            if oi is None or li is None or oi == li:
+                continue
+            try:
+                new_own = unary_union([surround[oi], bulb]).buffer(0)
+                rem = max(
+                    _poly_list_vg(surround[li].difference(bulb)),
+                    key=lambda p: p.area,
+                    default=None,
                 )
-                if off is None:
+                if rem is None or new_own.geom_type != "Polygon":
                     continue
-                bulb = _tab_bulb_polygon(p0, edir, L, direction, off, cfg)
-                if bulb is None:
-                    continue
-                # bulb protrudes toward sign(direction)*out; that side LOSES a
-                # socket, the other side OWNS the tab.
-                sx, sy = out[0] * direction, out[1] * direction
-                lose_pt = Point(mid[0] + sx * 3, mid[1] + sy * 3)
-                own_pt = Point(mid[0] - sx * 3, mid[1] - sy * 3)
-                oi = i if surround[i].contains(own_pt) else j
-                li = j if oi == i else i
-                if not (
-                    surround[oi].contains(own_pt) and surround[li].contains(lose_pt)
-                ):
-                    continue
-                try:
-                    new_own = unary_union([surround[oi], bulb]).buffer(0)
-                    rem = surround[li].difference(bulb)
-                    rem = max(_poly_list_vg(rem), key=lambda p: p.area, default=None)
-                    if rem is None or new_own.geom_type != "Polygon":
-                        continue
-                    surround[oi], surround[li] = new_own, rem
-                    placed = True
-                    break
-                except Exception:
-                    continue
-            stats["centered" if placed else "dropped"] += 1
+                surround[oi], surround[li] = new_own, rem
+                placed_tabs.append(bulb)
+                placed = True
+                break
+            except Exception:
+                continue
+        stats["centered" if placed else "dropped"] += 1
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):

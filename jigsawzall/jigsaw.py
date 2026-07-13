@@ -549,7 +549,7 @@ def main():
     )
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
-    cu.add_argument("--material", default="mdf_3mm")
+    cu.add_argument("--material", default="plywood_baltic_birch_3mm")
     cu.add_argument(
         "--origin",
         default="corner",
