@@ -89,6 +89,11 @@ def _apply_size_overrides(cfg, args):
         over["banner_target_h_mm"] = args.banner_h_mm
     if getattr(args, "font", None) is not None:
         over["font_path"] = args.font
+    # Vertex-grid: opt-in letter-anchored seam layout (reuses tabs/pockets/emit).
+    if getattr(args, "vertex_grid", False):
+        over["vertex_grid"] = True
+        over["letter_aligned_grid"] = False
+        over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
     return replace(cfg, **over) if over else cfg
 
 
@@ -144,6 +149,14 @@ def _add_size_override_flags(sub):
         default=None,
         help="letter font: alias (bold/black/impact/narrow) or a .ttf path; "
         "default is 'black' (Arial Black), which cuts cleaner in wood than bold",
+    )
+    sub.add_argument(
+        "--vertex-grid",
+        dest="vertex_grid",
+        action="store_true",
+        help="opt-in vertex-grid layout: background tiled with letter-anchored "
+        "seams (perpendicular caps + S-curve gap seams carrying the tab) instead "
+        "of the rectangular grid. Same tabs/pockets/GCode as the default path",
     )
 
 
@@ -515,54 +528,6 @@ def cmd_cut(args):
 # ---------------------------------------------------------------------------
 
 
-def cmd_vgrid(args):
-    """Vertex-grid banner preview: letters cut out, background tiled into
-    interlocking pieces that encase them (no seam crosses a letter)."""
-    import vertex_grid as vg
-
-    prm = vg.VGParams(gap_mm=args.gap_mm)
-    res = vg.build(args.word, args.seed, prm, auto_gap=not args.no_auto_gap)
-    out = args.out or (FIG_DIR / f"vgrid_{args.word.lower()}_seed{args.seed}.png")
-    laser = load_material(args.material)["laser"]
-    feed = args.feed or laser["feed_mm_per_min"]
-    title = (
-        f"{args.word.upper()} — vertex-grid   "
-        f"{len(res.pieces)} pieces + {len(res.letters)} letters + "
-        f"{len(res.counters)} counters   |   1 tab/edge   "
-        f"durable={'YES' if res.durable else 'NO'}   |   {res.w_mm:.0f}x{res.h_mm:.0f}mm\n"
-        f"{args.material} @ {feed}mm/min, static M3 {args.power_percent:.0f}%, 1 pass   "
-        f"|   letters cut out + encased, no seam crosses a letter   "
-        f"|   WCS bottom-left, interior-first, rounded plaque"
-    )
-    vg.render_preview(res, out, title)
-    print(
-        f"{args.word.upper()}: {len(res.pieces)} bg + {len(res.letters)} letters + "
-        f"{len(res.counters)} counters | tabs {res.tabs} | durable {res.durable} | "
-        f"gap {res.gap_mm:.0f}mm | {res.w_mm:.0f}x{res.h_mm:.0f}mm"
-    )
-    if not res.durable:
-        print(
-            "  WARNING: not durable — a piece has a <4mm neck (crowded word); try a "
-            "different --seed, a shorter name, or nudge --gap-mm."
-        )
-    print(f"-> {out}")
-    if args.gcode:
-        material = load_material(args.material)
-        laser = material["laser"]
-        feed = args.feed or laser["feed_mm_per_min"]
-        power = args.power_percent
-        gpath = (
-            args.gcode
-            if isinstance(args.gcode, Path)
-            else (BUILD_DIR / f"vgrid_{args.word.lower()}_seed{args.seed}.gcode")
-        )
-        gpath.parent.mkdir(parents=True, exist_ok=True)
-        gpath.write_text(vg.emit_gcode(res, feed_mm_min=feed, power_percent=power))
-        print(
-            f"-> {gpath}  (GCode — VERIFY with a hardware test-cut before real stock)"
-        )
-
-
 def main():
     p = argparse.ArgumentParser(prog="jigsaw", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="command", required=True)
@@ -644,40 +609,6 @@ def main():
     _add_size_override_flags(cu)
     cu.set_defaults(func=cmd_cut)
 
-    # vgrid — vertex-grid banner preview (opt-in tiling: letters cut out,
-    # background pieces encase them; no seam crosses a letter)
-    vgp = subs.add_parser(
-        "vgrid", help="vertex-grid banner preview (letters cut out + encased)"
-    )
-    vgp.add_argument("--word", default="NORA")
-    vgp.add_argument("--seed", type=int, default=7)
-    vgp.add_argument(
-        "--gap-mm",
-        dest="gap_mm",
-        type=float,
-        default=26.0,
-        help="nominal inter-letter gap in mm (font/gap auto-shrink to fit 300x150mm)",
-    )
-    vgp.add_argument(
-        "--no-auto-gap",
-        dest="no_auto_gap",
-        action="store_true",
-        help="disable the automatic font/gap shrink-to-fit for long words",
-    )
-    vgp.add_argument("--out", type=Path, default=None)
-    vgp.add_argument(
-        "--gcode",
-        nargs="?",
-        const=True,
-        default=False,
-        type=Path,
-        help="also emit cuttable GCode (optionally a path); interior-first, static "
-        "M3, WCS bottom-left. VERIFY with a hardware test-cut before real stock",
-    )
-    vgp.add_argument("--material", default="plywood_baltic_birch_3mm")
-    vgp.add_argument("--feed", type=int, default=None, help="override feed mm/min")
-    vgp.add_argument("--power-percent", dest="power_percent", type=float, default=100.0)
-    vgp.set_defaults(func=cmd_vgrid)
 
     args = p.parse_args()
     args.func(args)

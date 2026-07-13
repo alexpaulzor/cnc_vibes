@@ -679,3 +679,46 @@ def test_fat_capsule_banner_holds_at_real_size():
     cfg = fit_config("KAIDEN", cfg)
     _pieces, stats = generate_pieces("KAIDEN", 7, cfg)
     assert stats["dropped"] == 0, f"KAIDEN dropped {stats['dropped']} fat tabs"
+
+
+# ---------------------------------------------------------------------------
+# Vertex-grid layout (opt-in --vertex-grid): letter-anchored seams reusing the
+# same tabs / pockets / emitter as the grid path.
+# ---------------------------------------------------------------------------
+
+
+def _vgrid_cfg():
+    return replace(
+        banner_puzzle_config(),
+        vertex_grid=True,
+        letter_aligned_grid=False,
+        panel_mm=300,
+        panel_h_mm=150,
+    )
+
+
+def test_vertex_grid_produces_pieces_and_letters():
+    pieces, stats = generate_pieces("WOJO", 7, _vgrid_cfg())
+    letters = [p for p in pieces if p["kind"] == "letter"]
+    cells = [p for p in pieces if p["kind"] == "cell"]
+    assert len(letters) == 4  # W O J O
+    assert len(cells) > 4  # background tiled into several pieces
+    assert stats["total"] >= 1  # tabs were attempted/placed
+
+
+def test_vertex_grid_no_seam_crosses_a_letter():
+    from shapely.ops import unary_union
+
+    pieces, _ = generate_pieces("NORA", 7, _vgrid_cfg())
+    letters = unary_union([p["polygon"] for p in pieces if p["kind"] == "letter"])
+    for p in pieces:
+        if p["kind"] == "cell":
+            # background pieces meet letters only along the shared boundary
+            assert p["polygon"].intersection(letters).area < 5.0
+
+
+def test_vertex_grid_pieces_are_valid_polygons():
+    pieces, _ = generate_pieces("KAIDEN", 7, _vgrid_cfg())
+    assert len(pieces) > 6
+    for p in pieces:
+        assert p["polygon"].is_valid and not p["polygon"].is_empty
