@@ -146,6 +146,11 @@ class PuzzleConfig:
     # the letter gaps (more room for a clean gap seam + tab). Re-calibratable.
     letter_gap_extra_mm: float = 0.0
 
+    # Vertex-grid: a straight perpendicular stub (mm) each gap seam launches off a
+    # letter before it starts to curve, so the seam meets the letter at a clean
+    # 90 deg with no sharp point / cusp. Effectively a minimum launch curve radius.
+    min_launch_radius_mm: float = 5.0
+
     # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
     # matches the original grid-puzzle behavior and keeps all existing
     # regression tests stable. >0 enables a single-half-sine perpendicular
@@ -1782,12 +1787,16 @@ def _convex_vertices(glyph: Polygon, ppm: float) -> list[tuple[float, float]]:
     return pts
 
 
-def _bezier_flat_seam(p_left, p_right, ctr, dirv, flat_len, samples=20):
-    """letter->letter seam: perpendicular launch off each side, S-curve into a
+def _bezier_flat_seam(p_left, p_right, ctr, dirv, flat_len, stub=0.0, samples=20):
+    """letter->letter seam: a short STRAIGHT perpendicular stub off each letter
+    (length `stub` — the min launch radius, so the seam meets the letter at a
+    clean 90 deg with no sharp point before it curves), then an S-curve into a
     straight FLAT segment (length flat_len, oriented dirv) that carries the tab."""
     dx, dy = dirv
     ax, ay = ctr[0] - dx * flat_len / 2, ctr[1] - dy * flat_len / 2  # flat start
     bx, by = ctr[0] + dx * flat_len / 2, ctr[1] + dy * flat_len / 2  # flat end
+    ls = (p_left[0] + stub, p_left[1])  # stub straight out (+x) from left letter
+    rs = (p_right[0] - stub, p_right[1])  # stub straight out (-x) from right letter
 
     def bez(p0, launch, p3, tan):
         lx, ly = launch
@@ -1815,8 +1824,8 @@ def _bezier_flat_seam(p_left, p_right, ctr, dirv, flat_len, samples=20):
             )
         return out
 
-    left = bez(p_left, (1, 0), (ax, ay), dirv)  # launch rightward, meet flat
-    right = bez(p_right, (-1, 0), (bx, by), (-dx, -dy))
+    left = [p_left] + bez(ls, (1, 0), (ax, ay), dirv)  # stub then S to the flat
+    right = [p_right] + bez(rs, (-1, 0), (bx, by), (-dx, -dy))
     return left + list(reversed(right))
 
 
@@ -1872,25 +1881,37 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 )
             )
 
-    # GAP seams: perpendicular launch off each letter -> S-curve -> AXIS-ALIGNED
-    # horizontal FLAT (halfway between the two chosen vertices) that carries the
-    # one tab -> S-curve -> landing. The flat is horizontal (tab vertical); the
-    # S-sections absorb the height difference between the two vertices.
+    # GAP seams: TWO per letter pair — an UPPER (top-right of left letter ->
+    # top-left of right letter) and a LOWER (bottom-right -> bottom-left). Each
+    # launches perpendicular off a 5mm straight stub, S-curves into an axis-aligned
+    # horizontal FLAT (halfway between the two vertices) carrying one tab, then
+    # lands. Two seams split the otherwise-oversized top/bottom strips that span
+    # two letters (e.g. the big bottom piece under W+O).
     flat_len = bulb_w + 6
+    stub = cfg.min_launch_radius_mm * ppm
     for gi in range(len(glyphs) - 1):
         vi = _convex_vertices(glyphs[gi], ppm)
         vj = _convex_vertices(glyphs[gi + 1], ppm)
         cxi = (glyphs[gi].bounds[0] + glyphs[gi].bounds[2]) / 2
         cxj = (glyphs[gi + 1].bounds[0] + glyphs[gi + 1].bounds[2]) / 2
+        cyi = glyphs[gi].centroid.y
+        cyj = glyphs[gi + 1].centroid.y
         rcands = [p for p in vi if p[0] > cxi] or vi  # right side of left letter
         lcands = [p for p in vj if p[0] < cxj] or vj  # left side of right letter
-        rv = rng.choice(rcands)  # SEED varies which vertices connect
-        lv = rng.choice(lcands)
-        mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2  # halfway between vertices
-        seams.append(
-            LineString(_bezier_flat_seam(rv, lv, (mx, my), (1.0, 0.0), flat_len))
-        )
-        sites.append(((mx, my), (1.0, 0.0), flat_len))
+        for want_top in (True, False):
+            rside = [p for p in rcands if (p[1] < cyi) == want_top] or rcands
+            lside = [p for p in lcands if (p[1] < cyj) == want_top] or lcands
+            # upper pairing: the highest facing corners; lower: the lowest
+            pick = min if want_top else max
+            rv = pick(rside, key=lambda p: p[1])
+            lv = pick(lside, key=lambda p: p[1])
+            mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2  # halfway between
+            seams.append(
+                LineString(
+                    _bezier_flat_seam(rv, lv, (mx, my), (1.0, 0.0), flat_len, stub=stub)
+                )
+            )
+            sites.append(((mx, my), (1.0, 0.0), flat_len))
 
     # END seams: outer letters -> L/R border (horizontal; tab vertical).
     l0 = min(_convex_vertices(glyphs[0], ppm), key=lambda p: p[0])
