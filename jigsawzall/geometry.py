@@ -1997,6 +1997,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
 
     seams = []  # list of sample-point lists
+    used = set()  # (glyph_idx, vertex_idx) already consumed — vertices are exclusive
 
     # GAP seams (curved, allowed-vertex model)
     for gi in range(len(glyphs) - 1):
@@ -2023,7 +2024,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     continue
                 if _vg_best_tab(pts, letters_solid, cfg, panel) is None:
                     continue  # no feasible tab -> not an allowed edge
-                allowed.append(((a[1] + b[1]) / 2, pts))
+                allowed.append(((a[1] + b[1]) / 2, pts, ia, ib))
         if not allowed:
             # crowded gap: no curved edge cleared the filters — fall back to a
             # straight facing-vertex seam so the column still partitions.
@@ -2031,19 +2032,35 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
             lft = min(verts[gj], key=lambda p: p[0])
             seams.append([(r[0], r[1]), (lft[0], lft[1])])
             continue
+
+        def _take(cands):
+            # first candidate whose BOTH endpoint vertices are still free
+            for e in cands:
+                if (gi, e[2]) not in used and (gj, e[3]) not in used:
+                    used.add((gi, e[2]))
+                    used.add((gj, e[3]))
+                    return e
+            return None
+
         target = center_y + rng.uniform(-0.10, 0.10) * ph  # seed picks the pair
         allowed.sort(key=lambda e: abs(e[0] - target))
-        chosen = [allowed[0]]
-        my0 = allowed[0][0]
+        primary = _take(allowed)
+        if primary is None:
+            primary = allowed[0]
+        chosen = [primary]
+        my0 = primary[0]
         top_h, bot_h = my0 - py, (py + ph) - my0
         if max(top_h, bot_h) / max(1.0, min(top_h, bot_h)) > 1.7:  # lopsided -> 3
             ty2 = py + top_h / 2 if top_h > bot_h else my0 + bot_h / 2
-            cand = [e for e in allowed if abs(e[0] - my0) > 1.5 * cfg.tab_len_px]
-            if cand:
-                cand.sort(key=lambda e: abs(e[0] - ty2))
-                chosen.append(cand[0])
-        for _my, pts in chosen:
-            seams.append(pts)
+            cand = sorted(
+                (e for e in allowed if abs(e[0] - my0) > 1.5 * cfg.tab_len_px),
+                key=lambda e: abs(e[0] - ty2),
+            )
+            second = _take(cand)
+            if second is not None:
+                chosen.append(second)
+        for e in chosen:
+            seams.append(e[1])
 
     # Virtual vertices every ~10mm along the border (normal points INTO panel so
     # a seam arrives perpendicular to the edge, like a letter vertex).
@@ -2094,11 +2111,12 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
             grp = [
                 (iv, anchors[iv])
                 for iv in range(len(anchors))
-                if (anchors[iv][1] < cy) == is_top
+                if (anchors[iv][1] < cy) == is_top and (gi, iv) not in used
             ]
             if not grp:
                 continue
             iv, a = min(grp, key=lambda t: abs(t[1][0] - cx))
+            used.add((gi, iv))
             na = norms[gi][iv]
             bvs = [
                 (b, nb)
@@ -2110,13 +2128,18 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
             seams.append(pts if pts is not None else [(a[0], a[1]), (a[0], y_to)])
 
     # END seams: outer letters -> a curved seam to the L/R border
-    iv0 = min(range(len(verts[0])), key=lambda k: verts[0][k][0])
+    left_cands = [k for k in range(len(verts[0])) if (0, k) not in used]
+    iv0 = min(left_cands or range(len(verts[0])), key=lambda k: verts[0][k][0])
+    used.add((0, iv0))
     gi = 0
     pts = _border_seam(verts[0][iv0], norms[0][iv0], bv_left, "y")
     l0 = verts[0][iv0]
     seams.append(pts if pts is not None else [(l0[0], l0[1]), (px - 20, l0[1])])
-    ivN = max(range(len(verts[-1])), key=lambda k: verts[-1][k][0])
-    gi = len(glyphs) - 1
+    gN = len(glyphs) - 1
+    right_cands = [k for k in range(len(verts[-1])) if (gN, k) not in used]
+    ivN = max(right_cands or range(len(verts[-1])), key=lambda k: verts[-1][k][0])
+    used.add((gN, ivN))
+    gi = gN
     pts = _border_seam(verts[-1][ivN], norms[-1][ivN], bv_right, "y")
     rN = verts[-1][ivN]
     seams.append(pts if pts is not None else [(rN[0], rN[1]), (px + pw + 20, rN[1])])
