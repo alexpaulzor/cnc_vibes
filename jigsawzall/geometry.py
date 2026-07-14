@@ -2018,24 +2018,81 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         for _my, pts in chosen:
             seams.append(pts)
 
-    # CAP seams: one vertical from each letter top & bottom to the border
+    # Virtual vertices every ~10mm along the border (normal points INTO panel so
+    # a seam arrives perpendicular to the edge, like a letter vertex).
+    cr = cfg.corner_radius_mm * ppm
+    step = 10 * ppm
+
+    def _frange(lo, hi, d):
+        out, t = [], lo
+        while t <= hi:
+            out.append(t)
+            t += d
+        return out
+
+    bv_top = [((x, py), (0.0, 1.0)) for x in _frange(px + cr, px + pw - cr, step)]
+    bv_bot = [((x, py + ph), (0.0, -1.0)) for x in _frange(px + cr, px + pw - cr, step)]
+    bv_left = [((px, y), (1.0, 0.0)) for y in _frange(py + cr, py + ph - cr, step)]
+    bv_right = [
+        ((px + pw, y), (-1.0, 0.0)) for y in _frange(py + cr, py + ph - cr, step)
+    ]
+
+    def _border_seam(a, na, bvs, jitter_span):
+        """Curve from letter vertex a to a seed-picked border virtual vertex, same
+        perpendicular-launch + smooth-curve machinery as the gap seams."""
+        allow = []
+        for b, nb in bvs:
+            dxb, dyb = b[0] - a[0], b[1] - a[1]
+            dn = math.hypot(dxb, dyb) or 1.0
+            if (na[0] * dxb + na[1] * dyb) / dn <= 0.2:  # launch toward the border
+                continue
+            pts = _vg_curve(a, na, b, nb, obstacles({gi: "a"}), ppm)
+            if pts is None or _vg_best_tab(pts, letters_solid, cfg, panel) is None:
+                continue
+            allow.append((b, pts))
+        if not allow:
+            return None
+        tgt = a[0] if jitter_span == "x" else a[1]
+        key = 0 if jitter_span == "x" else 1
+        tgt += rng.uniform(-15, 15) * ppm  # seed nudges which border node
+        allow.sort(key=lambda e: abs(e[0][key] - tgt))
+        return allow[0][1]
+
+    # CAP seams: one per letter top & bottom -> a curved seam to the top/bottom border
     for gi, g in enumerate(glyphs):
         anchors = verts[gi]
         minx, _mn, maxx, _mx = g.bounds
         cx, cy = (minx + maxx) / 2, g.centroid.y
         for is_top in (True, False):
-            grp = [a for a in anchors if (a[1] < cy) == is_top]
+            grp = [
+                (iv, anchors[iv])
+                for iv in range(len(anchors))
+                if (anchors[iv][1] < cy) == is_top
+            ]
             if not grp:
                 continue
-            a = min(grp, key=lambda p: abs(p[0] - cx))
+            iv, a = min(grp, key=lambda t: abs(t[1][0] - cx))
+            na = norms[gi][iv]
+            bvs = [
+                (b, nb)
+                for b, nb in (bv_top if is_top else bv_bot)
+                if abs(b[0] - a[0]) < 45 * ppm
+            ]
+            pts = _border_seam(a, na, bvs, "x")
             y_to = py - 20 if is_top else py + ph + 20
-            seams.append([(a[0], a[1]), (a[0], y_to)])
+            seams.append(pts if pts is not None else [(a[0], a[1]), (a[0], y_to)])
 
-    # END seams: outer letters -> L/R border
-    l0 = min(verts[0], key=lambda p: p[0])
-    seams.append([(l0[0], l0[1]), (px - 20, l0[1])])
-    rN = max(verts[-1], key=lambda p: p[0])
-    seams.append([(rN[0], rN[1]), (px + pw + 20, rN[1])])
+    # END seams: outer letters -> a curved seam to the L/R border
+    iv0 = min(range(len(verts[0])), key=lambda k: verts[0][k][0])
+    gi = 0
+    pts = _border_seam(verts[0][iv0], norms[0][iv0], bv_left, "y")
+    l0 = verts[0][iv0]
+    seams.append(pts if pts is not None else [(l0[0], l0[1]), (px - 20, l0[1])])
+    ivN = max(range(len(verts[-1])), key=lambda k: verts[-1][k][0])
+    gi = len(glyphs) - 1
+    pts = _border_seam(verts[-1][ivN], norms[-1][ivN], bv_right, "y")
+    rN = verts[-1][ivN]
+    seams.append(pts if pts is not None else [(rN[0], rN[1]), (px + pw + 20, rN[1])])
 
     # Planar subdivision -> faces
     background = panel.difference(letter_union)
