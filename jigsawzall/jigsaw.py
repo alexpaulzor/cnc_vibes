@@ -96,10 +96,19 @@ def _apply_size_overrides(cfg, args):
         over["vertex_grid"] = True
         over["letter_aligned_grid"] = False
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
-        # Arial Black needs more room than the Bold-era spacing; open the gaps
-        # unless the user already set an explicit extra-tracking override.
+        # Keep the tracking at the tab-fit minimum so letters stay as LARGE as
+        # fit the width — extra tracking shrinks the font (esp. for 6+ letters,
+        # which otherwise become tiny in a mostly-empty panel).
         if getattr(args, "letter_gap_extra_mm", None) is None:
-            over["letter_gap_extra_mm"] = 12.0
+            over["letter_gap_extra_mm"] = 0.0
+        # Use the FULL panel height (don't shrink to the letter band): grow the
+        # top/bottom strips so the panel is actually panel_h_mm tall, not a short
+        # wide strip. Without this, fit_to_text builds a band-height puzzle.
+        if (
+            getattr(args, "banner_h_mm", None) is None
+            and getattr(args, "panel_h_mm", None) is not None
+        ):
+            over["banner_target_h_mm"] = args.panel_h_mm
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
             over["letter_clearance_mm"] = 4.0
