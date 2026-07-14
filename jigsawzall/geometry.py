@@ -1901,31 +1901,58 @@ def _vg_tab_at(pts, i, s, cfg):
     return tp, (tx, ty)
 
 
-def _vg_best_tab(pts, letters_solid, cfg, panel, cap_mm=15.0, min_span_mm=4.0):
-    """Deterministic tab: side+position maximizing the thinnest bridge to a
-    letter (capped at cap_mm; ties -> most central). The tab must stay fully
-    inside the panel and keep >=4mm off the panel border (no tabs hanging off the
-    edge). Returns (i, s, tab, tangent) or None if no position keeps the bridge."""
+def _vg_best_tab(
+    pts, letters_solid, cfg, panel, placed=(), cap_mm=15.0, min_span_mm=4.0
+):
+    """Deterministic tab position: (i, s) maximizing the thinnest bridge to a
+    letter (capped at cap_mm; ties -> most central). The tab must stay inside the
+    panel, keep off the border, and not touch an already-placed tab. Returns
+    (i, s) or None."""
     ppm = cfg.px_per_mm
-    border_floor = 2.0 * ppm  # keep tabs off the very edge; containment stops overrun
+    border_floor = 3.0 * ppm
     mid = len(pts) // 2
     best = None
     for s in (1, -1):
-        for i in range(1, len(pts) - 1):
+        for i in range(2, len(pts) - 2):
             tp, tan = _vg_tab_at(pts, i, s, cfg)
             if tp is None or tp.is_empty:
                 continue
-            if tp.difference(panel).area > 1.0:  # tab runs off the panel
+            if tp.difference(panel).area > 1.0:  # runs off the panel
                 continue
             if panel.exterior.distance(tp) < border_floor:  # too close to edge
+                continue
+            if any(tp.intersects(pk) for pk in placed):  # tabs must not touch
                 continue
             span = letters_solid.distance(tp) / ppm
             key = (round(min(span, cap_mm), 2), -abs(i - mid))
             if best is None or key > best[0]:
-                best = (key, span, i, s, tp, tan)
+                best = (key, span, i, s)
     if best is None or best[1] < min_span_mm:
         return None
-    return best[2], best[3], best[4], best[5]
+    return best[2], best[3]
+
+
+def _vg_splice(pts, i, s, cfg):
+    """Splice the tab OUTLINE into the seam polyline at sample i (side s): the
+    curve runs up to the tab base, up one stem side, around the bulb, down the
+    other stem side, then continues — so the cut goes AROUND the tab, connected
+    to either side of its base (never across the stem). Returns (spliced_pts,
+    bulb_polygon) or None."""
+    L = cfg.tab_len_px
+    seg = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) or 1.0
+    k = max(2, int(round((L / seg) / 2)))
+    iL, iR = i - k, i + k
+    if iL < 1 or iR > len(pts) - 2:
+        return None
+    pL, pR = pts[iL], pts[iR]
+    d = math.hypot(pR[0] - pL[0], pR[1] - pL[1])
+    if d < 2 * cfg.tab_circle_r_px:
+        return None
+    edir = ((pR[0] - pL[0]) / d, (pR[1] - pL[1]) / d)
+    detour = place_tab_at_offset(pL, edir, d, s, 0.0, cfg, tab_len=d)
+    spliced = pts[:iL] + detour + pts[iR + 1 :]
+    bulb = _tab_bulb_polygon(pL, edir, d, s, 0.0, cfg, tab_len=d)
+    return spliced, bulb
 
 
 def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
@@ -2094,15 +2121,63 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     rN = verts[-1][ivN]
     seams.append(pts if pts is not None else [(rN[0], rN[1]), (px + pw + 20, rN[1])])
 
-    # Planar subdivision -> faces
+    # Splice ONE tab into each seam (cut goes AROUND the tab, connected to either
+    # side of its base — not across the stem), then subdivide. Every seam radiates
+    # off a letter so a tab is required; shrink to fit short seams.
     background = panel.difference(letter_union)
-    clipped = []
-    for pts in seams:
-        inter = LineString(pts).intersection(background)
-        for part in inter.geoms if hasattr(inter, "geoms") else [inter]:
-            if isinstance(part, LineString) and part.length > 3 * ppm:
-                clipped.append(part)
-    net = unary_union([panel.boundary, letter_union.boundary] + clipped)
+    placed_bulbs = []
+    tabbed = []
+    for pts0 in seams:
+        ls0 = LineString(pts0).intersection(background)
+        if ls0.geom_type == "MultiLineString":
+            ls0 = max(ls0.geoms, key=lambda g: g.length)
+        if ls0.geom_type != "LineString" or ls0.length < 3 * ppm:
+            continue
+        n = max(6, int(ls0.length / (2 * ppm)))
+        rs = [
+            (
+                ls0.interpolate(t / n, normalized=True).x,
+                ls0.interpolate(t / n, normalized=True).y,
+            )
+            for t in range(n + 1)
+        ]
+        stats["total"] += 1
+        chosen = None
+        for scale in (1.0, 0.72, 0.5):
+            c2 = (
+                cfg
+                if scale >= 0.999
+                else dc_replace(
+                    cfg,
+                    tab_circle_r_px=max(6, int(round(cfg.tab_circle_r_px * scale))),
+                    tab_stem_w_px=(
+                        cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None
+                    ),
+                    tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
+                )
+            )
+            pick = _vg_best_tab(rs, letters_solid, c2, panel, placed_bulbs)
+            if pick is None:
+                continue
+            res = _vg_splice(rs, pick[0], pick[1], c2)
+            if res is None:
+                continue
+            spliced, bulb = res
+            if any(bulb.intersects(pb) for pb in placed_bulbs):
+                continue
+            chosen = (spliced, bulb)
+            break
+        if chosen is not None:
+            tabbed.append(chosen[0])
+            placed_bulbs.append(chosen[1])
+            stats["centered"] += 1
+        else:
+            tabbed.append(rs)
+            stats["dropped"] += 1
+
+    net = unary_union(
+        [panel.boundary, letter_union.boundary] + [LineString(t) for t in tabbed]
+    )
     faces = [
         f
         for f in polygonize(net)
@@ -2147,66 +2222,6 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         return polys
 
     surround = absorb(surround)
-
-    # place ONE deterministic tab on each clipped seam, carved into its two pieces
-    placed = []
-    for part in clipped:
-        # resample to ~2mm so straight (cap/end) and curved seams both have
-        # interior points for the tab search
-        n = max(4, int(part.length / (2 * ppm)))
-        pts = [
-            (pt.x, pt.y)
-            for pt in (part.interpolate(t / n, normalized=True) for t in range(n + 1))
-        ]
-        if len(pts) < 3:
-            continue
-        # every seam radiates off a letter -> a tab is required; if the full tab
-        # doesn't fit (short end/cap seam), shrink it before giving up.
-        bt = None
-        for scale in (1.0, 0.72, 0.5):
-            c2 = (
-                cfg
-                if scale >= 0.999
-                else dc_replace(
-                    cfg,
-                    tab_circle_r_px=max(6, int(round(cfg.tab_circle_r_px * scale))),
-                    tab_stem_w_px=(
-                        cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None
-                    ),
-                    tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
-                )
-            )
-            bt = _vg_best_tab(pts, letters_solid, c2, panel)
-            if bt is not None:
-                break
-        stats["total"] += 1
-        if bt is None:
-            stats["dropped"] += 1
-            continue
-        i, s, tp, (tx, ty) = bt
-        if any(tp.intersects(pk) for pk in placed):  # tabs must not touch
-            stats["dropped"] += 1
-            continue
-        ox, oy = ty * s, -tx * s  # protrusion direction (s * edge-normal)
-        p = pts[i]
-        own = Point(p[0] - ox * 3, p[1] - oy * 3)
-        lose = Point(p[0] + ox * 3, p[1] + oy * 3)
-        oi = next((k for k, f in enumerate(surround) if f.contains(own)), None)
-        li = next((k for k, f in enumerate(surround) if f.contains(lose)), None)
-        if oi is None or li is None or oi == li:
-            stats["dropped"] += 1
-            continue
-        try:
-            new_own = unary_union([surround[oi], tp]).buffer(0)
-            dp = _poly_list_vg(surround[li].difference(tp))
-            if len(dp) != 1 or new_own.geom_type != "Polygon":
-                stats["dropped"] += 1  # tab would fragment the neighbor -> skip
-                continue
-            surround[oi], surround[li] = new_own, dp[0]
-            placed.append(tp)
-            stats["centered"] += 1
-        except Exception:
-            stats["dropped"] += 1
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
