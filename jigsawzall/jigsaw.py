@@ -85,6 +85,8 @@ def _apply_size_overrides(cfg, args):
         over["tab_bulb_elong_px"] = args.tab_bulb_elong_mm * cfg.px_per_mm
     if getattr(args, "letter_clearance_mm", None) is not None:
         over["letter_clearance_mm"] = args.letter_clearance_mm
+    if getattr(args, "letter_gap_extra_mm", None) is not None:
+        over["letter_gap_extra_mm"] = args.letter_gap_extra_mm
     if getattr(args, "banner_h_mm", None) is not None:
         over["banner_target_h_mm"] = args.banner_h_mm
     if getattr(args, "font", None) is not None:
@@ -94,6 +96,10 @@ def _apply_size_overrides(cfg, args):
         over["vertex_grid"] = True
         over["letter_aligned_grid"] = False
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
+        # Arial Black needs more room than the Bold-era spacing; open the gaps
+        # unless the user already set an explicit extra-tracking override.
+        if getattr(args, "letter_gap_extra_mm", None) is None:
+            over["letter_gap_extra_mm"] = 12.0
     return replace(cfg, **over) if over else cfg
 
 
@@ -143,6 +149,14 @@ def _add_size_override_flags(sub):
         default=None,
         help="target banner height (mm) for a fit_to_text banner; grows the "
         "top/bottom rows so tabs have more room off the borders",
+    )
+    sub.add_argument(
+        "--letter-gap-mm",
+        dest="letter_gap_extra_mm",
+        type=float,
+        default=None,
+        help="extra inter-letter tracking (mm) beyond the tab-fit minimum; opens "
+        "the gaps (vertex-grid defaults to 12mm for Arial Black). 0 = Bold-era spacing",
     )
     sub.add_argument(
         "--font",
@@ -362,11 +376,12 @@ def _parse_gcode_paths(gcode: str) -> list[list[tuple[float, float]]]:
 
 
 def render_gcode_previews(
-    gcode: str, cfg, out_stem: Path, title: str
-) -> tuple[Path, Path]:
-    """Write a PNG and an SVG of the actual toolpath next to the gcode.
+    gcode: str, cfg, out_stem: Path, title: str, write_svg: bool = False
+) -> tuple[Path, Path | None]:
+    """Write a PNG (and optionally an SVG) of the actual toolpath next to the
+    gcode. SVG is opt-in (default off — gcode is the deliverable).
 
-    Returns (png_path, svg_path). Lines are the cut paths; G0 rapids
+    Returns (png_path, svg_path_or_None). Lines are the cut paths; G0 rapids
     between paths are drawn faintly so re-positioning is visible."""
     paths = _parse_gcode_paths(gcode)
     pad = 10.0
@@ -384,30 +399,31 @@ def render_gcode_previews(
     def fy(y: float) -> float:
         return ph - y + pad
 
-    svg = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw}mm" '
-        f'height="{vh}mm" viewBox="0 0 {vw} {vh}">',
-        f'<rect x="0" y="0" width="{vw}" height="{vh}" fill="white"/>',
-        f'<rect x="{pad}" y="{pad}" width="{pw}" '
-        f'height="{ph}" fill="none" stroke="#ccc" stroke-width="0.2"/>',
-        f"<title>{title}</title>",
-    ]
-    prev_end = None
-    for p in paths:
-        if prev_end is not None:
+    if write_svg:
+        svg = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw}mm" '
+            f'height="{vh}mm" viewBox="0 0 {vw} {vh}">',
+            f'<rect x="0" y="0" width="{vw}" height="{vh}" fill="white"/>',
+            f'<rect x="{pad}" y="{pad}" width="{pw}" '
+            f'height="{ph}" fill="none" stroke="#ccc" stroke-width="0.2"/>',
+            f"<title>{title}</title>",
+        ]
+        prev_end = None
+        for p in paths:
+            if prev_end is not None:
+                svg.append(
+                    f'<line x1="{prev_end[0] + pad:.3f}" y1="{fy(prev_end[1]):.3f}" '
+                    f'x2="{p[0][0] + pad:.3f}" y2="{fy(p[0][1]):.3f}" '
+                    f'stroke="#e0e0e0" stroke-width="0.1" stroke-dasharray="0.5,0.5"/>'
+                )
+            pts = " ".join(f"{x + pad:.3f},{fy(y):.3f}" for x, y in p)
             svg.append(
-                f'<line x1="{prev_end[0] + pad:.3f}" y1="{fy(prev_end[1]):.3f}" '
-                f'x2="{p[0][0] + pad:.3f}" y2="{fy(p[0][1]):.3f}" '
-                f'stroke="#e0e0e0" stroke-width="0.1" stroke-dasharray="0.5,0.5"/>'
+                f'<polyline points="{pts}" fill="none" stroke="#b03020" '
+                f'stroke-width="0.3"/>'
             )
-        pts = " ".join(f"{x + pad:.3f},{fy(y):.3f}" for x, y in p)
-        svg.append(
-            f'<polyline points="{pts}" fill="none" stroke="#b03020" '
-            f'stroke-width="0.3"/>'
-        )
-        prev_end = p[-1]
-    svg.append("</svg>")
-    svg_path.write_text("\n".join(svg))
+            prev_end = p[-1]
+        svg.append("</svg>")
+        svg_path.write_text("\n".join(svg))
 
     # --- PNG (raster, same geometry) ---
     scale = max(4, int(900 / max(vw, vh)))
@@ -429,7 +445,7 @@ def render_gcode_previews(
     title_font = _load_font(max(12, scale * 3))
     d.text((pad * scale, 2), title, fill=(20, 20, 20), font=title_font)
     img.save(png_path, "PNG", optimize=True)
-    return png_path, svg_path
+    return png_path, (svg_path if write_svg else None)
 
 
 def cmd_preview(args):
@@ -511,16 +527,18 @@ def cmd_cut(args):
     print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
 
-    # Always emit visual previews of the actual toolpath (PNG + SVG) so
-    # issues are spottable without reading GCode.
+    # Emit a PNG preview of the actual toolpath so issues are spottable without
+    # reading GCode. SVG only when asked (gcode is the deliverable).
     png_path, svg_path = render_gcode_previews(
         gcode,
         cfg,
         out.with_suffix(""),
         title=f"{word} {args.size} cut — {fw:.0f}x{fh:.0f}mm",
+        write_svg=getattr(args, "svg", False),
     )
     print(f"-> {png_path}")
-    print(f"-> {svg_path}")
+    if svg_path is not None:
+        print(f"-> {svg_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +625,11 @@ def main():
         "the material profile's value instead via e.g. --power-percent <n>)",
     )
     _add_size_override_flags(cu)
+    cu.add_argument(
+        "--svg",
+        action="store_true",
+        help="also write an SVG of the toolpath (default off — gcode is the output)",
+    )
     cu.set_defaults(func=cmd_cut)
 
 

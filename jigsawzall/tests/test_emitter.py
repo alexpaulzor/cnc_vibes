@@ -500,7 +500,13 @@ def test_render_gcode_previews_writes_png_and_svg(tmp_path):
     }
     g = emit_cut_gcode_full(pieces, material, cfg, "NORA")
     stem = tmp_path / "preview_test"
+    # default: PNG only, no SVG
     png, svg = jigsaw.render_gcode_previews(g, cfg, stem, title="t")
+    assert png.exists() and png.suffix == ".png"
+    assert svg is None
+    assert not stem.with_suffix(".svg").exists()
+    # opt-in: SVG written when requested
+    png, svg = jigsaw.render_gcode_previews(g, cfg, stem, title="t", write_svg=True)
     assert png.exists() and png.suffix == ".png"
     assert svg.exists() and svg.suffix == ".svg"
     body = svg.read_text()

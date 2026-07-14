@@ -140,6 +140,12 @@ class PuzzleConfig:
     shift_steps: int = 12
     shift_step_frac: float = 0.2
 
+    # Extra inter-letter tracking (mm) added on top of the tab-fit minimum gap
+    # (tab_height + 2*bulb_radius). 0 (default) = the proven Arial-Bold spacing.
+    # Arial Black is heavier/wider, so the vertex-grid banner bumps this to open
+    # the letter gaps (more room for a clean gap seam + tab). Re-calibratable.
+    letter_gap_extra_mm: float = 0.0
+
     # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
     # matches the original grid-puzzle behavior and keeps all existing
     # regression tests stable. >0 enables a single-half-sine perpendicular
@@ -1194,7 +1200,11 @@ def _measure_text(word: str, cfg: PuzzleConfig):
     tracked pen offsets, per-glyph bboxes, and the text's total width / band
     height in px."""
     chars = [c for c in word if not c.isspace()]
-    min_gap = cfg.tab_height_px + 2 * cfg.tab_circle_r_px
+    min_gap = (
+        cfg.tab_height_px
+        + 2 * cfg.tab_circle_r_px
+        + cfg.letter_gap_extra_mm * cfg.px_per_mm
+    )
     side_margin = _end_side_margin_px(cfg)
     if cfg.fit_to_text:
         avail = cfg.bounds_w_px - 2 * side_margin  # reserve end-tab room both sides
@@ -1837,41 +1847,30 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     seams = []
     sites = []  # (point, unit_tangent, seg_len) — one tab per site, axis-aligned
 
-    # CAP seams: vertical, from top/bottom convex corners (left, center, right) to
-    # the panel border. The tab rides the straight vertical, protruding horizontal.
+    # CAP seams: exactly ONE vertical exits the top and ONE the bottom of each
+    # letter (at the convex corner nearest the letter's center-x, its dominant
+    # stroke). One-per-side avoids the thin pieces + colliding tab-tips that two
+    # close verticals (e.g. both peaks of a W) produced. Tab rides the vertical.
     for g in glyphs:
         anchors = _convex_vertices(g, ppm)
         minx, _mn, maxx, _mx = g.bounds
-        cx, cy = (minx + maxx) / 2, g.centroid.y
+        cx = (minx + maxx) / 2
+        cy = g.centroid.y
         for is_top in (True, False):
             grp = [a for a in anchors if (a[1] < cy) == is_top]
             if not grp:
                 continue
             border_y = py if is_top else py + ph
             y_to = py - 20 if is_top else py + ph + 20
-            key = (lambda a: a[1]) if is_top else (lambda a: -a[1])
-            left = [a for a in grp if a[0] <= cx]
-            right = [a for a in grp if a[0] > cx]
-            chosen = []
-            if left:
-                chosen.append(min(left, key=key))
-            if right:
-                chosen.append(min(right, key=key))
-            chosen.append(min(grp, key=lambda a: abs(a[0] - cx)))  # center cap always
-            seen_x = set()
-            for a in chosen:
-                xr = round(a[0], 1)
-                if xr in seen_x:
-                    continue
-                seen_x.add(xr)
-                seams.append(LineString([(a[0], a[1]), (a[0], y_to)]))
-                sites.append(
-                    (
-                        (a[0], (a[1] + border_y) / 2),  # midway anchor->border
-                        (0.0, 1.0),
-                        abs(border_y - a[1]),
-                    )
+            a = min(grp, key=lambda p: abs(p[0] - cx))  # single cap near center-x
+            seams.append(LineString([(a[0], a[1]), (a[0], y_to)]))
+            sites.append(
+                (
+                    (a[0], (a[1] + border_y) / 2),  # midway anchor->border
+                    (0.0, 1.0),
+                    abs(border_y - a[1]),
                 )
+            )
 
     # GAP seams: perpendicular launch off each letter -> S-curve -> AXIS-ALIGNED
     # horizontal FLAT (halfway between the two chosen vertices) that carries the
@@ -1879,8 +1878,14 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     # S-sections absorb the height difference between the two vertices.
     flat_len = bulb_w + 6
     for gi in range(len(glyphs) - 1):
-        rv = max(_convex_vertices(glyphs[gi], ppm), key=lambda p: p[0])  # rightmost
-        lv = min(_convex_vertices(glyphs[gi + 1], ppm), key=lambda p: p[0])  # leftmost
+        vi = _convex_vertices(glyphs[gi], ppm)
+        vj = _convex_vertices(glyphs[gi + 1], ppm)
+        cxi = (glyphs[gi].bounds[0] + glyphs[gi].bounds[2]) / 2
+        cxj = (glyphs[gi + 1].bounds[0] + glyphs[gi + 1].bounds[2]) / 2
+        rcands = [p for p in vi if p[0] > cxi] or vi  # right side of left letter
+        lcands = [p for p in vj if p[0] < cxj] or vj  # left side of right letter
+        rv = rng.choice(rcands)  # SEED varies which vertices connect
+        lv = rng.choice(lcands)
         mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2  # halfway between vertices
         seams.append(
             LineString(_bezier_flat_seam(rv, lv, (mx, my), (1.0, 0.0), flat_len))
