@@ -1894,10 +1894,19 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     stub = cfg.min_launch_radius_mm * ppm
     center_y = py + ph / 2
 
-    def _outnorm(v, cen):
-        ddx, ddy = v[0] - cen.x, v[1] - cen.y
-        n = math.hypot(ddx, ddy) or 1.0
-        return (ddx / n, ddy / n)
+    def _boundary_normal(glyph, v, cen):
+        """True outward normal of the glyph's outline at (the boundary point
+        nearest) v — a proper perpendicular launch, unlike centroid->vertex."""
+        ring = glyph.exterior
+        d = ring.project(Point(v))
+        a = ring.interpolate(max(0.0, d - 2 * ppm))
+        b = ring.interpolate(min(ring.length, d + 2 * ppm))
+        tx, ty = b.x - a.x, b.y - a.y
+        tn = math.hypot(tx, ty) or 1.0
+        nx, ny = -ty / tn, tx / tn
+        if nx * (v[0] - cen.x) + ny * (v[1] - cen.y) < 0:  # orient outward
+            nx, ny = -nx, -ny
+        return (nx, ny)
 
     for gi in range(len(glyphs) - 1):
         ci, cj = glyphs[gi].centroid, glyphs[gi + 1].centroid
@@ -1908,19 +1917,32 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         rcands = [p for p in vi if p[0] > cxi] or vi  # right side of left letter
         lcands = [p for p in vj if p[0] < cxj] or vj  # left side of right letter
 
-        def add_gap(ty):
+        def add_gap(
+            ty,
+            gl=glyphs[gi],
+            gr=glyphs[gi + 1],
+            ci=ci,
+            cj=cj,
+            rcands=rcands,
+            lcands=lcands,
+        ):
+            # facing-side vertices nearest height ty (the facing sides are
+            # vertical, so a HORIZONTAL launch is their true perpendicular).
             rv = min(rcands, key=lambda p: abs(p[1] - ty))
             lv = min(lcands, key=lambda p: abs(p[1] - ty))
             mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2
-            nl, nr = _outnorm(rv, ci), _outnorm(lv, cj)
+            # flat/tab ROTATES along the vertex-to-vertex chord so both S-curves
+            # flow through it smoothly (no tight bend to a forced-horizontal flat)
+            ddx, ddy = lv[0] - rv[0], lv[1] - rv[1]
+            dn = math.hypot(ddx, ddy) or 1.0
+            dirv = (ddx / dn, ddy / dn)
+            nl, nr = (1.0, 0.0), (-1.0, 0.0)  # horizontal = perpendicular to sides
             seams.append(
                 LineString(
-                    _bezier_flat_seam(
-                        rv, lv, (mx, my), (1.0, 0.0), flat_len, nl, nr, stub
-                    )
+                    _bezier_flat_seam(rv, lv, (mx, my), dirv, flat_len, nl, nr, stub)
                 )
             )
-            sites.append(((mx, my), (1.0, 0.0), flat_len, True))
+            sites.append(((mx, my), dirv, flat_len, True))
             return my
 
         my = add_gap(center_y)
@@ -1953,10 +1975,44 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     faces = [
         f
         for f in polygonize(net)
-        if background.contains(f.representative_point()) and f.area > (5 * ppm) ** 2
+        if background.contains(f.representative_point()) and f.area > (ppm) ** 2
     ]
     surround = [f for f in faces if not solid.contains(f.representative_point())]
     counters = [f for f in faces if solid.contains(f.representative_point())]
+
+    # Absorb any tiny / pinched (necks < wall) surround face into the neighbor it
+    # shares the longest edge with — no white gaps, no fragile slivers. (Keeps the
+    # gap-seam quirks like a wedge at a letter foot from surviving as a bad piece.)
+    def _absorb(polys):
+        wall = cfg.letter_clearance_px  # ~= min bridge
+        min_a = (12 * ppm) ** 2
+        changed = True
+        while changed and len(polys) > 1:
+            changed = False
+            polys.sort(key=lambda p: p.area)
+            for i, a in enumerate(polys):
+                er = a.buffer(-wall / 2)
+                if a.area >= min_a and not er.is_empty and len(_poly_list_vg(er)) == 1:
+                    continue  # healthy piece
+                best = None
+                for j, b in enumerate(polys):
+                    if i == j:
+                        continue
+                    sh = a.intersection(b)
+                    L = sh.length if "Line" in sh.geom_type else 0.0
+                    if L <= 0:
+                        continue
+                    u = unary_union([a, b])
+                    if u.geom_type == "Polygon" and (best is None or L > best[1]):
+                        best = (j, L, u)
+                if best:
+                    polys[best[0]] = best[2]
+                    polys.pop(i)
+                    changed = True
+                    break
+        return polys
+
+    surround = _absorb(surround)
 
     # ONE fat-capsule tab per seam, at its designated site (flat center / cap mid),
     # protruding perpendicular. No two tabs may touch. A tab on an edge radiating
