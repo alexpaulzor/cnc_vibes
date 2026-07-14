@@ -1135,7 +1135,10 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
         letter_union, _text_x, _text_y, _font = render_letter_polygons(word, cfg)
         piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
     cell_fragments = carve_letter_pockets(piece_polys, letter_union)
-    cell_fragments = merge_small_fragments(cell_fragments, cfg)
+    if not cfg.vertex_grid:
+        # vertex-grid already absorbs slivers pre-tab; the generic merge treats a
+        # tab SOCKET as "thin" and would over-merge the tabbed pieces.
+        cell_fragments = merge_small_fragments(cell_fragments, cfg)
     cell_fragments = fuse_counter_fragments(cell_fragments, letter_union, cfg)
     cell_fragments = round_panel_corners(cell_fragments, cfg)
 
@@ -1788,56 +1791,148 @@ def _convex_vertices(glyph: Polygon, ppm: float) -> list[tuple[float, float]]:
     return pts
 
 
-def _bezier_flat_seam(
-    p_left, p_right, ctr, dirv, flat_len, nl, nr, stub=0.0, samples=20
-):
-    """letter->letter seam: a short STRAIGHT stub of length `stub` launched along
-    each letter's OUTWARD NORMAL (nl, nr) — the min launch radius, so the seam
-    leaves the letter cleanly (no cusp, doesn't hug a curved top) — then an
-    S-curve into a straight axis-aligned FLAT (length flat_len, dir dirv) that
-    carries the tab, then the mirror on the far letter."""
-    dx, dy = dirv
-    ax, ay = ctr[0] - dx * flat_len / 2, ctr[1] - dy * flat_len / 2  # flat start
-    bx, by = ctr[0] + dx * flat_len / 2, ctr[1] + dy * flat_len / 2  # flat end
-    ls = (p_left[0] + nl[0] * stub, p_left[1] + nl[1] * stub)
-    rs = (p_right[0] + nr[0] * stub, p_right[1] + nr[1] * stub)
+def _poly_list_vg(g):
+    if g.is_empty:
+        return []
+    if isinstance(g, Polygon):
+        return [g]
+    return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon) and p.area > 1]
 
-    def bez(p0, launch, p3, tan):
-        lx, ly = launch
-        ln = math.hypot(lx, ly) or 1.0
-        tx, ty = tan
-        tn = math.hypot(tx, ty) or 1.0
-        h = 0.4 * math.hypot(p3[0] - p0[0], p3[1] - p0[1])
-        c1 = (p0[0] + h * lx / ln, p0[1] + h * ly / ln)
-        c2 = (p3[0] - h * tx / tn, p3[1] - h * ty / tn)
-        out = []
-        for i in range(samples + 1):
-            t = i / samples
-            m = 1 - t
-            out.append(
-                (
-                    m**3 * p0[0]
-                    + 3 * m * m * t * c1[0]
-                    + 3 * m * t * t * c2[0]
-                    + t**3 * p3[0],
-                    m**3 * p0[1]
-                    + 3 * m * m * t * c1[1]
-                    + 3 * m * t * t * c2[1]
-                    + t**3 * p3[1],
-                )
+
+def _vg_normal(glyph, v, ppm):
+    """Local outward unit normal of the glyph outline at v (true perpendicular)."""
+    ring = glyph.exterior
+    dd = ring.project(Point(v))
+    a = ring.interpolate(max(0.0, dd - 2 * ppm))
+    b = ring.interpolate(min(ring.length, dd + 2 * ppm))
+    tx, ty = b.x - a.x, b.y - a.y
+    tn = math.hypot(tx, ty) or 1.0
+    nx, ny = -ty / tn, tx / tn
+    cen = glyph.centroid
+    if nx * (v[0] - cen.x) + ny * (v[1] - cen.y) < 0:
+        nx, ny = -nx, -ny
+    return (nx, ny)
+
+
+def _vg_bez(p0, n0, p3, n3, h, samples=40):
+    """Cubic Bezier leaving p0 along n0, arriving at p3 along -n3."""
+    c1 = (p0[0] + h * n0[0], p0[1] + h * n0[1])
+    c2 = (p3[0] + h * n3[0], p3[1] + h * n3[1])
+    out = []
+    for i in range(samples + 1):
+        t = i / samples
+        m = 1 - t
+        out.append(
+            (
+                m**3 * p0[0]
+                + 3 * m * m * t * c1[0]
+                + 3 * m * t * t * c2[0]
+                + t**3 * p3[0],
+                m**3 * p0[1]
+                + 3 * m * m * t * c1[1]
+                + 3 * m * t * t * c2[1]
+                + t**3 * p3[1],
             )
-        return out
+        )
+    return out
 
-    left = [p_left, ls] + bez(ls, nl, (ax, ay), dirv)  # stub then S to the flat
-    right = [p_right, rs] + bez(rs, nr, (bx, by), (-dx, -dy))
-    return left + list(reversed(right))
+
+def _vg_min_radius_mm(pts, ppm):
+    r = float("inf")
+    for i in range(1, len(pts) - 1):
+        a, b, c = pts[i - 1], pts[i], pts[i + 1]
+        v1 = (b[0] - a[0], b[1] - a[1])
+        v2 = (c[0] - b[0], c[1] - b[1])
+        l1 = math.hypot(*v1)
+        l2 = math.hypot(*v2)
+        if l1 < 1e-6 or l2 < 1e-6:
+            continue
+        dot = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)))
+        dth = math.acos(dot)
+        if dth > 1e-9:
+            r = min(r, ((l1 + l2) / 2) / dth)
+    return r / ppm
+
+
+def _vg_curve(a, na, b, nb, obstacles, ppm, min_r_mm=5.0, clear_mm=4.0):
+    """Smoothest perpendicular-launch curve a->b that bends no tighter than
+    min_r_mm, crosses no obstacle, and keeps >=clear_mm from each obstacle except
+    within its attachment neighborhood. obstacles = [(poly, end)] with end in
+    {'a','b',None}. Returns sample pts or None."""
+    dist = math.hypot(b[0] - a[0], b[1] - a[1])
+    best = None
+    for hf in (0.4, 0.6, 0.85, 1.15):
+        pts = _vg_bez(a, na, b, nb, hf * dist)
+        ls = LineString(pts)
+        if any(ls.intersection(poly).length > 1.0 for poly, _e in obstacles):
+            continue
+        if _vg_min_radius_mm(pts, ppm) < min_r_mm - 0.2:
+            continue
+        k = max(3, int(0.18 * len(pts)))
+        ok = True
+        for poly, end in obstacles:
+            seg = (
+                LineString(pts[k:])
+                if end == "a"
+                else LineString(pts[: len(pts) - k])
+                if end == "b"
+                else ls
+            )
+            if seg.distance(poly) < clear_mm * ppm:
+                ok = False
+                break
+        if not ok:
+            continue
+        r = _vg_min_radius_mm(pts, ppm)
+        if best is None or r > best[0]:
+            best = (r, pts)
+    return best[1] if best else None
+
+
+def _vg_tab_at(pts, i, s, cfg):
+    tx = pts[i + 1][0] - pts[i - 1][0]
+    ty = pts[i + 1][1] - pts[i - 1][1]
+    tn = math.hypot(tx, ty) or 1.0
+    tx, ty = tx / tn, ty / tn
+    p = pts[i]
+    L = cfg.tab_len_px
+    estart = (p[0] - tx * L / 2, p[1] - ty * L / 2)  # stem-center stays at p
+    tp = _tab_bulb_polygon(estart, (tx, ty), L, s, 0.0, cfg, tab_len=L)
+    return tp, (tx, ty)
+
+
+def _vg_best_tab(pts, letters_solid, cfg, cap_mm=15.0, min_span_mm=4.0):
+    """Deterministic tab: side+position maximizing the thinnest bridge to a
+    letter (capped at cap_mm; ties -> most central). Returns (i, s, tab, tangent)
+    or None if no position keeps >= min_span_mm."""
+    ppm = cfg.px_per_mm
+    mid = len(pts) // 2
+    best = None
+    for s in (1, -1):
+        for i in range(1, len(pts) - 1):
+            tp, tan = _vg_tab_at(pts, i, s, cfg)
+            if tp is None or tp.is_empty:
+                continue
+            span = letters_solid.distance(tp) / ppm
+            key = (round(min(span, cap_mm), 2), -abs(i - mid))
+            if best is None or key > best[0]:
+                best = (key, span, i, s, tp, tan)
+    if best is None or best[1] < min_span_mm:
+        return None
+    return best[2], best[3], best[4], best[5]
 
 
 def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
-    """Vertex-grid layout: tile the background with letter-ANCHORED seams and
-    carve the SAME fat-capsule tabs as the grid path. Returns
-    (piece_polys{(i,0):Polygon}, stats) — the standard generate_pieces contract,
-    so the whole downstream pipeline + emitter are reused unchanged."""
+    """Vertex-grid layout (curved anchored-seam model). Background tiled by:
+      * GAP seams: letter->letter CURVES between allowed convex vertices (line of
+        sight + both normals point toward the other letter), launching
+        perpendicular, bending no tighter than 5mm, staying >=4mm off letters.
+        The seed picks which allowed vertex pair(s) become the seam(s) (one near
+        mid-height; a second if the column is lopsided).
+      * CAP seams: one vertical from each letter's top and bottom to the border.
+      * END seams: outer letters -> L/R border.
+    Every seam gets ONE deterministic tab (max thinnest bridge, cap 15mm, best
+    side). Returns (piece_polys{(i,0):Polygon}, stats) — standard contract."""
     rng = random.Random(seed)
     ppm = cfg.px_per_mm
     px, py = cfg.margin_px, cfg.margin_px
@@ -1847,123 +1942,100 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     if letter_union is None:
         return {(0, 0): panel}, stats
 
-    glyphs = (
-        list(letter_union.geoms)
-        if isinstance(letter_union, MultiPolygon)
-        else [letter_union]
+    glyphs = sorted(
+        [
+            g
+            for g in (
+                letter_union.geoms
+                if isinstance(letter_union, MultiPolygon)
+                else [letter_union]
+            )
+            if g.area > 100
+        ],
+        key=lambda g: g.centroid.x,
     )
-    glyphs = sorted([g for g in glyphs if g.area > 100], key=lambda g: g.centroid.x)
-    solid = unary_union([Polygon(g.exterior) for g in glyphs])
-    R = cfg.tab_circle_r_px
-    bulb_w = (cfg.tab_stem_w_px or R) + 2 * R  # capsule bulb width
+    solids = [Polygon(g.exterior) for g in glyphs]
+    letters_solid = unary_union(solids)
+    verts = [_convex_vertices(g, ppm) for g in glyphs]
+    norms = [[_vg_normal(g, v, ppm) for v in vs] for g, vs in zip(glyphs, verts)]
+    center_y = py + ph / 2
 
-    seams = []
-    sites = []  # (point, unit_tangent, seg_len, must_tab) — one tab per site
+    def obstacles(attach):
+        return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
 
-    # CAP seams: exactly ONE vertical exits the top and ONE the bottom of each
-    # letter (at the convex corner nearest the letter's center-x). Tab required.
-    for g in glyphs:
-        anchors = _convex_vertices(g, ppm)
+    seams = []  # list of sample-point lists
+
+    # GAP seams (curved, allowed-vertex model)
+    for gi in range(len(glyphs) - 1):
+        gj = gi + 1
+        allowed = []
+        for ia, a in enumerate(verts[gi]):
+            na = norms[gi][ia]
+            for ib, b in enumerate(verts[gj]):
+                nb = norms[gj][ib]
+                chord = LineString([a, b])
+                if (
+                    chord.intersection(solids[gi]).length > 1
+                    or chord.intersection(solids[gj]).length > 1
+                ):
+                    continue  # line of sight
+                dxb, dyb = b[0] - a[0], b[1] - a[1]
+                dn = math.hypot(dxb, dyb) or 1.0
+                if (na[0] * dxb + na[1] * dyb) / dn <= 0.2:
+                    continue  # O normal must point toward J
+                if (nb[0] * -dxb + nb[1] * -dyb) / dn <= 0.2:
+                    continue
+                pts = _vg_curve(a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm)
+                if pts is None:
+                    continue
+                if _vg_best_tab(pts, letters_solid, cfg) is None:
+                    continue  # no feasible tab -> not an allowed edge
+                allowed.append(((a[1] + b[1]) / 2, pts))
+        if not allowed:
+            # crowded gap: no curved edge cleared the filters — fall back to a
+            # straight facing-vertex seam so the column still partitions.
+            r = max(verts[gi], key=lambda p: p[0])
+            lft = min(verts[gj], key=lambda p: p[0])
+            seams.append([(r[0], r[1]), (lft[0], lft[1])])
+            continue
+        target = center_y + rng.uniform(-0.10, 0.10) * ph  # seed picks the pair
+        allowed.sort(key=lambda e: abs(e[0] - target))
+        chosen = [allowed[0]]
+        my0 = allowed[0][0]
+        top_h, bot_h = my0 - py, (py + ph) - my0
+        if max(top_h, bot_h) / max(1.0, min(top_h, bot_h)) > 1.7:  # lopsided -> 3
+            ty2 = py + top_h / 2 if top_h > bot_h else my0 + bot_h / 2
+            cand = [e for e in allowed if abs(e[0] - my0) > 1.5 * cfg.tab_len_px]
+            if cand:
+                cand.sort(key=lambda e: abs(e[0] - ty2))
+                chosen.append(cand[0])
+        for _my, pts in chosen:
+            seams.append(pts)
+
+    # CAP seams: one vertical from each letter top & bottom to the border
+    for gi, g in enumerate(glyphs):
+        anchors = verts[gi]
         minx, _mn, maxx, _mx = g.bounds
-        cx = (minx + maxx) / 2
-        cy = g.centroid.y
+        cx, cy = (minx + maxx) / 2, g.centroid.y
         for is_top in (True, False):
             grp = [a for a in anchors if (a[1] < cy) == is_top]
             if not grp:
                 continue
-            border_y = py if is_top else py + ph
+            a = min(grp, key=lambda p: abs(p[0] - cx))
             y_to = py - 20 if is_top else py + ph + 20
-            a = min(grp, key=lambda p: abs(p[0] - cx))  # single cap near center-x
-            seams.append(LineString([(a[0], a[1]), (a[0], y_to)]))
-            sites.append(
-                (
-                    (a[0], (a[1] + border_y) / 2),  # midway anchor->border
-                    (0.0, 1.0),
-                    abs(border_y - a[1]),
-                    True,  # a tab off a letter's top/bottom is required
-                )
-            )
+            seams.append([(a[0], a[1]), (a[0], y_to)])
 
-    # GAP seams: ONE per letter pair by default (2 pieces in the column) —
-    # connect the facing-side convex vertices nearest the vertical center so the
-    # seam runs mid-height, clear of curved tops. Each end launches along the
-    # letter's OUTWARD NORMAL off a stub (min launch radius) then S-curves into a
-    # horizontal flat carrying the tab. Add a SECOND seam only when one seam would
-    # leave a lopsided column (huge piece one side) -> 3 pieces (e.g. W->O).
-    flat_len = bulb_w + 6
-    stub = cfg.min_launch_radius_mm * ppm
-    center_y = py + ph / 2
+    # END seams: outer letters -> L/R border
+    l0 = min(verts[0], key=lambda p: p[0])
+    seams.append([(l0[0], l0[1]), (px - 20, l0[1])])
+    rN = max(verts[-1], key=lambda p: p[0])
+    seams.append([(rN[0], rN[1]), (px + pw + 20, rN[1])])
 
-    def _side_point(glyph, y, want_max):
-        """Point where the letter's outline meets height y on its facing side
-        (vertex-to-EDGE: e.g. J's vertical bar, not its hook). Returns None if
-        the letter isn't present at y."""
-        b = glyph.bounds
-        ray = LineString([(b[0] - 20, y), (b[2] + 20, y)])
-        inter = ray.intersection(glyph)
-        xs = []
-        for g in getattr(inter, "geoms", [inter]):
-            if not g.is_empty and hasattr(g, "coords"):
-                xs += [c[0] for c in g.coords]
-        if not xs:
-            return None
-        return (max(xs) if want_max else min(xs), y)
-
-    for gi in range(len(glyphs) - 1):
-        gl, gr = glyphs[gi], glyphs[gi + 1]
-
-        def add_gap(ty, gl=gl, gr=gr):
-            # connect the two facing sides at the SAME height ty -> a clean,
-            # near-horizontal seam that launches perpendicular off each vertical
-            # side (no dive to a hook, no sharp sliver). Tab sits on the flat
-            # centered in the gap (full size, clear of both letters).
-            rv = _side_point(gl, ty, True)  # right edge of left letter at ty
-            lv = _side_point(gr, ty, False)  # left edge of right letter at ty
-            if rv is None or lv is None:
-                return None
-            mx, my = (rv[0] + lv[0]) / 2, ty
-            seams.append(
-                LineString(
-                    _bezier_flat_seam(
-                        rv,
-                        lv,
-                        (mx, my),
-                        (1.0, 0.0),
-                        flat_len,
-                        (1.0, 0.0),
-                        (-1.0, 0.0),
-                        stub,
-                    )
-                )
-            )
-            sites.append(((mx, my), (1.0, 0.0), flat_len, True))
-            return my
-
-        # primary seam: seeded height near center so gaps vary but stay clean
-        ty0 = center_y + rng.uniform(-0.08, 0.08) * ph
-        my = add_gap(ty0) or center_y
-        top_h, bot_h = my - py, (py + ph) - my
-        # lopsided column -> add a second seam in the larger half (3 pieces)
-        if max(top_h, bot_h) / max(1.0, min(top_h, bot_h)) > 1.7:
-            ty2 = py + top_h / 2 if top_h > bot_h else my + bot_h / 2
-            if abs(ty2 - my) > 1.5 * flat_len:
-                add_gap(ty2)
-
-    # END seams: outer letters -> L/R border (horizontal; tab required).
-    l0 = min(_convex_vertices(glyphs[0], ppm), key=lambda p: p[0])
-    seams.append(LineString([(l0[0], l0[1]), (px - 20, l0[1])]))
-    sites.append((((l0[0] + px) / 2, l0[1]), (1.0, 0.0), abs(l0[0] - px), True))
-    rN = max(_convex_vertices(glyphs[-1], ppm), key=lambda p: p[0])
-    seams.append(LineString([(rN[0], rN[1]), (px + pw + 20, rN[1])]))
-    sites.append(
-        (((rN[0] + px + pw) / 2, rN[1]), (1.0, 0.0), abs(px + pw - rN[0]), True)
-    )
-
-    # Planar subdivision: panel + letter outlines + seams -> faces.
-    background = panel.difference(letter_union)  # includes counter islands
+    # Planar subdivision -> faces
+    background = panel.difference(letter_union)
     clipped = []
-    for s in seams:
-        inter = s.intersection(background)
+    for pts in seams:
+        inter = LineString(pts).intersection(background)
         for part in inter.geoms if hasattr(inter, "geoms") else [inter]:
             if isinstance(part, LineString) and part.length > 3 * ppm:
                 clipped.append(part)
@@ -1973,34 +2045,37 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         for f in polygonize(net)
         if background.contains(f.representative_point()) and f.area > (ppm) ** 2
     ]
-    surround = [f for f in faces if not solid.contains(f.representative_point())]
-    counters = [f for f in faces if solid.contains(f.representative_point())]
+    surround = [
+        f for f in faces if not letters_solid.contains(f.representative_point())
+    ]
+    counters = [f for f in faces if letters_solid.contains(f.representative_point())]
 
-    # Absorb any tiny / pinched (necks < wall) surround face into the neighbor it
-    # shares the longest edge with — no white gaps, no fragile slivers. (Keeps the
-    # gap-seam quirks like a wedge at a letter foot from surviving as a bad piece.)
-    def _absorb(polys):
-        wall = cfg.letter_clearance_px  # ~= min bridge
-        min_a = (12 * ppm) ** 2
+    # merge only genuinely small / thin-bbox surround slivers into a neighbor.
+    # (Do NOT use an erosion-split test: a large L-shaped piece that wraps a
+    # letter corner erodes into pieces yet is perfectly durable — that test
+    # cascaded and collapsed crowded words like KARSON.)
+    def absorb(polys):
+        min_a = (11 * ppm) ** 2
+        min_side = 8 * ppm
         changed = True
         while changed and len(polys) > 1:
             changed = False
             polys.sort(key=lambda p: p.area)
             for i, a in enumerate(polys):
-                er = a.buffer(-wall / 2)
-                if a.area >= min_a and not er.is_empty and len(_poly_list_vg(er)) == 1:
-                    continue  # healthy piece
+                bx = a.bounds
+                if a.area >= min_a and min(bx[2] - bx[0], bx[3] - bx[1]) >= min_side:
+                    continue
                 best = None
                 for j, b in enumerate(polys):
                     if i == j:
                         continue
                     sh = a.intersection(b)
-                    L = sh.length if "Line" in sh.geom_type else 0.0
-                    if L <= 0:
+                    ln = sh.length if "Line" in sh.geom_type else 0.0
+                    if ln <= 0:
                         continue
                     u = unary_union([a, b])
-                    if u.geom_type == "Polygon" and (best is None or L > best[1]):
-                        best = (j, L, u)
+                    if u.geom_type == "Polygon" and (best is None or ln > best[1]):
+                        best = (j, ln, u)
                 if best:
                     polys[best[0]] = best[2]
                     polys.pop(i)
@@ -2008,87 +2083,51 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     break
         return polys
 
-    surround = _absorb(surround)
+    surround = absorb(surround)
 
-    # ONE fat-capsule tab per seam, at its designated site (flat center / cap mid),
-    # protruding perpendicular. No two tabs may touch. A tab on an edge radiating
-    # off a letter (must_tab: caps, ends, gaps) is REQUIRED — if the full tab
-    # won't fit/clear, shrink it (down to ~half) before giving up.
-    placed_tabs = []
-    clr = cfg.letter_clearance_px
-    border_floor = min(clr, _BORDER_FLOOR_MM * ppm)
-
-    def _shrunk(scale):
-        if scale >= 0.999:
-            return cfg
-        r2 = max(6, int(round(cfg.tab_circle_r_px * scale)))
-        return dc_replace(
-            cfg,
-            tab_circle_r_px=r2,
-            tab_stem_w_px=(cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None),
-            tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
-        )
-
-    for (sx, sy), (tx, ty), seg, must in sites:
+    # place ONE deterministic tab on each clipped seam, carved into its two pieces
+    placed = []
+    for part in clipped:
+        # resample to ~2mm so straight (cap/end) and curved seams both have
+        # interior points for the tab search
+        n = max(4, int(part.length / (2 * ppm)))
+        pts = [
+            (pt.x, pt.y)
+            for pt in (part.interpolate(t / n, normalized=True) for t in range(n + 1))
+        ]
+        if len(pts) < 3:
+            continue
+        bt = _vg_best_tab(pts, letters_solid, cfg)
         stats["total"] += 1
-        placed = False
-        for scale in (1.0, 0.72, 0.55) if must else (1.0,):
-            c2 = _shrunk(scale)
-            bw2 = (c2.tab_stem_w_px or c2.tab_circle_r_px) + 2 * c2.tab_circle_r_px
-            Lfoot = min(c2.tab_len_px, seg)
-            if Lfoot < bw2 + 2:  # no room even shrunk
+        if bt is None:
+            stats["dropped"] += 1
+            continue
+        i, s, tp, (tx, ty) = bt
+        if any(tp.intersects(pk) for pk in placed):  # tabs must not touch
+            stats["dropped"] += 1
+            continue
+        ox, oy = ty * s, -tx * s  # protrusion direction (s * edge-normal)
+        p = pts[i]
+        own = Point(p[0] - ox * 3, p[1] - oy * 3)
+        lose = Point(p[0] + ox * 3, p[1] + oy * 3)
+        oi = next((k for k, f in enumerate(surround) if f.contains(own)), None)
+        li = next((k for k, f in enumerate(surround) if f.contains(lose)), None)
+        if oi is None or li is None or oi == li:
+            stats["dropped"] += 1
+            continue
+        try:
+            new_own = unary_union([surround[oi], tp]).buffer(0)
+            dp = _poly_list_vg(surround[li].difference(tp))
+            if len(dp) != 1 or new_own.geom_type != "Polygon":
+                stats["dropped"] += 1  # tab would fragment the neighbor -> skip
                 continue
-            edge_start = (sx - tx * Lfoot / 2, sy - ty * Lfoot / 2)
-            edir = (tx, ty)
-            for direction in (1, -1) if rng.random() < 0.5 else (-1, 1):
-                bulb = _tab_bulb_polygon(
-                    edge_start, edir, Lfoot, direction, 0.0, c2, tab_len=Lfoot
-                )
-                if bulb is None:
-                    continue
-                if solid.distance(bulb) < clr:
-                    continue
-                if panel.boundary.distance(bulb) < border_floor:
-                    continue
-                if any(bulb.intersects(t) for t in placed_tabs):
-                    continue  # tabs must never touch
-                # bulb protrudes toward direction*out where out=(edir[1],-edir[0]);
-                # that side LOSES a socket, the opposite side OWNS the tab.
-                nx, ny = ty * direction, -tx * direction  # protrusion direction
-                own = Point(sx - nx * 3, sy - ny * 3)
-                lose = Point(sx + nx * 3, sy + ny * 3)
-                oi = next((k for k, f in enumerate(surround) if f.contains(own)), None)
-                li = next((k for k, f in enumerate(surround) if f.contains(lose)), None)
-                if oi is None or li is None or oi == li:
-                    continue
-                try:
-                    new_own = unary_union([surround[oi], bulb]).buffer(0)
-                    rem = max(
-                        _poly_list_vg(surround[li].difference(bulb)),
-                        key=lambda p: p.area,
-                        default=None,
-                    )
-                    if rem is None or new_own.geom_type != "Polygon":
-                        continue
-                    surround[oi], surround[li] = new_own, rem
-                    placed_tabs.append(bulb)
-                    placed = True
-                    break
-                except Exception:
-                    continue
-            if placed:
-                break
-        stats["centered" if placed else "dropped"] += 1
+            surround[oi], surround[li] = new_own, dp[0]
+            placed.append(tp)
+            stats["centered"] += 1
+        except Exception:
+            stats["dropped"] += 1
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
         pieces[(idx, 0)] = poly
     return pieces, stats
-
-
-def _poly_list_vg(g):
-    if g.is_empty:
-        return []
-    if isinstance(g, Polygon):
-        return [g]
-    return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon) and p.area > 1]
