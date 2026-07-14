@@ -100,6 +100,9 @@ def _apply_size_overrides(cfg, args):
         # unless the user already set an explicit extra-tracking override.
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 12.0
+        # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
+        if getattr(args, "letter_clearance_mm", None) is None:
+            over["letter_clearance_mm"] = 4.0
     return replace(cfg, **over) if over else cfg
 
 
