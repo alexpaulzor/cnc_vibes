@@ -1901,17 +1901,23 @@ def _vg_tab_at(pts, i, s, cfg):
     return tp, (tx, ty)
 
 
-def _vg_best_tab(pts, letters_solid, cfg, cap_mm=15.0, min_span_mm=4.0):
+def _vg_best_tab(pts, letters_solid, cfg, panel, cap_mm=15.0, min_span_mm=4.0):
     """Deterministic tab: side+position maximizing the thinnest bridge to a
-    letter (capped at cap_mm; ties -> most central). Returns (i, s, tab, tangent)
-    or None if no position keeps >= min_span_mm."""
+    letter (capped at cap_mm; ties -> most central). The tab must stay fully
+    inside the panel and keep >=4mm off the panel border (no tabs hanging off the
+    edge). Returns (i, s, tab, tangent) or None if no position keeps the bridge."""
     ppm = cfg.px_per_mm
+    border_floor = 2.0 * ppm  # keep tabs off the very edge; containment stops overrun
     mid = len(pts) // 2
     best = None
     for s in (1, -1):
         for i in range(1, len(pts) - 1):
             tp, tan = _vg_tab_at(pts, i, s, cfg)
             if tp is None or tp.is_empty:
+                continue
+            if tp.difference(panel).area > 1.0:  # tab runs off the panel
+                continue
+            if panel.exterior.distance(tp) < border_floor:  # too close to edge
                 continue
             span = letters_solid.distance(tp) / ppm
             key = (round(min(span, cap_mm), 2), -abs(i - mid))
@@ -1988,7 +1994,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 pts = _vg_curve(a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm)
                 if pts is None:
                     continue
-                if _vg_best_tab(pts, letters_solid, cfg) is None:
+                if _vg_best_tab(pts, letters_solid, cfg, panel) is None:
                     continue  # no feasible tab -> not an allowed edge
                 allowed.append(((a[1] + b[1]) / 2, pts))
         if not allowed:
@@ -2097,7 +2103,25 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         ]
         if len(pts) < 3:
             continue
-        bt = _vg_best_tab(pts, letters_solid, cfg)
+        # every seam radiates off a letter -> a tab is required; if the full tab
+        # doesn't fit (short end/cap seam), shrink it before giving up.
+        bt = None
+        for scale in (1.0, 0.72, 0.5):
+            c2 = (
+                cfg
+                if scale >= 0.999
+                else dc_replace(
+                    cfg,
+                    tab_circle_r_px=max(6, int(round(cfg.tab_circle_r_px * scale))),
+                    tab_stem_w_px=(
+                        cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None
+                    ),
+                    tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
+                )
+            )
+            bt = _vg_best_tab(pts, letters_solid, c2, panel)
+            if bt is not None:
+                break
         stats["total"] += 1
         if bt is None:
             stats["dropped"] += 1
