@@ -1894,63 +1894,59 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     stub = cfg.min_launch_radius_mm * ppm
     center_y = py + ph / 2
 
-    def _boundary_normal(glyph, v, cen):
-        """True outward normal of the glyph's outline at (the boundary point
-        nearest) v — a proper perpendicular launch, unlike centroid->vertex."""
-        ring = glyph.exterior
-        d = ring.project(Point(v))
-        a = ring.interpolate(max(0.0, d - 2 * ppm))
-        b = ring.interpolate(min(ring.length, d + 2 * ppm))
-        tx, ty = b.x - a.x, b.y - a.y
-        tn = math.hypot(tx, ty) or 1.0
-        nx, ny = -ty / tn, tx / tn
-        if nx * (v[0] - cen.x) + ny * (v[1] - cen.y) < 0:  # orient outward
-            nx, ny = -nx, -ny
-        return (nx, ny)
+    def _side_point(glyph, y, want_max):
+        """Point where the letter's outline meets height y on its facing side
+        (vertex-to-EDGE: e.g. J's vertical bar, not its hook). Returns None if
+        the letter isn't present at y."""
+        b = glyph.bounds
+        ray = LineString([(b[0] - 20, y), (b[2] + 20, y)])
+        inter = ray.intersection(glyph)
+        xs = []
+        for g in getattr(inter, "geoms", [inter]):
+            if not g.is_empty and hasattr(g, "coords"):
+                xs += [c[0] for c in g.coords]
+        if not xs:
+            return None
+        return (max(xs) if want_max else min(xs), y)
 
     for gi in range(len(glyphs) - 1):
-        ci, cj = glyphs[gi].centroid, glyphs[gi + 1].centroid
-        vi = _convex_vertices(glyphs[gi], ppm)
-        vj = _convex_vertices(glyphs[gi + 1], ppm)
-        cxi = (glyphs[gi].bounds[0] + glyphs[gi].bounds[2]) / 2
-        cxj = (glyphs[gi + 1].bounds[0] + glyphs[gi + 1].bounds[2]) / 2
-        rcands = [p for p in vi if p[0] > cxi] or vi  # right side of left letter
-        lcands = [p for p in vj if p[0] < cxj] or vj  # left side of right letter
+        gl, gr = glyphs[gi], glyphs[gi + 1]
 
-        def add_gap(
-            ty,
-            gl=glyphs[gi],
-            gr=glyphs[gi + 1],
-            ci=ci,
-            cj=cj,
-            rcands=rcands,
-            lcands=lcands,
-        ):
-            # facing-side vertices nearest height ty (the facing sides are
-            # vertical, so a HORIZONTAL launch is their true perpendicular).
-            rv = min(rcands, key=lambda p: abs(p[1] - ty))
-            lv = min(lcands, key=lambda p: abs(p[1] - ty))
-            mx, my = (rv[0] + lv[0]) / 2, (rv[1] + lv[1]) / 2
-            # flat/tab ROTATES along the vertex-to-vertex chord so both S-curves
-            # flow through it smoothly (no tight bend to a forced-horizontal flat)
-            ddx, ddy = lv[0] - rv[0], lv[1] - rv[1]
-            dn = math.hypot(ddx, ddy) or 1.0
-            dirv = (ddx / dn, ddy / dn)
-            nl, nr = (1.0, 0.0), (-1.0, 0.0)  # horizontal = perpendicular to sides
+        def add_gap(ty, gl=gl, gr=gr):
+            # connect the two facing sides at the SAME height ty -> a clean,
+            # near-horizontal seam that launches perpendicular off each vertical
+            # side (no dive to a hook, no sharp sliver). Tab sits on the flat
+            # centered in the gap (full size, clear of both letters).
+            rv = _side_point(gl, ty, True)  # right edge of left letter at ty
+            lv = _side_point(gr, ty, False)  # left edge of right letter at ty
+            if rv is None or lv is None:
+                return None
+            mx, my = (rv[0] + lv[0]) / 2, ty
             seams.append(
                 LineString(
-                    _bezier_flat_seam(rv, lv, (mx, my), dirv, flat_len, nl, nr, stub)
+                    _bezier_flat_seam(
+                        rv,
+                        lv,
+                        (mx, my),
+                        (1.0, 0.0),
+                        flat_len,
+                        (1.0, 0.0),
+                        (-1.0, 0.0),
+                        stub,
+                    )
                 )
             )
-            sites.append(((mx, my), dirv, flat_len, True))
+            sites.append(((mx, my), (1.0, 0.0), flat_len, True))
             return my
 
-        my = add_gap(center_y)
+        # primary seam: seeded height near center so gaps vary but stay clean
+        ty0 = center_y + rng.uniform(-0.08, 0.08) * ph
+        my = add_gap(ty0) or center_y
         top_h, bot_h = my - py, (py + ph) - my
         # lopsided column -> add a second seam in the larger half (3 pieces)
         if max(top_h, bot_h) / max(1.0, min(top_h, bot_h)) > 1.7:
             ty2 = py + top_h / 2 if top_h > bot_h else my + bot_h / 2
-            if abs(ty2 - my) > 1.5 * flat_len:  # only if well separated
+            if abs(ty2 - my) > 1.5 * flat_len:
                 add_gap(ty2)
 
     # END seams: outer letters -> L/R border (horizontal; tab required).
