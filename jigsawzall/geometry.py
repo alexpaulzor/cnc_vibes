@@ -119,6 +119,10 @@ class PuzzleConfig:
     # rows grow so the panel reaches ~this tall, giving tabs more room off the
     # borders. None = height follows the band (original behavior).
     banner_target_h_mm: float | None = None
+    # Vertex-grid fit: uniform margin (mm) to leave around the letters' bounding
+    # box on all four sides. The panel is sized to letters_bbox + 2*this (within
+    # the stock bounds) — not crammed, not forced to fill the whole stock.
+    banner_margin_mm: float | None = None
     # Optional font override for the lettering: an absolute path or an alias in
     # _FONT_ALIASES ('black' default, 'bold' for lighter, 'impact', 'narrow').
     # None = the default black list (Arial Black, falling back to Bold).
@@ -1199,6 +1203,8 @@ def _end_side_margin_px(cfg: PuzzleConfig) -> float:
     the end-column horizontal tab plus its border wall. Guarantees every name —
     even a long one like KARSON — keeps room for its end tabs instead of having
     to choose between squeezing the letters and dropping the end interlocks."""
+    if cfg.banner_margin_mm is not None:
+        return cfg.banner_margin_mm * cfg.px_per_mm
     return cfg.tab_len_px + 2 * cfg.tab_circle_r_px
 
 
@@ -1272,9 +1278,12 @@ def _fit_panel_to_text(word: str, cfg: PuzzleConfig) -> PuzzleConfig:
     side_margin = _end_side_margin_px(cfg)
     row_min = cfg.tab_height_px + cfg.tab_circle_r_px
     row_h = max(row_min, int(m["band_h"] * 0.45))
+    if cfg.banner_margin_mm is not None:
+        # uniform margin around the letter bbox (vertex-grid): panel = bbox + 2*m
+        row_h = max(row_min, int(cfg.banner_margin_mm * cfg.px_per_mm))
     # Optionally grow the top/bottom rows to reach a target panel height — taller
     # rows give border-adjacent tabs more room to keep their wall.
-    if cfg.banner_target_h_mm is not None:
+    elif cfg.banner_target_h_mm is not None:
         target_px = cfg.banner_target_h_mm * cfg.px_per_mm
         row_h = max(row_h, int((target_px - m["band_h"]) / 2))
     fit_w = int(min(cfg.bounds_w_px, m["total"] + 2 * side_margin))
@@ -1287,7 +1296,7 @@ def fit_config(word: str, cfg: PuzzleConfig) -> PuzzleConfig:
     opts into fit-to-text (letter-aligned banner), else the cfg unchanged.
     Idempotent — the fit is recomputed from the immutable bounds each call, so
     callers can fit once and generate_pieces can safely fit again."""
-    if cfg.letter_aligned_grid and cfg.fit_to_text:
+    if (cfg.letter_aligned_grid or cfg.vertex_grid) and cfg.fit_to_text:
         return _fit_panel_to_text(word, cfg)
     return cfg
 

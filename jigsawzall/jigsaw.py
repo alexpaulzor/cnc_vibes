@@ -101,14 +101,10 @@ def _apply_size_overrides(cfg, args):
         # which otherwise become tiny in a mostly-empty panel).
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 0.0
-        # Use the FULL panel height (don't shrink to the letter band): grow the
-        # top/bottom strips so the panel is actually panel_h_mm tall, not a short
-        # wide strip. Without this, fit_to_text builds a band-height puzzle.
-        if (
-            getattr(args, "banner_h_mm", None) is None
-            and getattr(args, "panel_h_mm", None) is not None
-        ):
-            over["banner_target_h_mm"] = args.panel_h_mm
+        # Size the panel to the letters' bbox + a uniform margin (>=20mm all
+        # around) — not crammed, not forced to fill the whole stock.
+        if getattr(args, "banner_h_mm", None) is None:
+            over["banner_margin_mm"] = 20.0
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
             over["letter_clearance_mm"] = 4.0
