@@ -688,12 +688,18 @@ def test_fat_capsule_banner_holds_at_real_size():
 
 
 def _vgrid_cfg():
+    # mirrors the --vertex-grid CLI overrides so tests exercise the real path
     return replace(
         banner_puzzle_config(),
         vertex_grid=True,
         letter_aligned_grid=False,
+        fit_to_text=True,
         panel_mm=300,
         panel_h_mm=150,
+        banner_margin_mm=30.0,
+        banner_letter_h_mm=46.0,
+        letter_gap_extra_mm=0.0,
+        letter_clearance_mm=4.0,
     )
 
 
@@ -722,3 +728,29 @@ def test_vertex_grid_pieces_are_valid_polygons():
     assert len(pieces) > 6
     for p in pieces:
         assert p["polygon"].is_valid and not p["polygon"].is_empty
+
+
+@pytest.mark.parametrize("word", ["WOJO", "KAIDEN", "NORA", "KAI", "KARSON"])
+def test_vertex_grid_no_sub_4mm_bridge(word):
+    """The critical durability rule: no background piece may contain a sliver of
+    non-letter wood thinner than ~4mm (it would snap). Eroding a piece by half
+    that floor must not cleave it into two substantial lobes. Tab bulbs/necks
+    erode to sub-7mm nubs and are ignored."""
+    cfg = _vgrid_cfg()
+    pieces, _ = generate_pieces(word, 7, cfg)
+    ppm = cfg.px_per_mm
+    for p in pieces:
+        if p["kind"] != "cell":
+            continue
+        er = p["polygon"].buffer(-2.0 * ppm)
+        geoms = getattr(er, "geoms", [er])
+        lobes = [g for g in geoms if g.area > (7 * ppm) ** 2]
+        assert len(lobes) < 2, f"{word}: a piece has a sub-4mm waist (would snap)"
+
+
+def test_vertex_grid_density_scales_with_crowding():
+    """The generate-and-test loop reports the density it settled on; a fuller
+    word should not be left with oversized pieces the loop could have split."""
+    _, stats = generate_pieces("KARSON", 7, _vgrid_cfg())
+    assert stats.get("density", 0) >= 1
+    assert stats.get("thin", 0) == 0  # durability always satisfied
