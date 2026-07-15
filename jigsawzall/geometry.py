@@ -49,6 +49,7 @@ from shapely.geometry import (
     box,
 )
 from shapely.ops import polygonize, unary_union
+from shapely.ops import split as shp_split
 
 
 # ---------------------------------------------------------------------------
@@ -2254,6 +2255,84 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         return polys
 
     surround = absorb(surround)
+
+    # Split oversized pieces: cut across the long axis with a tabbed seam (a
+    # limited T-junction with the existing seams). Keeps piece sizes consistent.
+    def split_big(polys):
+        import statistics as _st
+
+        if len(polys) < 2:
+            return polys
+        target = 1.35 * _st.median([p.area for p in polys])
+        guard = 0
+        while guard < 60:
+            guard += 1
+            polys.sort(key=lambda p: -p.area)
+            p = polys[0]
+            if p.area <= target:
+                break
+            b = p.bounds
+            w, h = b[2] - b[0], b[3] - b[1]
+            c = p.centroid
+            raw = (
+                [(b[0] - 5, c.y), (b[2] + 5, c.y)]
+                if h >= w
+                else [(c.x, b[1] - 5), (c.x, b[3] + 5)]
+            )
+            ls = LineString(raw)
+            n = max(6, int(ls.length / (2 * ppm)))
+            rs = [
+                (
+                    ls.interpolate(t / n, normalized=True).x,
+                    ls.interpolate(t / n, normalized=True).y,
+                )
+                for t in range(n + 1)
+            ]
+            cut_line, cut_bulb = ls, None
+            for scale in (1.0, 0.7):
+                c2 = (
+                    cfg
+                    if scale >= 0.999
+                    else dc_replace(
+                        cfg,
+                        tab_circle_r_px=max(6, int(round(cfg.tab_circle_r_px * scale))),
+                        tab_stem_w_px=(
+                            cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None
+                        ),
+                        tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
+                    )
+                )
+                pick = _vg_best_tab(rs, letters_solid, c2, panel, placed_bulbs)
+                if pick is None:
+                    continue
+                res = _vg_splice(rs, pick[0], pick[1], c2)
+                if res is None:
+                    continue
+                spliced, bulb = res
+                if any(bulb.intersects(pb) for pb in placed_bulbs):
+                    continue
+                cut_line, cut_bulb = LineString(spliced), bulb
+                break
+            try:
+                parts = [
+                    g
+                    for g in shp_split(p, cut_line).geoms
+                    if g.geom_type == "Polygon" and g.area > (11 * ppm) ** 2
+                ]
+            except Exception:
+                parts = []
+            if len(parts) >= 2:
+                polys.pop(0)
+                polys.extend(parts)
+                if cut_bulb is not None:
+                    placed_bulbs.append(cut_bulb)
+                stats["total"] += 1
+                stats["centered" if cut_bulb is not None else "dropped"] += 1
+            else:
+                break  # can't split the biggest -> stop
+        return polys
+
+    surround = split_big(surround)
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
