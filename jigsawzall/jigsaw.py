@@ -105,6 +105,14 @@ def _apply_size_overrides(cfg, args):
         # around) — not crammed, not forced to fill the whole stock.
         if getattr(args, "banner_h_mm", None) is None:
             over["banner_margin_mm"] = 30.0
+        # Keep letters a consistent, readable size across names: fix the cap
+        # height and let the panel WIDTH flex to the word (up to 300mm stock),
+        # instead of shrinking 6-letter words short to fit a 150mm width.
+        if getattr(args, "panel_mm", None) is None:
+            over["panel_mm"] = 300.0
+        if getattr(args, "panel_h_mm", None) is None:
+            over["panel_h_mm"] = 150.0
+        over["banner_letter_h_mm"] = 46.0
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
             over["letter_clearance_mm"] = 4.0
