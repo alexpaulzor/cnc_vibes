@@ -101,10 +101,10 @@ def _apply_size_overrides(cfg, args):
         # which otherwise become tiny in a mostly-empty panel).
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 0.0
-        # Size the panel to the letters' bbox + a uniform margin (>=20mm all
+        # Size the panel to the letters' bbox + a uniform margin (>=30mm all
         # around) — not crammed, not forced to fill the whole stock.
         if getattr(args, "banner_h_mm", None) is None:
-            over["banner_margin_mm"] = 20.0
+            over["banner_margin_mm"] = 30.0
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
             over["letter_clearance_mm"] = 4.0
