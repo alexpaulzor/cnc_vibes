@@ -2226,8 +2226,8 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     # letter corner erodes into pieces yet is perfectly durable — that test
     # cascaded and collapsed crowded words like KARSON.)
     def absorb(polys):
-        min_a = (11 * ppm) ** 2
-        min_side = 8 * ppm
+        min_a = (13 * ppm) ** 2
+        min_side = 10 * ppm
         changed = True
         while changed and len(polys) > 1:
             changed = False
@@ -2236,17 +2236,19 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 bx = a.bounds
                 if a.area >= min_a and min(bx[2] - bx[0], bx[3] - bx[1]) >= min_side:
                     continue
+                # neighbor with the longest shared boundary — buffer-based so
+                # curved / tab-spliced edges (float-imperfect) still register.
+                ab = a.buffer(0.75)
                 best = None
                 for j, b in enumerate(polys):
                     if i == j:
                         continue
-                    sh = a.intersection(b)
-                    ln = sh.length if "Line" in sh.geom_type else 0.0
-                    if ln <= 0:
+                    shared = ab.intersection(b).area
+                    if shared <= 0:
                         continue
                     u = unary_union([a, b])
-                    if u.geom_type == "Polygon" and (best is None or ln > best[1]):
-                        best = (j, ln, u)
+                    if u.geom_type == "Polygon" and (best is None or shared > best[1]):
+                        best = (j, shared, u)
                 if best:
                     polys[best[0]] = best[2]
                     polys.pop(i)
@@ -2256,21 +2258,25 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
 
     surround = absorb(surround)
 
-    # Split oversized pieces: cut across the long axis with a tabbed seam (a
-    # limited T-junction with the existing seams). Keeps piece sizes consistent.
+    # Split oversized pieces: cut across the long axis with a tabbed seam — but
+    # ONLY when it yields two comfortably-sized pieces that both get a tab. A
+    # split that would make a sliver or an untabbed bit is skipped (a slightly
+    # large piece beats a sliver).
     def split_big(polys):
         import statistics as _st
 
         if len(polys) < 2:
             return polys
-        target = 1.35 * _st.median([p.area for p in polys])
+        med = _st.median([p.area for p in polys])
+        target = 1.5 * med
+        min_part = max(0.55 * med, (14 * ppm) ** 2)  # each half must clear this
+        min_side = 12 * ppm
+        work = [p for p in polys if p.area > target]
+        done = [p for p in polys if p.area <= target]
         guard = 0
-        while guard < 60:
+        while work and guard < 80:
             guard += 1
-            polys.sort(key=lambda p: -p.area)
-            p = polys[0]
-            if p.area <= target:
-                break
+            p = work.pop()
             b = p.bounds
             w, h = b[2] - b[0], b[3] - b[1]
             c = p.centroid
@@ -2288,7 +2294,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 )
                 for t in range(n + 1)
             ]
-            cut_line, cut_bulb = ls, None
+            cut_line, cut_bulb = None, None
             for scale in (1.0, 0.7):
                 c2 = (
                     cfg
@@ -2313,26 +2319,35 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     continue
                 cut_line, cut_bulb = LineString(spliced), bulb
                 break
+            if cut_bulb is None:  # no tab fits -> don't split (no untabbed edges)
+                done.append(p)
+                continue
             try:
                 parts = [
                     g
                     for g in shp_split(p, cut_line).geoms
-                    if g.geom_type == "Polygon" and g.area > (11 * ppm) ** 2
+                    if g.geom_type == "Polygon" and g.area > 1
                 ]
             except Exception:
                 parts = []
-            if len(parts) >= 2:
-                polys.pop(0)
-                polys.extend(parts)
-                if cut_bulb is not None:
-                    placed_bulbs.append(cut_bulb)
-                stats["total"] += 1
-                stats["centered" if cut_bulb is not None else "dropped"] += 1
-            else:
-                break  # can't split the biggest -> stop
-        return polys
+            ok = len(parts) == 2 and all(
+                pp.area >= min_part
+                and min(pp.bounds[2] - pp.bounds[0], pp.bounds[3] - pp.bounds[1])
+                >= min_side
+                for pp in parts
+            )
+            if not ok:  # would make a sliver -> leave the piece whole
+                done.append(p)
+                continue
+            placed_bulbs.append(cut_bulb)
+            stats["total"] += 1
+            stats["centered"] += 1
+            for pp in parts:
+                (work if pp.area > target else done).append(pp)
+        return done
 
     surround = split_big(surround)
+    surround = absorb(surround)  # clean any sliver a split left behind
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
