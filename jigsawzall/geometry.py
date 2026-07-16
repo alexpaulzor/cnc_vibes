@@ -1818,6 +1818,76 @@ def _poly_list_vg(g):
     return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon) and p.area > 1]
 
 
+def _vg_anchors(
+    glyph: Polygon, ppm: float, min_edge_mm: float = 20.0
+) -> list[tuple[float, float]]:
+    """Candidate seam anchors on a glyph's OUTER boundary: every convex corner
+    (from _convex_vertices) PLUS midpoints of long straight edges. Any straight
+    edge longer than min_edge_mm gets a vertex at its CENTER, then each half is
+    subdivided the same way. This is symmetric about each edge's center — so the
+    two long sides of an I (or the slopes of an A) get matching anchors — and it
+    gives the density loop more places to T a seam off a flat edge and split a
+    large piece. Curved letters (O, S) have only short edges, so they stay
+    corner-driven. Midpoints coinciding with a corner are dropped.
+
+    An anchor is REJECTED if it sits in a nook it couldn't launch out of without
+    leaving a brittle bridge: within 4mm of a concave (reflex) corner, or where a
+    short outward-normal probe can't stay >=4mm clear of the glyph (between the
+    fingers of an E, inside the crooks of a W/R/S, etc.)."""
+    corners = _convex_vertices(glyph, ppm)
+    ext = glyph.exterior.simplify(max(ppm, 1.0))
+    ring = [(float(x), float(y)) for x, y in list(ext.coords)[:-1]]
+    thresh = min_edge_mm * ppm
+    mids: list[tuple[float, float]] = []
+
+    def _sub(a, b):
+        if math.hypot(b[0] - a[0], b[1] - a[1]) > thresh:
+            m = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            mids.append(m)
+            _sub(a, m)
+            _sub(m, b)
+
+    n = len(ring)
+    for i in range(n):
+        _sub(ring[i], ring[(i + 1) % n])
+    near = 4.0 * ppm
+    extra = [
+        m
+        for m in mids
+        if all(math.hypot(m[0] - c[0], m[1] - c[1]) > near for c in corners)
+    ]
+
+    # Reflex (concave) corners of the ring — anchors must stay 4mm clear of these.
+    sa = sum(
+        ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1]
+        for i in range(n)
+    )
+    orient = 1.0 if sa > 0 else -1.0
+    reflex = []
+    for i in range(n):
+        p0, p1, p2 = ring[i - 1], ring[i], ring[(i + 1) % n]
+        cr = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
+        if abs(cr) > 1e-6 and (cr > 0) != (orient > 0):
+            reflex.append(p1)
+
+    solid = Polygon(glyph.exterior)
+    clear = 4.0 * ppm
+    launch = 7.0 * ppm
+
+    def _launchable(p):
+        if any(math.hypot(p[0] - r[0], p[1] - r[1]) < clear for r in reflex):
+            return False  # too close to a concave corner
+        nx, ny = _vg_normal(glyph, p, ppm)
+        probe = (p[0] + nx * launch, p[1] + ny * launch)
+        if solid.distance(Point(probe)) < clear - 0.5:
+            return False  # a nook: the launch corridor is pinched by the glyph
+        if LineString([p, probe]).intersection(solid).length > 1.0:
+            return False  # launch ray dives back into the glyph
+        return True
+
+    return [p for p in (corners + extra) if _launchable(p)]
+
+
 def _vg_normal(glyph, v, ppm):
     """Local outward unit normal of the glyph outline at v (true perpendicular)."""
     ring = glyph.exterior
@@ -2007,7 +2077,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     )
     solids = [Polygon(g.exterior) for g in glyphs]
     letters_solid = unary_union(solids)
-    verts = [_convex_vertices(g, ppm) for g in glyphs]
+    verts = [_vg_anchors(g, ppm) for g in glyphs]
     norms = [[_vg_normal(g, v, ppm) for v in vs] for g, vs in zip(glyphs, verts)]
     def obstacles(attach):
         return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
@@ -2057,8 +2127,8 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 pts = _vg_curve(a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm)
                 if pts is None:
                     continue
-                if _vg_best_tab(pts, letters_solid, cfg, panel) is None:
-                    continue  # no feasible tab -> not an allowed edge
+                if LineString(pts).length < 1.5 * cfg.tab_len_px:
+                    continue  # too short to carry a tab (real tab placed later)
                 allowed.append(((a[1] + b[1]) / 2, pts, ia, ib))
         gap_allowed.append(allowed)
 
@@ -2072,7 +2142,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
             if (na[0] * dxb + na[1] * dyb) / dn <= 0.2:  # launch toward the border
                 continue
             pts = _vg_curve(a, na, b, nb, obstacles({gi: "a"}), ppm)
-            if pts is None or _vg_best_tab(pts, letters_solid, cfg, panel) is None:
+            if pts is None or LineString(pts).length < 1.5 * cfg.tab_len_px:
                 continue
             allow.append((b, pts))
         if not allow:
@@ -2347,12 +2417,14 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         # — only its knock-on effect (an oversized merged piece) counts.
         return (thin, over)
 
-    # Generate-and-test: raise seam density and regenerate the WHOLE puzzle from
-    # scratch until every piece is in the size band and no piece has a sub-4mm
-    # bridge. Every emitted seam already carries a tab. Keep the best attempt if
-    # none is fully valid.
+    # Generate-and-test: regenerate the WHOLE puzzle from scratch at each density
+    # and keep the first that is valid (no sub-4mm bridge, every piece in the size
+    # band). Sweep 2->5 first so the baseline is a denser, more puzzle-like tiling
+    # ("more seams from the start"); fall back to the sparser density 1 only if no
+    # denser layout is valid. Every emitted seam already carries a tab. If nothing
+    # is fully valid, keep the best-scoring attempt.
     best = None
-    for density in (1, 2, 3, 4, 5):
+    for density in (2, 3, 4, 5, 1):
         seams = gen_seams(density)
         surround, counters, st = assemble(seams)
         sc = _score(surround, st)
