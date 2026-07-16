@@ -2164,13 +2164,13 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         allow.sort(key=lambda e: abs(e[0][key] - tgt))
         return allow[0][1]
 
-    def gen_seams(density):
+    def gen_seams(density, variant=0):
         """Lay out ALL seams for a given density. `density` = how many gap seams
         to aim for per letter gap and how many caps per letter top/bottom edge;
         higher density -> more, smaller pieces. Every seam follows the same
-        curved, letter-anchored, exclusive-vertex rules. The seed decides which
-        allowed vertices are picked for the requested targets."""
-        rng = random.Random(seed * 131 + density)
+        curved, letter-anchored, exclusive-vertex rules. The seed (+ variant)
+        decides which allowed vertices are picked for the requested targets."""
+        rng = random.Random(seed * 131 + density * 17 + variant * 9973)
         gap_seams, end_seams = [], []
         used = set()  # (glyph_idx, vertex_idx) — vertices are exclusive
         min_sep = 1.6 * cfg.tab_len_px  # keep seams on a pair from bunching
@@ -2475,17 +2475,18 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     def _score(surround, st):
         thin = sum(1 for p in surround if _thin_bridge(p))
         over = sum(1 for p in surround if _oversized(p))
-        # durability (no sub-4mm bridge) first, then the size band. A seam with
-        # no feasible tab is dropped (a clean merge), so it is NOT a defect here
-        # — only its knock-on effect (an oversized merged piece) counts.
-        return (thin, over)
+        big = max((p.area for p in surround), default=0.0)
+        # Rank: durability first (no sub-4mm bridge), then how many pieces bust
+        # the size band, then the AREA of the single largest piece — so among
+        # otherwise-equal layouts we keep the one whose biggest piece is smallest.
+        return (thin, over, round(big, 1))
 
-    # Generate-and-test: regenerate the WHOLE puzzle from scratch at each density
-    # and keep the first that is valid (no sub-4mm bridge, every piece in the size
-    # band). Sweep 2->5 first so the baseline is a denser, more puzzle-like tiling
-    # ("more seams from the start"); fall back to the sparser density 1 only if no
-    # denser layout is valid. Every emitted seam already carries a tab. If nothing
-    # is fully valid, keep the best-scoring attempt.
+    # Generate-and-test: regenerate the WHOLE puzzle at several densities AND a
+    # few random variants each, keeping the layout that scores best (durable, in
+    # the size band, smallest largest-piece). This directly minimises the biggest
+    # piece instead of taking the first merely-valid one. Stop early once a
+    # layout is durable, fully in-band, and comfortably small.
+    good_enough = (44 * ppm) ** 2
     best = None
     for density in (2, 3, 4, 5, 1):
         seams = gen_seams(density)
@@ -2493,11 +2494,11 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         sc = _score(surround, st)
         if best is None or sc < best[0]:
             best = (sc, surround, counters, st, density)
-        if sc == (0, 0):
+        if sc[0] == 0 and sc[1] == 0 and sc[2] <= good_enough:
             break
     sc, surround, counters, stats, density = best
     stats["density"] = density
-    stats["thin"], stats["oversized"] = sc
+    stats["thin"], stats["oversized"] = sc[0], sc[1]
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
