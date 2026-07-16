@@ -2171,7 +2171,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         curved, letter-anchored, exclusive-vertex rules. The seed decides which
         allowed vertices are picked for the requested targets."""
         rng = random.Random(seed * 131 + density)
-        seams = []
+        gap_seams, end_seams = [], []
         used = set()  # (glyph_idx, vertex_idx) — vertices are exclusive
         min_sep = 1.6 * cfg.tab_len_px  # keep seams on a pair from bunching
 
@@ -2184,7 +2184,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 # facing-vertex fallback so the column still partitions.
                 r = max(verts[gi], key=lambda p: p[0])
                 lft = min(verts[gj], key=lambda p: p[0])
-                seams.append([(r[0], r[1]), (lft[0], lft[1])])
+                gap_seams.append([(r[0], r[1]), (lft[0], lft[1])])
                 continue
             targets = [py + ph * (m + 0.5) / density for m in range(density)]
             jit = rng.uniform(-0.08, 0.08) * ph
@@ -2199,22 +2199,26 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     used.add((gi, e[2]))
                     used.add((gj, e[3]))
                     chosen_h.append(e[0])
-                    seams.append(e[1])
+                    gap_seams.append(e[1])
                     break
             if not chosen_h:  # guarantee at least one seam per pair
                 e = min(allowed, key=lambda e: abs(e[0] - (py + ph / 2)))
                 used.add((gi, e[2]))
                 used.add((gj, e[3]))
-                seams.append(e[1])
+                gap_seams.append(e[1])
 
         # CAP seams: up to `density` per letter top & bottom, spread across width.
         # Claim ONLY vertices whose normal actually points up/down toward that
         # border — leave the side-facing vertices (e.g. the A's right leg) free
-        # for END seams, so an outer letter's edge can still fan out and split a
-        # corner rather than being consumed here by mere Y-position.
+        # for END seams. The FIRST (most central) cap of each letter side is a
+        # "primary" cap: it is accepted before the gap seams so the top/bottom
+        # margin is always broken into per-letter cells instead of one long
+        # strip. Extra caps are accepted last (after gaps) as a bonus.
+        primary_caps, extra_caps = [], []
         for gi, g in enumerate(glyphs):
             anchors = verts[gi]
             minx, _mn, maxx, _mx = g.bounds
+            cx = (minx + maxx) / 2
             for is_top in (True, False):
                 grp = [
                     iv
@@ -2225,7 +2229,13 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     continue
                 ncap = max(1, min(density, len(grp)))
                 span = max(1.0, maxx - minx)
-                xtargets = [minx + span * (m + 0.5) / ncap for m in range(ncap)]
+                # most-central target first, then spread — so the primary cap
+                # lands near the letter's middle.
+                xtargets = sorted(
+                    [minx + span * (m + 0.5) / ncap for m in range(ncap)],
+                    key=lambda x: abs(x - cx),
+                )
+                first = True
                 for xt in xtargets:
                     avail = [iv for iv in grp if (gi, iv) not in used]
                     if not avail:
@@ -2240,10 +2250,13 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                         if abs(b[0] - a[0]) < 45 * ppm
                     ]
                     pts = _border_seam(gi, a, na, bvs, "x", rng)
-                    y_to = py - 20 if is_top else py + ph + 20
-                    seams.append(
-                        pts if pts is not None else [(a[0], a[1]), (a[0], y_to)]
-                    )
+                    if pts is None:
+                        pts = [
+                            (a[0], a[1]),
+                            (a[0], py - 20 if is_top else py + ph + 20),
+                        ]
+                    (primary_caps if first else extra_caps).append(pts)
+                    first = False
 
         # END seams: outer letters -> curved seams to the L/R border. Up to
         # `density` per side, spread by height, so the side margins subdivide
@@ -2280,7 +2293,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 used.add((gi_end, k))
                 pts = _border_seam(gi_end, vs[k], ns[k], side_bvs, "y", rng)
                 if pts is not None:
-                    seams.append(pts)
+                    end_seams.append(pts)
                     placed_any = True
             if not placed_any:  # straight fallback so the margin still splits
                 k = (
@@ -2290,8 +2303,10 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 )
                 a = vs[k]
                 xto = px - 20 if want_left else px + pw + 20
-                seams.append([(a[0], a[1]), (xto, a[1])])
-        return seams
+                end_seams.append([(a[0], a[1]), (xto, a[1])])
+        # Acceptance order: primary caps (break the margins) + ends first, then
+        # gap seams (fill the letter band), then extra caps as a bonus.
+        return primary_caps + end_seams + gap_seams + extra_caps
 
     # merge only genuinely small / thin-bbox surround slivers into a neighbor.
     # (Do NOT use an erosion-split test: a large L-shaped piece that wraps a
@@ -2431,11 +2446,17 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     # area / thin waist — it is durable and fine, so it must NOT trip this.
     max_area = (50 * ppm) ** 2
     min_side_big = 34 * ppm
+    max_dim = 60 * ppm
 
     def _oversized(poly):
+        # Too big = large area AND either a fat short side (a big blob) or a long
+        # max dimension (a long strip, e.g. a top-margin band spanning several
+        # letters). A thin L-shaped letter-wrap has small area, so it passes.
         b = poly.bounds
-        short = min(b[2] - b[0], b[3] - b[1])
-        return poly.area > max_area and short > min_side_big
+        w, h = b[2] - b[0], b[3] - b[1]
+        if poly.area <= max_area:
+            return False
+        return min(w, h) > min_side_big or max(w, h) > max_dim
 
     def _thin_bridge(poly):
         # Erode by half the 4mm floor. Flags a background piece that would snap:
