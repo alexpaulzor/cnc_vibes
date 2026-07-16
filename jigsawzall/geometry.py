@@ -1990,17 +1990,18 @@ def _vg_tab_at(pts, i, s, cfg):
     return tp, (tx, ty)
 
 
-def _vg_best_tab(
-    pts, letters_solid, cfg, panel, placed=(), cap_mm=15.0, min_span_mm=4.0
+def _vg_tab_candidates(
+    pts, letters_solid, cfg, panel, placed=(), cap_mm=15.0, min_span_mm=4.0, top=12
 ):
-    """Deterministic tab position: (i, s) maximizing the thinnest bridge to a
-    letter (capped at cap_mm; ties -> most central). The tab must stay inside the
-    panel, keep off the border, and not touch an already-placed tab. Returns
-    (i, s) or None."""
+    """Ranked tab positions for a seam: each valid (i, s) that stays inside the
+    panel, off the border, and clear of already-placed tabs, sorted by thinnest
+    bridge to a letter (capped at cap_mm; ties -> most central). Returns up to
+    `top` candidates best-first so the caller can fall back to another side or
+    spot when its first choice collides with a neighbouring seam."""
     ppm = cfg.px_per_mm
     border_floor = 3.0 * ppm
     mid = len(pts) // 2
-    best = None
+    cands = []
     for s in (1, -1):
         for i in range(2, len(pts) - 2):
             tp, tan = _vg_tab_at(pts, i, s, cfg)
@@ -2013,12 +2014,22 @@ def _vg_best_tab(
             if any(tp.intersects(pk) for pk in placed):  # tabs must not touch
                 continue
             span = letters_solid.distance(tp) / ppm
+            if span < min_span_mm:
+                continue
             key = (round(min(span, cap_mm), 2), -abs(i - mid))
-            if best is None or key > best[0]:
-                best = (key, span, i, s)
-    if best is None or best[1] < min_span_mm:
-        return None
-    return best[2], best[3]
+            cands.append((key, i, s))
+    cands.sort(key=lambda c: c[0], reverse=True)
+    return [(i, s) for _k, i, s in cands[:top]]
+
+
+def _vg_best_tab(
+    pts, letters_solid, cfg, panel, placed=(), cap_mm=15.0, min_span_mm=4.0
+):
+    """The single best tab position (i, s), or None — see _vg_tab_candidates."""
+    c = _vg_tab_candidates(
+        pts, letters_solid, cfg, panel, placed, cap_mm, min_span_mm, top=1
+    )
+    return c[0] if c else None
 
 
 def _vg_splice(pts, i, s, cfg):
@@ -2315,10 +2326,20 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     def assemble(seams):
         """Splice ONE tab into each seam (cut goes AROUND the tab, connected to
         either side of its base), polygonize into faces, absorb slivers. Returns
-        (surround, counters, stats)."""
+        (surround, counters, stats).
+
+        Seams are accepted GREEDILY with a hard spacing rule: a candidate is
+        dropped unless its whole spliced path (curve + tab outline) stays
+        >=min_gap from every already-accepted seam. Because the tab is spliced
+        into the path, this one test keeps seams from crossing each other,
+        clipping each other's tabs, sitting back-to-back, or leaving a sub-4mm
+        wood bridge between two seams — the "no seam-to-seam junction in open
+        background" rule. A dropped seam just means its two faces stay merged."""
         st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
         placed_bulbs = []
         tabbed = []
+        accepted = []  # LineString of each accepted spliced seam (curve + tab)
+        min_gap = cfg.letter_clearance_px  # >=4mm bridge between any two seams
         for pts0 in seams:
             ls0 = LineString(pts0).intersection(background)
             if ls0.geom_type == "MultiLineString":
@@ -2348,28 +2369,38 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                         tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
                     )
                 )
-                pick = _vg_best_tab(rs, letters_solid, c2, panel, placed_bulbs)
-                if pick is None:
-                    continue
-                res = _vg_splice(rs, pick[0], pick[1], c2)
-                if res is None:
-                    continue
-                spliced, bulb = res
-                if bulb is None or spliced is None:
-                    continue
-                if any(bulb.intersects(pb) for pb in placed_bulbs):
-                    continue
-                chosen = (spliced, bulb)
-                break
+                # Try ranked tab positions: if the best one collides with a
+                # neighbour seam, fall back to the other side / another spot
+                # before giving up on this seam.
+                for pi, ps in _vg_tab_candidates(
+                    rs, letters_solid, c2, panel, placed_bulbs
+                ):
+                    res = _vg_splice(rs, pi, ps, c2)
+                    if res is None:
+                        continue
+                    spliced, bulb = res
+                    if bulb is None or spliced is None:
+                        continue
+                    cand = LineString(spliced)
+                    # spacing: whole spliced path (curve + tab) must clear every
+                    # already-accepted seam by >=min_gap. This prevents crossings,
+                    # tab clipping, back-to-back tabs, sub-4mm inter-seam bridges.
+                    if any(cand.distance(a) < min_gap for a in accepted):
+                        continue
+                    chosen = (spliced, bulb, cand)
+                    break
+                if chosen is not None:
+                    break
             if chosen is not None:
                 tabbed.append(chosen[0])
                 placed_bulbs.append(chosen[1])
+                accepted.append(chosen[2])
                 st["centered"] += 1
             else:
-                # No feasible tab -> this is NOT a valid seam. Drop it entirely
-                # (the two faces it would have split merge cleanly) rather than
-                # emit a tabless cut edge. If the merge makes a piece too big,
-                # the density loop raises seam count and regenerates.
+                # No feasible / well-spaced tab -> NOT a valid seam. Drop it
+                # entirely (the two faces it would have split merge cleanly)
+                # rather than emit a crossing or tabless edge. If the merge makes
+                # a piece too big, the density loop raises seam count and retries.
                 st["dropped"] += 1
 
         net = unary_union(
@@ -2402,12 +2433,18 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         return poly.area > max_area and short > min_side_big
 
     def _thin_bridge(poly):
-        # Erode by half the 4mm floor. A durable piece stays one blob (a tab
-        # bulb erodes to a sub-7mm nub, ignored); a piece pinched to <4mm
-        # anywhere splits into >=2 substantial lobes -> it would snap.
+        # Erode by half the 4mm floor. Flags a background piece that would snap:
+        #  * empty after erosion    -> thinner than 4mm everywhere (a sliver),
+        #  * >=2 substantial lobes  -> a <4mm waist joining two blobs (dumbbell),
+        #  * erodes to <10% of area -> a thin strip.
+        # A tab bulb erodes to a sub-7mm nub, so a normal piece-with-a-tab passes.
         er = poly.buffer(-2.0 * ppm)
+        if er.is_empty:
+            return True
         lobes = [p for p in _poly_list_vg(er) if p.area > (7 * ppm) ** 2]
-        return len(lobes) >= 2
+        if len(lobes) >= 2:
+            return True
+        return er.area < 0.10 * poly.area
 
     def _score(surround, st):
         thin = sum(1 for p in surround if _thin_bridge(p))
