@@ -2305,9 +2305,12 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 a = vs[k]
                 xto = px - 20 if want_left else px + pw + 20
                 end_seams.append([(a[0], a[1]), (xto, a[1])])
-        # Acceptance order: primary caps (break the margins) + ends first, then
-        # gap seams (fill the letter band), then extra caps as a bonus.
-        return primary_caps + end_seams + gap_seams + extra_caps
+        # Acceptance order: HORIZONTAL edges first (gap seams across each gap +
+        # end seams to the L/R border) to establish the row structure into a top
+        # and bottom band, THEN VERTICAL caps to slice those bands into clean
+        # per-letter cells. There's only one row (few L/R ends) but many letters
+        # (many caps), so the caps are what carve up any band left too big.
+        return gap_seams + end_seams + primary_caps + extra_caps
 
     # merge only genuinely small / thin-bbox surround slivers into a neighbor.
     # (Do NOT use an erosion-split test: a large L-shaped piece that wraps a
@@ -2498,20 +2501,20 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         # otherwise-equal layouts we keep the one whose biggest piece is smallest.
         return (thin, over, round(big, 1))
 
-    # Generate-and-test: regenerate the WHOLE puzzle at several densities AND a
-    # few random variants each, keeping the layout that scores best (durable, in
-    # the size band, smallest largest-piece). This directly minimises the biggest
-    # piece instead of taking the first merely-valid one. Stop early once a
-    # layout is durable, fully in-band, and comfortably small.
-    good_enough = (44 * ppm) ** 2
+    # Generate-and-test: sweep densities LOW -> HIGH and keep the SPARSEST layout
+    # that is fully valid (durable + no oversized piece). Fewest seams that still
+    # keep every piece in the size band = reasonable-size pieces without over-
+    # slicing a region into tiny awkward bits (now that corner junctions let low
+    # densities partition cleanly). If none is fully valid, fall back to the
+    # best-scoring attempt (fewest thin, then fewest oversized, then smallest max).
     best = None
-    for density in (2, 3, 4, 5, 1):
+    for density in (1, 2, 3, 4, 5):
         seams = gen_seams(density)
         surround, counters, st = assemble(seams)
         sc = _score(surround, st)
         if best is None or sc < best[0]:
             best = (sc, surround, counters, st, density)
-        if sc[0] == 0 and sc[1] == 0 and sc[2] <= good_enough:
+        if sc[0] == 0 and sc[1] == 0:
             break
     sc, surround, counters, stats, density = best
     stats["density"] = density
