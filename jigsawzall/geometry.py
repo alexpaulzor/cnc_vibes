@@ -49,6 +49,7 @@ from shapely.geometry import (
     box,
 )
 from shapely.ops import polygonize, unary_union
+from shapely.ops import nearest_points
 from shapely.ops import split as shp_split
 
 
@@ -2360,6 +2361,22 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         tabbed = []
         accepted = []  # LineString of each accepted spliced seam (curve + tab)
         min_gap = cfg.letter_clearance_px  # >=4mm bridge between any two seams
+
+        def _bg_conflict(cand):
+            """A candidate seam conflicts with an accepted seam only where the
+            space between them is OPEN BACKGROUND thinner than min_gap (a sliver
+            or a crossing). If they approach near a letter, the letter fills the
+            space — that is an allowed junction ON the letter (a cap and a gap
+            seam sharing a corner), not a thin wood bridge."""
+            for a in accepted:
+                if cand.distance(a) >= min_gap:
+                    continue
+                q1, q2 = nearest_points(cand, a)
+                mid = Point((q1.x + q2.x) / 2, (q1.y + q2.y) / 2)
+                if letters_solid.distance(mid) > min_gap:
+                    return True
+            return False
+
         for pts0 in seams:
             ls0 = LineString(pts0).intersection(background)
             if ls0.geom_type == "MultiLineString":
@@ -2402,10 +2419,10 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     if bulb is None or spliced is None:
                         continue
                     cand = LineString(spliced)
-                    # spacing: whole spliced path (curve + tab) must clear every
-                    # already-accepted seam by >=min_gap. This prevents crossings,
-                    # tab clipping, back-to-back tabs, sub-4mm inter-seam bridges.
-                    if any(cand.distance(a) < min_gap for a in accepted):
+                    # No crossing / no thin OPEN-BACKGROUND bridge to another
+                    # seam. Approaching near a letter is fine (a shared junction
+                    # on the letter — a cap and a gap seam off the same corner).
+                    if _bg_conflict(cand):
                         continue
                     chosen = (spliced, bulb, cand)
                     break
