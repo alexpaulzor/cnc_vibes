@@ -2208,13 +2208,18 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                 seams.append(e[1])
 
         # CAP seams: up to `density` per letter top & bottom, spread across width.
+        # Claim ONLY vertices whose normal actually points up/down toward that
+        # border — leave the side-facing vertices (e.g. the A's right leg) free
+        # for END seams, so an outer letter's edge can still fan out and split a
+        # corner rather than being consumed here by mere Y-position.
         for gi, g in enumerate(glyphs):
             anchors = verts[gi]
             minx, _mn, maxx, _mx = g.bounds
-            cy = g.centroid.y
             for is_top in (True, False):
                 grp = [
-                    iv for iv in range(len(anchors)) if (anchors[iv][1] < cy) == is_top
+                    iv
+                    for iv in range(len(anchors))
+                    if (norms[gi][iv][1] < -0.4 if is_top else norms[gi][iv][1] > 0.4)
                 ]
                 if not grp:
                     continue
