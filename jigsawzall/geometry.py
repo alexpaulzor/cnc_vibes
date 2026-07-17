@@ -1162,11 +1162,25 @@ def logo_letter_union(path: str, cfg: PuzzleConfig):
         return Point(cx, cy).buffer(max(1.0, r), resolution=128)
 
     annulus = disk(r_out).difference(disk(r_in))
-    # letters = ink minus the ring stroke; keep real glyphs + the period
-    rest = ink_all.difference(annulus.buffer(4.0))
+    Rbig = r_out * 4.0
+
+    def _wedge(ox, oy, a0, a1):
+        pts = [(ox, oy)]
+        for k in range(41):
+            t = math.radians(a0 + (a1 - a0) * k / 40)
+            pts.append((ox + Rbig * math.cos(t), oy + Rbig * math.sin(t)))
+        return Polygon(pts)
+
+    # Crescent angular ranges (image y is DOWN: 0=right, 90=down, 180=left,
+    # 270=up): top, left, bottom. The RIGHT side (toward the letters, where the
+    # "a" crosses the ring) is deliberately excluded — so we remove the ring only
+    # where the crescents will be and leave the right band with the letters,
+    # keeping the "a" whole.
+    RANGES = [(228, 312), (132, 228), (48, 132)]
+    used = unary_union([_wedge(cx, cy, a0, a1) for a0, a1 in RANGES])
+    rest = ink_all.difference(annulus.intersection(used).buffer(3.0))
     comps = list(rest.geoms) if rest.geom_type == "MultiPolygon" else [rest]
-    # Keep real glyphs; drop hairline ring-arc remnants left by the subtraction
-    # (open by 2px, then reject any piece that erodes away at 3px = thin arc).
+    # keep real glyphs; drop hairline ring-arc remnants (open 2px, reject thin)
     letters = []
     for g in comps:
         if g.area <= 700:
@@ -1200,31 +1214,20 @@ def logo_letter_union(path: str, cfg: PuzzleConfig):
     r_out = (ab[2] - ab[0]) / 2
     inner2 = max(annulus.interiors, key=lambda r: Polygon(r).area)
     r_in = (Polygon(inner2).bounds[2] - Polygon(inner2).bounds[0]) / 2
-    grow = max(0.0, (18.0 * ppm - (r_out - r_in)) / 2)
+    grow = max(0.0, (12.0 * ppm - (r_out - r_in)) / 2)  # target ~12mm ring
     ring = disk(r_out + grow).difference(disk(max(4.0, r_in - grow)))
 
-    # slice into left/top/bottom crescents (image y is DOWN: 0=right, 90=down,
-    # 180=left, 270=up). Clip the right side (toward the letters) and keep gaps.
     lu = unary_union(letters)
-    Rbig = r_out * 3
-
-    def _sector(a0, a1):
-        pts = [(cx, cy)]
-        for k in range(41):
-            t = math.radians(a0 + (a1 - a0) * k / 40)
-            pts.append((cx + Rbig * math.cos(t), cy + Rbig * math.sin(t)))
-        return Polygon(pts)
+    gap = 8  # angular gap between crescents (clips the tips)
 
     def _crescent(a0, a1):
-        p = ring.intersection(_sector(a0, a1)).difference(lu.buffer(3))
+        p = ring.intersection(_wedge(cx, cy, a0 + gap, a1 - gap)).difference(
+            lu.buffer(3)
+        )
         parts = [q for q in _poly_list_vg(p) if q.area > 200]
         return max(parts, key=lambda q: q.area) if parts else None
 
-    crescents = [
-        c
-        for c in (_crescent(228, 312), _crescent(132, 228), _crescent(48, 132))
-        if c is not None
-    ]
+    crescents = [c for c in (_crescent(a0, a1) for a0, a1 in RANGES) if c is not None]
 
     letter_union = unary_union(letters + crescents)
     # Final fit: the thickened crescents can exceed the pre-thicken bounds, so
