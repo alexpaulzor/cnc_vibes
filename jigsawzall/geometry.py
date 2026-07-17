@@ -158,6 +158,11 @@ class PuzzleConfig:
     # Arial Black is heavier/wider, so the vertex-grid banner bumps this to open
     # the letter gaps (more room for a clean gap seam + tab). Re-calibratable.
     letter_gap_extra_mm: float = 0.0
+    # Vertex-grid: when True, generate_pieces sweeps the inter-letter spacing
+    # (10mm then 20mm) alongside density, preferring the sparsest layout — set by
+    # the CLI when the user hasn't pinned --letter-gap-extra-mm. Off elsewhere so
+    # a caller that fixes the gap gets exactly that gap.
+    vg_spacing_search: bool = False
 
     # Vertex-grid: a straight perpendicular stub (mm) each gap seam launches off a
     # letter before it starts to curve, so the seam meets the letter at a clean
@@ -1280,10 +1285,41 @@ def generate_pieces(
         letter_union, cfg = logo_letter_union(logo_path, cfg)
         piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
     elif cfg.vertex_grid:
-        if cfg.fit_to_text:
-            cfg = _fit_panel_to_text(word, cfg)
-        letter_union, _boxes, origins = letter_layout_spaced(word, cfg)
-        piece_polys, stats = build_pieces_vertex_grid(seed, letter_union, cfg, origins)
+        # Search inter-letter spacing alongside density, preferring the sparsest
+        # (lowest-density) layout and, at each density, the tightest spacing that
+        # works (bigger letters) before widening. Order: for each density 1->4,
+        # try 10mm then 20mm tracking; stop at the first fully-valid layout, or
+        # once a density's structural faults (thin/blob) clear (climbing only
+        # trades a clean-ish layout for a busier one). Widening the gap gives a
+        # cramped word (e.g. ALEX) room to split at a LOWER density = fewer, less
+        # busy pieces. Only runs when the user hasn't pinned the spacing.
+        if getattr(cfg, "vg_spacing_search", False):
+            gaps = (10.0, 20.0)
+        else:
+            gaps = (cfg.letter_gap_extra_mm,)
+        best = None  # (score, piece_polys, stats, letter_union, cfg)
+        done = False
+        for density in (1, 2, 3, 4):
+            struct_ok = False
+            for gap in gaps:
+                cfg_g = dc_replace(cfg, letter_gap_extra_mm=gap)
+                if cfg_g.fit_to_text:
+                    cfg_g = _fit_panel_to_text(word, cfg_g)
+                lu, _boxes, origins = letter_layout_spaced(word, cfg_g)
+                polys, st = build_pieces_vertex_grid(
+                    seed, lu, cfg_g, origins, densities=(density,)
+                )
+                sc = st.get("score", (0, 0, 0, 0, 0))
+                if best is None or sc < best[0]:
+                    best = (sc, polys, st, lu, cfg_g)
+                if sc[0] == 0 and sc[1] == 0 and sc[2] == 0 and sc[3] == 0:
+                    done = True
+                    break
+                if sc[0] == 0 and sc[1] == 0:
+                    struct_ok = True
+            if done or struct_ok:
+                break
+        _sc, piece_polys, stats, letter_union, cfg = best
     elif cfg.letter_aligned_grid:
         # Size the panel to the text (within bounds) so the aspect ratio flexes
         # to the name and every name reserves end-column tab room.
@@ -1318,6 +1354,11 @@ def generate_pieces(
     pieces = absorb_letter_slivers(pieces, letter_union, cfg)
     for i, p in enumerate(pieces, start=1):
         p["serial"] = i
+    if cfg.vertex_grid:
+        # The vertex-grid spacing search may have re-fitted the panel (a different
+        # tracking -> different width/letter size); hand the chosen cfg back so the
+        # caller renders / emits against the panel these pieces actually live in.
+        stats["cfg"] = cfg
     return pieces, stats
 
 
@@ -2209,7 +2250,7 @@ def _vg_splice(pts, i, s, cfg):
     return spliced, bulb
 
 
-def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
+def build_pieces_vertex_grid(seed, letter_union, cfg, origins, densities=(1, 2, 3, 4)):
     """Vertex-grid layout (curved anchored-seam model). Background tiled by:
       * GAP seams: letter->letter CURVES between allowed convex vertices (line of
         sight + both normals point toward the other letter), launching
@@ -2718,7 +2759,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     # a clean-ish layout for a busier, sliverier one. This also bounds the work.
     best = None
     done = False
-    for density in (1, 2, 3, 4):
+    for density in densities:
         best_here = None
         for variant in range(8):
             seams = gen_seams(density, variant)
@@ -2740,6 +2781,7 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     stats["density"] = density
     stats["thin"], stats["oversized"], stats["sliver"] = sc[0], sc[1], sc[2]
     stats["nub"] = sc[3]
+    stats["score"] = sc  # (thin, over, sliver, nub, big) for the caller's search
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):

@@ -99,10 +99,12 @@ def _apply_size_overrides(cfg, args):
         # Extra inter-letter tracking so there's real background between glyphs
         # to seam through: without it, tight words (e.g. ALEX's big caps) leave
         # gaps so narrow that any split makes a sub-4mm thin bridge, forcing the
-        # generator back to an un-split blobby layout. 10mm is the starting
-        # value; it does shrink the font a little for 6+ letter words.
+        # generator back to an un-split blobby layout. When the user hasn't pinned
+        # a value, the generator searches spacing (10mm then 20mm) per density and
+        # keeps the sparsest layout; 10mm is just the seed value shown in cfg.
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 10.0
+            over["vg_spacing_search"] = True
         # Size the panel to the letters' bbox + a uniform margin (>=30mm all
         # around) — not crammed, not forced to fill the whole stock.
         if getattr(args, "banner_h_mm", None) is None:
@@ -493,6 +495,11 @@ def cmd_preview(args):
     pieces, stats = generate_pieces(
         word, args.seed, base if logo else cfg, logo_path=logo
     )
+    # the vertex-grid spacing search may have re-fitted the panel; render against
+    # the config the pieces actually live in.
+    cfg = stats.get("cfg", cfg)
+    stats.pop("cfg", None)
+    stats.pop("score", None)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     stem = Path(logo).stem.lower() if logo else word.lower()
     out = FIG_DIR / f"preview_{args.size}_{stem}_seed{args.seed}.png"
@@ -525,10 +532,15 @@ def cmd_cut(args):
     else:
         cfg = fit_config(args.word.upper(), base)
         word = args.word.upper()
-    _apply_origin(cfg, args.origin)
     pieces, stats = generate_pieces(
         "logo" if logo else word, args.seed, base if logo else cfg, logo_path=logo
     )
+    # the spacing search may have re-fitted the panel; emit against the config the
+    # pieces live in, and apply the WCS origin to THAT panel.
+    cfg = stats.get("cfg", cfg)
+    stats.pop("cfg", None)
+    stats.pop("score", None)
+    _apply_origin(cfg, args.origin)
     material = load_material(args.material)
     if getattr(args, "passes", None) is not None:
         # override the profile's pass count without mutating the cached profile
