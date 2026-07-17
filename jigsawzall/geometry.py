@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import random
+import warnings
 from dataclasses import dataclass, field
 from dataclasses import replace as dc_replace
 from typing import Iterable
@@ -1070,8 +1071,12 @@ def absorb_letter_slivers(pieces: list[dict], letter_union, cfg: PuzzleConfig):
     tabless orphan. If it's small, not a letter counter, and borders a
     letter, fold it into that letter piece (fills the notch; the letter
     grows by a sliver). Counters (fragments inside a glyph hole) are left
-    alone — they are intentional drop-in pieces."""
-    if letter_union is None:
+    alone — they are intentional drop-in pieces.
+
+    Vertex-grid opts out entirely: there a letter piece must stay the pure glyph
+    outline (never fused with a background scrap), so a stray sliver stays its
+    own piece / is caught by the validity check instead."""
+    if letter_union is None or getattr(cfg, "vertex_grid", False):
         return pieces
     glyphs = (
         list(letter_union.geoms)
@@ -2470,7 +2475,8 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
             changed = False
             polys.sort(key=lambda p: p.area)
             for i, a in enumerate(polys):
-                if not _sliver(a):
+                is_nub = _border_nub(a)
+                if not (_sliver(a) or is_nub):
                     continue
                 # neighbor with the longest shared boundary — buffer-based so
                 # curved / tab-spliced edges (float-imperfect) still register.
@@ -2485,6 +2491,11 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     u = unary_union([a, b])
                     if u.geom_type != "Polygon" or _oversized(u):
                         continue  # never merge into an oversized piece
+                    # A border nub must merge into a border-adjacent neighbour so
+                    # the union OWNS >=20mm of edge; merging it into an interior
+                    # piece would just hide the same short stub, so skip that.
+                    if is_nub and _border_nub(u):
+                        continue
                     if best is None or shared > best[1]:
                         best = (j, shared, u)
                 if best:
@@ -2616,16 +2627,51 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     max_dim = 60 * ppm
     min_short = 14 * ppm  # a cell narrower than this ANYWHERE is a sliver
     min_area = (16 * ppm) ** 2  # ... or smaller than this is a nub
+    # Rule A "blob": a piece is a must-split blob when it is big in BOTH oriented
+    # directions at once — TALL enough to span the letter row AND FAT
+    # perpendicular to that span. This catches a full-height gap piece (e.g. an
+    # un-split O->J region) whose area is only moderate (~1.7-2.2k mm^2), so the
+    # area test below misses it, yet is clearly a chunky 2D blob rather than a
+    # thin vertical finger squeezing between two letters (which stays tall but
+    # narrow and is fine). Measured with the min-rotated-rectangle so it is
+    # orientation-invariant, not fooled by a diagonal piece.
+    blob_tall = 0.55 * ph  # spans > 55% of the panel height
+    blob_fat = 44 * ppm  # ... and its narrow oriented side is still this wide
+    # Rule B: every piece that touches the OUTER border must own at least this
+    # much of that border. A piece clinging to the edge by a sub-20mm stub is an
+    # awkward nub floating mid-margin (the "middle of the left side" case); a
+    # real edge cell always spans >=2 border nodes (~>=20mm).
+    min_border = 20 * ppm
+
+    def _oriented_minor(poly):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mrr = poly.minimum_rotated_rectangle
+            xs, ys = mrr.exterior.coords.xy
+            e = [math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(4)]
+            return min(e[0], e[1])
+        except Exception:
+            b = poly.bounds
+            return min(b[2] - b[0], b[3] - b[1])
 
     def _oversized(poly):
+        # Blob (Rule A): tall enough to span the row AND fat perpendicular.
+        b = poly.bounds
+        w, h = b[2] - b[0], b[3] - b[1]
+        if h > blob_tall and _oriented_minor(poly) >= blob_fat:
+            return True
         # Too big = large area AND either a fat short side (a big blob) or a long
         # max dimension (a long strip, e.g. a top-margin band spanning several
         # letters). A thin L-shaped letter-wrap has small area, so it passes.
-        b = poly.bounds
-        w, h = b[2] - b[0], b[3] - b[1]
         if poly.area <= max_area:
             return False
         return min(w, h) > min_side_big or max(w, h) > max_dim
+
+    def _border_nub(poly):
+        # Rule B: touches the outer border but owns < min_border of it.
+        c = poly.buffer(0.6).intersection(panel.boundary).length
+        return 0 < c < min_border
 
     def _sliver(poly):
         # Too small (a nub) OR too narrow everywhere (a strip). Narrowness via
@@ -2653,35 +2699,47 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         thin = sum(1 for p in surround if _thin_bridge(p))
         over = sum(1 for p in surround if _oversized(p))
         slv = sum(1 for p in surround if _sliver(p))
+        nub = sum(1 for p in surround if _border_nub(p))
         big = max((p.area for p in surround), default=0.0)
-        # Rank: durability first (no sub-4mm bridge), then no oversized piece,
-        # then no sliver, then smallest largest-piece as a final tie-break.
-        return (thin, over, slv, round(big, 1))
+        # Rank: durability first (no sub-4mm bridge), then no oversized/blob
+        # piece, then no sliver, then no sub-20mm border nub, then smallest
+        # largest-piece as a final tie-break.
+        return (thin, over, slv, nub, round(big, 1))
 
-    # Generate-and-test: try several seed VARIANTS x densities and keep the first
-    # fully-valid layout — no thin bridge, no oversized piece, and no sliver.
-    # absorb already merges slivers as hard as it can without creating an
-    # oversized piece; if one still survives, the layout is rejected and we move
-    # on to the next variant (like trying the next seed). Prefer sparser
-    # (lower-density) layouts. Some seeds just won't work — that's fine, most do.
-    # Fall back to the least-bad attempt if nothing is fully valid.
+    # Generate-and-test: sweep density low->high x seed VARIANTS and keep the
+    # first FULLY-valid layout (no thin bridge, no oversized/blob, no sliver, no
+    # sub-20mm border nub). Prefer sparser (lower-density) layouts. Some seeds
+    # just won't work fully — that's fine, most do; fall back to the least-bad.
+    #
+    # Escalating density adds seams: that is the only cure for a STRUCTURAL fault
+    # (a thin bridge or an un-split blob), but it strictly WORSENS slivers/nubs
+    # (more, smaller pieces). So once a density clears the structural faults
+    # (thin==0 and oversized==0), stop climbing — a higher density can only trade
+    # a clean-ish layout for a busier, sliverier one. This also bounds the work.
     best = None
     done = False
-    for density in (1, 2, 3, 4, 5):
-        for variant in range(4):
+    for density in (1, 2, 3, 4):
+        best_here = None
+        for variant in range(8):
             seams = gen_seams(density, variant)
             surround, counters, st = assemble(seams)
             sc = _score(surround, st)
-            if best is None or sc < best[0]:
-                best = (sc, surround, counters, st, density)
-            if sc[0] == 0 and sc[1] == 0 and sc[2] == 0:
+            if best_here is None or sc < best_here[0]:
+                best_here = (sc, surround, counters, st, density)
+            if sc[0] == 0 and sc[1] == 0 and sc[2] == 0 and sc[3] == 0:
                 done = True
                 break
+        if best is None or best_here[0] < best[0]:
+            best = best_here
         if done:
+            break
+        # structural faults cleared at this density -> don't climb further
+        if best_here[0][0] == 0 and best_here[0][1] == 0:
             break
     sc, surround, counters, stats, density = best
     stats["density"] = density
     stats["thin"], stats["oversized"], stats["sliver"] = sc[0], sc[1], sc[2]
+    stats["nub"] = sc[3]
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):

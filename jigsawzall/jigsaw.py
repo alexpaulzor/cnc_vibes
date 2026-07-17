@@ -96,11 +96,13 @@ def _apply_size_overrides(cfg, args):
         over["vertex_grid"] = True
         over["letter_aligned_grid"] = False
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
-        # Keep the tracking at the tab-fit minimum so letters stay as LARGE as
-        # fit the width — extra tracking shrinks the font (esp. for 6+ letters,
-        # which otherwise become tiny in a mostly-empty panel).
+        # Extra inter-letter tracking so there's real background between glyphs
+        # to seam through: without it, tight words (e.g. ALEX's big caps) leave
+        # gaps so narrow that any split makes a sub-4mm thin bridge, forcing the
+        # generator back to an un-split blobby layout. 10mm is the starting
+        # value; it does shrink the font a little for 6+ letter words.
         if getattr(args, "letter_gap_extra_mm", None) is None:
-            over["letter_gap_extra_mm"] = 0.0
+            over["letter_gap_extra_mm"] = 10.0
         # Size the panel to the letters' bbox + a uniform margin (>=30mm all
         # around) — not crammed, not forced to fill the whole stock.
         if getattr(args, "banner_h_mm", None) is None:
