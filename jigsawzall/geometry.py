@@ -2312,20 +2312,17 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         # (many caps), so the caps are what carve up any band left too big.
         return gap_seams + end_seams + primary_caps + extra_caps
 
-    # merge only genuinely small / thin-bbox surround slivers into a neighbor.
-    # (Do NOT use an erosion-split test: a large L-shaped piece that wraps a
-    # letter corner erodes into pieces yet is perfectly durable — that test
-    # cascaded and collapsed crowded words like KARSON.)
+    # Merge every sliver (too small OR too narrow) into its best neighbour, but
+    # NEVER via a merge that would create an oversized piece. Whatever can't be
+    # merged that way is left in place for the validity check to reject (-> the
+    # generate-and-test loop moves on to another seed/density).
     def absorb(polys):
-        min_a = (13 * ppm) ** 2
-        min_side = 10 * ppm
         changed = True
         while changed and len(polys) > 1:
             changed = False
             polys.sort(key=lambda p: p.area)
             for i, a in enumerate(polys):
-                bx = a.bounds
-                if a.area >= min_a and min(bx[2] - bx[0], bx[3] - bx[1]) >= min_side:
+                if not _sliver(a):
                     continue
                 # neighbor with the longest shared boundary — buffer-based so
                 # curved / tab-spliced edges (float-imperfect) still register.
@@ -2338,7 +2335,9 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
                     if shared <= 0:
                         continue
                     u = unary_union([a, b])
-                    if u.geom_type == "Polygon" and (best is None or shared > best[1]):
+                    if u.geom_type != "Polygon" or _oversized(u):
+                        continue  # never merge into an oversized piece
+                    if best is None or shared > best[1]:
                         best = (j, shared, u)
                 if best:
                     polys[best[0]] = best[2]
@@ -2467,6 +2466,8 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     max_area = (50 * ppm) ** 2
     min_side_big = 34 * ppm
     max_dim = 60 * ppm
+    min_short = 14 * ppm  # a cell narrower than this ANYWHERE is a sliver
+    min_area = (16 * ppm) ** 2  # ... or smaller than this is a nub
 
     def _oversized(poly):
         # Too big = large area AND either a fat short side (a big blob) or a long
@@ -2477,6 +2478,14 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
         if poly.area <= max_area:
             return False
         return min(w, h) > min_side_big or max(w, h) > max_dim
+
+    def _sliver(poly):
+        # Too small (a nub) OR too narrow everywhere (a strip). Narrowness via
+        # erosion so it is rotation-invariant — the piece is flagged only if its
+        # THICKEST part is under min_short (a fat elbow on an L-piece survives).
+        if poly.area < min_area:
+            return True
+        return poly.buffer(-min_short / 2).is_empty
 
     def _thin_bridge(poly):
         # Erode by half the 4mm floor. Flags a background piece that would snap:
@@ -2495,30 +2504,36 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins):
     def _score(surround, st):
         thin = sum(1 for p in surround if _thin_bridge(p))
         over = sum(1 for p in surround if _oversized(p))
+        slv = sum(1 for p in surround if _sliver(p))
         big = max((p.area for p in surround), default=0.0)
-        # Rank: durability first (no sub-4mm bridge), then how many pieces bust
-        # the size band, then the AREA of the single largest piece — so among
-        # otherwise-equal layouts we keep the one whose biggest piece is smallest.
-        return (thin, over, round(big, 1))
+        # Rank: durability first (no sub-4mm bridge), then no oversized piece,
+        # then no sliver, then smallest largest-piece as a final tie-break.
+        return (thin, over, slv, round(big, 1))
 
-    # Generate-and-test: sweep densities LOW -> HIGH and keep the SPARSEST layout
-    # that is fully valid (durable + no oversized piece). Fewest seams that still
-    # keep every piece in the size band = reasonable-size pieces without over-
-    # slicing a region into tiny awkward bits (now that corner junctions let low
-    # densities partition cleanly). If none is fully valid, fall back to the
-    # best-scoring attempt (fewest thin, then fewest oversized, then smallest max).
+    # Generate-and-test: try several seed VARIANTS x densities and keep the first
+    # fully-valid layout — no thin bridge, no oversized piece, and no sliver.
+    # absorb already merges slivers as hard as it can without creating an
+    # oversized piece; if one still survives, the layout is rejected and we move
+    # on to the next variant (like trying the next seed). Prefer sparser
+    # (lower-density) layouts. Some seeds just won't work — that's fine, most do.
+    # Fall back to the least-bad attempt if nothing is fully valid.
     best = None
+    done = False
     for density in (1, 2, 3, 4, 5):
-        seams = gen_seams(density)
-        surround, counters, st = assemble(seams)
-        sc = _score(surround, st)
-        if best is None or sc < best[0]:
-            best = (sc, surround, counters, st, density)
-        if sc[0] == 0 and sc[1] == 0:
+        for variant in range(4):
+            seams = gen_seams(density, variant)
+            surround, counters, st = assemble(seams)
+            sc = _score(surround, st)
+            if best is None or sc < best[0]:
+                best = (sc, surround, counters, st, density)
+            if sc[0] == 0 and sc[1] == 0 and sc[2] == 0:
+                done = True
+                break
+        if done:
             break
     sc, surround, counters, stats, density = best
     stats["density"] = density
-    stats["thin"], stats["oversized"] = sc[0], sc[1]
+    stats["thin"], stats["oversized"], stats["sliver"] = sc[0], sc[1], sc[2]
 
     pieces = {}
     for idx, poly in enumerate(surround + counters):
