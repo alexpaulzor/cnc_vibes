@@ -122,6 +122,12 @@ def _apply_size_overrides(cfg, args):
 def _add_size_override_flags(sub):
     """Attach the shared banner-sizing override flags to a subparser."""
     sub.add_argument(
+        "--logo",
+        default=None,
+        help="path to a black-ink logo PNG; tiles the wavy grid around the "
+        "artwork (ring -> crescents + glyphs) instead of rendering --word text",
+    )
+    sub.add_argument(
         "--panel-mm",
         type=float,
         default=None,
@@ -465,31 +471,62 @@ def render_gcode_previews(
 
 
 def cmd_preview(args):
-    cfg = fit_config(
-        args.word.upper(), _apply_size_overrides(_config_for_size(args.size), args)
+    base = _apply_size_overrides(_config_for_size(args.size), args)
+    logo = getattr(args, "logo", None)
+    if logo:
+        from dataclasses import replace
+        from geometry import logo_letter_union
+
+        # logo plaques default to a full 300x150 stock unless the user overrides
+        base = replace(
+            base,
+            panel_mm=args.panel_mm or 300.0,
+            panel_h_mm=args.panel_h_mm or 150.0,
+        )
+        _, cfg = logo_letter_union(logo, base)  # fitted panel for rendering
+        word = "logo"
+    else:
+        cfg = fit_config(args.word.upper(), base)
+        word = args.word.upper()
+    pieces, stats = generate_pieces(
+        word, args.seed, base if logo else cfg, logo_path=logo
     )
-    word = args.word.upper()
-    pieces, stats = generate_pieces(word, args.seed, cfg)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
-    out = FIG_DIR / f"preview_{args.size}_{word.lower()}_seed{args.seed}.png"
+    stem = Path(logo).stem.lower() if logo else word.lower()
+    out = FIG_DIR / f"preview_{args.size}_{stem}_seed{args.seed}.png"
     fw = cfg.puzzle_w_px / cfg.px_per_mm
     fh = cfg.puzzle_h_px / cfg.px_per_mm
-    title = f"{word} jigsaw preview — {args.size} ({fw:.0f}x{fh:.0f}mm), {len(pieces)} pieces"
+    label = stem if logo else word
+    title = f"{label} jigsaw preview — {args.size} ({fw:.0f}x{fh:.0f}mm), {len(pieces)} pieces"
     render_preview(pieces, cfg, title, out)
     n_cells = sum(1 for p in pieces if p["kind"] == "cell")
     n_letters = len(pieces) - n_cells
-    print(f"pieces: {len(pieces)} ({n_cells} cells + {n_letters} letters)")
+    print(f"pieces: {len(pieces)} ({n_cells} cells + {n_letters} shapes)")
     print(f"tabs: {stats}")
     print(f"-> {out}")
 
 
 def cmd_cut(args):
-    cfg = fit_config(
-        args.word.upper(), _apply_size_overrides(_config_for_size(args.size), args)
-    )
+    base = _apply_size_overrides(_config_for_size(args.size), args)
+    logo = getattr(args, "logo", None)
+    if logo:
+        from dataclasses import replace
+        from geometry import logo_letter_union
+
+        base = replace(
+            base,
+            panel_mm=args.panel_mm or 300.0,
+            panel_h_mm=args.panel_h_mm or 150.0,
+        )
+        _, cfg = logo_letter_union(logo, base)  # fitted panel for emit/coords
+        word = Path(logo).stem.lower()
+    else:
+        cfg = fit_config(args.word.upper(), base)
+        word = args.word.upper()
     _apply_origin(cfg, args.origin)
-    word = args.word.upper()
-    pieces, stats = generate_pieces(word, args.seed, cfg)
+    pieces, stats = generate_pieces(
+        "logo" if logo else word, args.seed, base if logo else cfg, logo_path=logo
+    )
     material = load_material(args.material)
     if getattr(args, "passes", None) is not None:
         # override the profile's pass count without mutating the cached profile

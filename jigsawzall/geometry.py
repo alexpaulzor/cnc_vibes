@@ -1115,7 +1115,147 @@ def absorb_letter_slivers(pieces: list[dict], letter_union, cfg: PuzzleConfig):
     return kept
 
 
-def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict], dict]:
+def logo_letter_union(path: str, cfg: PuzzleConfig):
+    """Extract a black-ink logo PNG into a puzzle 'letter_union' for the wavy-grid
+    path. The big circle/ring is thickened and sliced into left/top/bottom
+    crescents (each a separate piece, clipped clear of the letters); the wordmark
+    glyphs come through as their own pieces. Returns (letter_union, cfg) where cfg
+    has the panel fitted to the logo bbox + margin (within the stock bounds)."""
+    import cv2
+    import numpy as np
+    from dataclasses import replace
+    from shapely.affinity import scale as _sc, translate as _tr
+
+    ppm = cfg.px_per_mm
+    margin = (cfg.banner_margin_mm if cfg.banner_margin_mm else 26.0) * ppm
+
+    im = Image.open(path).convert("RGBA")
+    arr = np.array(im)
+    ink = ((arr[:, :, 3] > 128) & (arr[:, :, :3].mean(2) < 128)).astype(np.uint8) * 255
+    cnts, hier = cv2.findContours(ink, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    hier = hier[0]
+    polys = []
+    for c, h in zip(cnts, hier):
+        if h[3] != -1 or cv2.contourArea(c) < 40:
+            continue
+        ext = [(float(p[0][0]), float(p[0][1])) for p in c]
+        holes = []
+        j = h[2]
+        while j != -1:
+            if cv2.contourArea(cnts[j]) > 40:
+                holes.append([(float(p[0][0]), float(p[0][1])) for p in cnts[j]])
+            j = hier[j][0]
+        if len(ext) >= 3:
+            polys.append(Polygon(ext, holes).buffer(0))
+    ink_all = unary_union(polys)
+
+    # ring = the component with the largest interior hole; fit its two circles
+    big = max(polys, key=lambda p: p.area)
+    inner_ring = max(big.interiors, key=lambda r: Polygon(r).area)
+    (icx, icy), r_in = cv2.minEnclosingCircle(np.array(inner_ring.coords, np.float32))
+    (ocx, ocy), r_out = cv2.minEnclosingCircle(
+        np.array(big.exterior.coords, np.float32)
+    )
+    cx, cy = (icx + ocx) / 2, (icy + ocy) / 2
+
+    def disk(r):
+        return Point(cx, cy).buffer(max(1.0, r), resolution=128)
+
+    annulus = disk(r_out).difference(disk(r_in))
+    # letters = ink minus the ring stroke; keep real glyphs + the period
+    rest = ink_all.difference(annulus.buffer(4.0))
+    comps = list(rest.geoms) if rest.geom_type == "MultiPolygon" else [rest]
+    # Keep real glyphs; drop hairline ring-arc remnants left by the subtraction
+    # (open by 2px, then reject any piece that erodes away at 3px = thin arc).
+    letters = []
+    for g in comps:
+        if g.area <= 700:
+            continue
+        for gg in _poly_list_vg(g.buffer(-2.0).buffer(2.0)):
+            if gg.area > 700 and not gg.buffer(-3.0).is_empty:
+                letters.append(gg)
+    dot = min(
+        (g for g in polys if g.area < 400 and g.centroid.x > 0.9 * ink_all.bounds[2]),
+        key=lambda g: g.area,
+        default=None,
+    )
+    if dot is not None:
+        letters.append(dot)
+
+    # scale the whole logo (letters + ring) into the panel bounds
+    subj = unary_union(letters + [annulus])
+    b = subj.bounds
+    maxw = cfg.bounds_w_px - 2 * margin
+    maxh = cfg.bounds_h_px - 2 * margin
+    s = min(maxw / (b[2] - b[0]), maxh / (b[3] - b[1]))
+
+    def T(g):
+        g = _sc(g, s, s, origin=(b[0], b[1]))
+        return _tr(g, margin - b[0] * s, margin - b[1] * s)
+
+    letters = [T(g) for g in letters]
+    annulus = T(annulus)
+    cx, cy = annulus.centroid.x, annulus.centroid.y
+    ab = annulus.bounds
+    r_out = (ab[2] - ab[0]) / 2
+    inner2 = max(annulus.interiors, key=lambda r: Polygon(r).area)
+    r_in = (Polygon(inner2).bounds[2] - Polygon(inner2).bounds[0]) / 2
+    grow = max(0.0, (18.0 * ppm - (r_out - r_in)) / 2)
+    ring = disk(r_out + grow).difference(disk(max(4.0, r_in - grow)))
+
+    # slice into left/top/bottom crescents (image y is DOWN: 0=right, 90=down,
+    # 180=left, 270=up). Clip the right side (toward the letters) and keep gaps.
+    lu = unary_union(letters)
+    Rbig = r_out * 3
+
+    def _sector(a0, a1):
+        pts = [(cx, cy)]
+        for k in range(41):
+            t = math.radians(a0 + (a1 - a0) * k / 40)
+            pts.append((cx + Rbig * math.cos(t), cy + Rbig * math.sin(t)))
+        return Polygon(pts)
+
+    def _crescent(a0, a1):
+        p = ring.intersection(_sector(a0, a1)).difference(lu.buffer(3))
+        parts = [q for q in _poly_list_vg(p) if q.area > 200]
+        return max(parts, key=lambda q: q.area) if parts else None
+
+    crescents = [
+        c
+        for c in (_crescent(228, 312), _crescent(132, 228), _crescent(48, 132))
+        if c is not None
+    ]
+
+    letter_union = unary_union(letters + crescents)
+    # Final fit: the thickened crescents can exceed the pre-thicken bounds, so
+    # scale the whole assembly down to the stock bounds and re-seat at margin.
+    lb = letter_union.bounds
+    lw, lh = lb[2] - lb[0], lb[3] - lb[1]
+    maxw = cfg.bounds_w_px - 2 * margin
+    maxh = cfg.bounds_h_px - 2 * margin
+    fs = min(1.0, maxw / lw, maxh / lh)
+    letter_union = _sc(letter_union, fs, fs, origin=(lb[0], lb[1]))
+    lb = letter_union.bounds
+    letter_union = _tr(letter_union, margin - lb[0], margin - lb[1])
+    lb = letter_union.bounds
+    # Size the panel to the logo bbox + margin. Set panel_mm/panel_h_mm (not the
+    # _fit overrides) so the wavy grid's cols/rows tile the fitted panel, not the
+    # full stock bound.
+    fit_w_mm = min(cfg.panel_mm, (lb[2] + margin) / ppm)
+    fit_h_mm = min(cfg.panel_h_mm or cfg.panel_mm, (lb[3] + margin) / ppm)
+    cfg2 = replace(
+        cfg,
+        panel_mm=fit_w_mm,
+        panel_h_mm=fit_h_mm,
+        panel_w_px_fit=None,
+        panel_h_px_fit=None,
+    )
+    return letter_union, cfg2
+
+
+def generate_pieces(
+    word: str, seed: int, cfg: PuzzleConfig, logo_path: str | None = None
+) -> tuple[list[dict], dict]:
     """Full pipeline: render letter polygons, build cell pieces with
     shifted tabs, carve letter pockets, merge slivers, fuse split letter
     counters, round outer corners, append letters, absorb letter-pinched
@@ -1126,7 +1266,12 @@ def generate_pieces(word: str, seed: int, cfg: PuzzleConfig) -> tuple[list[dict]
     (1-indexed). stats is the tab-shifting stats dict.
     """
     word = word.upper()
-    if cfg.vertex_grid:
+    if logo_path:
+        # Logo mode: extract the artwork (ring -> crescents + glyphs) and tile the
+        # background with the wavy grid, carving the logo shapes as pieces.
+        letter_union, cfg = logo_letter_union(logo_path, cfg)
+        piece_polys, stats = build_pieces_with_shifted_tabs(seed, letter_union, cfg)
+    elif cfg.vertex_grid:
         if cfg.fit_to_text:
             cfg = _fit_panel_to_text(word, cfg)
         letter_union, _boxes, origins = letter_layout_spaced(word, cfg)
