@@ -52,6 +52,19 @@ class SpiralConfig:
     buffer_resolution: int = 16  # shapely quad_segs (round-join segs per quarter)
     rise_per_rev_mm: float = 40.0  # 3D lift per full revolution (flex limit)
 
+    # --- vertical ribs (radial fins that capture both ramps) ---
+    n_ribs: int = 6  # number of radial ribs
+    rib_offset_deg: float = 30.0  # azimuth of the first rib (avoid the seam at 0)
+    material_th_mm: float = 3.0  # MDF thickness -> capture-slot height & rib thickness
+    slot_fit_mm: float = 0.1  # added to slot size for a slip fit (kerf gives clearance)
+    rib_inner_r_mm: float = 10.0  # inner radius the rib reaches (toward the base disc)
+    rib_edge_margin_mm: float = 4.0  # rib material beyond the outermost ramp edge
+    rib_top_lip_mm: float = 6.0  # rib material above the highest capture slot
+    rib_tab_span_mm: tuple = (12.0, 22.0)  # radial [inner, outer] of the base-disc tab
+    rib_tab_depth_mm: float = (
+        4.0  # how far the base tab drops below z=0 (into the disc)
+    )
+
     # --- derived radii ---
     @property
     def top_inner_r(self) -> float:
@@ -189,6 +202,27 @@ def build_part(name: str, cfg: SpiralConfig) -> Polygon:
     else:
         raise ValueError(f"unknown part: {name!r} (expected 'top' or 'bottom')")
     return place(poly, cfg.margin_mm)
+
+
+# Assembly phase of each spiral (two-start helix: top offset 180 deg).
+ASSEMBLY_PHASE_RAD = {"bottom": 0.0, "top": math.pi}
+
+
+def crossing_rz(name: str, cfg: SpiralConfig, azimuth_rad: float):
+    """Where spiral `name` crosses a radial plane at the given physical azimuth,
+    in the assembled pot. Returns (r_center, z) for the ribbon centerline, or
+    None if the (one-revolution) spiral does not reach that azimuth. Used to
+    place capture slots in the ribs."""
+    r0, pitch, turns = _part_polar_params(name, cfg)
+    phase = ASSEMBLY_PHASE_RAD[name]
+    span = turns * 2.0 * math.pi
+    # winding angle theta such that theta + phase == azimuth (mod 2pi)
+    theta = (azimuth_rad - phase) % (2.0 * math.pi)
+    if theta > span + 1e-9:
+        return None
+    r = r0 + (pitch / (2.0 * math.pi)) * theta
+    z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))
+    return (r, z)
 
 
 # ---------------------------------------------------------------------------

@@ -149,6 +149,10 @@ def _exterior_coords(poly: Polygon) -> list[tuple[float, float]]:
     return [(float(x), float(y)) for x, y in poly.exterior.coords]
 
 
+def _ring_coords(ring) -> list[tuple[float, float]]:
+    return [(float(x), float(y)) for x, y in ring.coords]
+
+
 def emit_cut_gcode(
     parts: list[tuple[str, Polygon]],
     material: dict,
@@ -157,11 +161,13 @@ def emit_cut_gcode(
     feed_override: int | None = None,
     power_percent: float | None = None,
 ) -> str:
-    """Emit static-M3 cut GCode for one or more spiral parts.
+    """Emit static-M3 cut GCode for one or more parts.
 
-    Each part is a single simply-connected polygon; we cut its exterior ring,
-    with a front-loaded warmup wiggle at the start and `passes` repeats. Points
-    are decimated to cfg.min_segment_mm. Coordinates are already machine mm."""
+    For each part, interior holes (slots) are cut FIRST, then the outer profile
+    last, so the piece stays anchored to the sheet while its internal features
+    are cut. Every ring gets a front-loaded warmup wiggle and `passes` repeats;
+    points are decimated to cfg.min_segment_mm. Coordinates are already machine
+    mm."""
     laser = material["laser"]
     pct = power_percent if power_percent is not None else laser["power_percent"]
     power_s = int(round(pct * 10))
@@ -171,19 +177,19 @@ def emit_cut_gcode(
     warmup_mm = WARMUP_MS / 60000.0 * feed  # mm covered during the ramp at this feed
 
     extra = [
-        "orpot phase-1 spirals: cut flat, then lift an end to coil (flex test)",
-        "centerline cut of each ribbon exterior; kerf becomes clearance",
+        "orpot: two flat spiral ramps + radial ribs; assemble then lift/coil",
+        "holes (slots) cut first, outer profile last; kerf becomes clearance",
         "ASSUMES Z already at focal height in your WCS",
         f"warmup: {WARMUP_MS:.0f}ms = {warmup_mm:.1f}mm out-and-back at F{feed}",
     ]
     lines = _header(title=title, material_id=material["id"], extra=extra)
 
-    for name, poly in parts:
-        pts = decimate_min_segment(_exterior_coords(poly), cfg.min_segment_mm)
+    def cut_ring(pts, label):
+        pts = decimate_min_segment(pts, cfg.min_segment_mm)
         if len(pts) < 3:
-            continue
+            return
         x0, y0 = pts[0]
-        lines.append(f"; --- {name} spiral ({len(pts)} pts) ---")
+        lines.append(f"; --- {label} ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"M3 S{power_s}")
         lines.append(f"F{feed}")
@@ -195,6 +201,12 @@ def emit_cut_gcode(
             for x, y in pts[1:]:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
+        lines.append("")
+
+    for name, poly in parts:
+        for i, interior in enumerate(poly.interiors):  # slots first
+            cut_ring(_ring_coords(interior), f"{name} slot {i + 1}")
+        cut_ring(_exterior_coords(poly), f"{name} profile")  # outer last
         lines.append("")
 
     lines += ["G0 X0 Y0", ""]
@@ -304,14 +316,17 @@ def render_assembly_sketch(
     base_r: float,
     az_deg: float = 32.0,
     el_deg: float = 22.0,
+    ribs: list[dict] | None = None,
 ) -> Path:
     """Quick 3D wireframe sketch of the assembled pot: each spiral's inner/outer
-    rails plus ribbon rungs, and the base disc. Depth-sorted painter's order.
-    Colors distinguish the two spirals. Vertical ribs are not drawn yet."""
+    rails plus ribbon rungs, the base disc, and (optionally) the vertical ribs
+    with their capture slots. Depth-sorted painter's order; colors distinguish
+    the two spirals and the ribs."""
     palette = {
         "bottom": (184, 118, 58),  # warm ochre
         "top": (176, 48, 32),  # brick red
     }
+    rib_color = (70, 100, 150)  # steel blue
     rung_fade = 0.55  # rungs drawn lighter than rails
 
     # Collect drawable segments as (depth, (u1,v1), (u2,v2), color, width).
@@ -353,6 +368,12 @@ def render_assembly_sketch(
         # Rails on top.
         add_polyline(inner, color, 2)
         add_polyline(outer, color, 2)
+
+    # Vertical ribs (exterior outline + capture-slot holes).
+    for rib in ribs or []:
+        add_polyline(rib["exterior"], rib_color, 2)
+        for hole in rib["holes"]:
+            add_polyline(hole, lighten(rib_color, 0.3), 1)
 
     # Screen transform: fit all segment endpoints into a padded canvas.
     us = [u for _, (u, _), _, _, _ in segs] + [u for _, _, (u, _), _, _ in segs]

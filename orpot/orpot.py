@@ -32,13 +32,18 @@ from emit import (  # noqa: E402
     render_preview,
 )
 from spiral import SpiralConfig, build_part, part_helix  # noqa: E402
+from ribs import rib_azimuths, rib_3d, build_all_ribs, base_disc_slots  # noqa: E402
 
 BUILD_DIR = SCRIPT_DIR / "build"
 FIG_DIR = SCRIPT_DIR / "figs"
 
 
 def _add_geometry_args(sub: argparse.ArgumentParser) -> None:
-    sub.add_argument("--part", choices=["top", "bottom", "both"], default="both")
+    sub.add_argument(
+        "--part",
+        choices=["top", "bottom", "ribs", "both", "all"],
+        default="all",
+    )
     sub.add_argument(
         "--inner-dia",
         type=float,
@@ -113,9 +118,45 @@ def _config_from_args(args) -> SpiralConfig:
     )
 
 
-def _parts_for(part: str, cfg: SpiralConfig) -> list[tuple[str, "object"]]:
-    names = ["top", "bottom"] if part == "both" else [part]
-    return [(n, build_part(n, cfg)) for n in names]
+def _bottom_with_slots(cfg: SpiralConfig):
+    """Bottom spiral (base disc + ramp) with the rib base-tab slots cut into the
+    disc, placed into positive coords."""
+    from spiral import build_bottom_spiral, place
+
+    poly = build_bottom_spiral(cfg)
+    if cfg.n_ribs > 0:
+        for slot in base_disc_slots(cfg):
+            poly = poly.difference(slot)
+    return place(poly, cfg.margin_mm)
+
+
+def _placed_ribs(cfg: SpiralConfig):
+    """The N rib outlines (in s-z coords) each placed into positive coords,
+    laid out left-to-right for a single sheet."""
+    from spiral import place
+
+    raw = [
+        (f"rib{i + 1}", place(p, cfg.margin_mm))
+        for i, p in enumerate(build_all_ribs(cfg))
+    ]
+    return _layout_row(raw, gap=cfg.strip_w_mm)
+
+
+def _cut_groups(part: str, cfg: SpiralConfig):
+    """List of (group_name, [(part_name, polygon), ...]); each group becomes one
+    gcode file. Spirals are one part each; 'ribs' is all N ribs on one sheet."""
+    groups = {
+        "top": [("top", [("top", build_part("top", cfg))])],
+        "bottom": [("bottom", [("bottom", _bottom_with_slots(cfg))])],
+        "ribs": [("ribs", _placed_ribs(cfg))],
+    }
+    if part in groups:
+        return groups[part]
+    if part == "both":
+        return groups["top"] + groups["bottom"]
+    if part == "all":
+        return groups["top"] + groups["bottom"] + groups["ribs"]
+    raise ValueError(f"unknown part: {part!r}")
 
 
 def _layout_row(parts, gap: float):
@@ -143,7 +184,8 @@ def _describe(cfg: SpiralConfig) -> str:
 
 def cmd_preview(args) -> int:
     cfg = _config_from_args(args)
-    parts = _parts_for(args.part, cfg)
+    # Flatten all groups' parts into one image, laid out in a row.
+    parts = [p for _, group in _cut_groups(args.part, cfg) for p in group]
     if len(parts) > 1:
         parts = _layout_row(parts, gap=cfg.strip_w_mm)
     FIG_DIR.mkdir(exist_ok=True)
@@ -157,19 +199,23 @@ def cmd_preview(args) -> int:
 
 
 def cmd_view(args) -> int:
-    """3D wireframe sketch of the assembled pot (both spirals stacked)."""
+    """3D wireframe sketch of the assembled pot (both spirals + ribs)."""
     cfg = _config_from_args(args)
     # Two-start helix: offset the top spiral's azimuth by 180 deg.
     helices = [
         ("bottom", part_helix("bottom", cfg, phase_rad=0.0)),
         ("top", part_helix("top", cfg, phase_rad=math.pi)),
     ]
+    ribs = None
+    if not args.no_ribs:
+        ribs = [rib_3d(cfg, a) for a in rib_azimuths(cfg)]
     total_h = cfg.rise_per_rev_mm * cfg.turns  # interleaved: both share one rise
     FIG_DIR.mkdir(exist_ok=True)
     stem = FIG_DIR / "assembly"
+    rib_note = "no ribs" if args.no_ribs else f"{cfg.n_ribs} ribs"
     title = (
         f"orpot assembled (sketch): {_describe(cfg)}, "
-        f"rise {cfg.rise_per_rev_mm:g}mm/rev -> ~{total_h:g}mm tall"
+        f"rise {cfg.rise_per_rev_mm:g}mm/rev -> ~{total_h:g}mm tall, {rib_note}"
     )
     png = render_assembly_sketch(
         helices,
@@ -179,6 +225,7 @@ def cmd_view(args) -> int:
         base_r=cfg.base_r,
         az_deg=args.az,
         el_deg=args.el,
+        ribs=ribs,
     )
     print(f"-> {png}")
     return 0
@@ -188,13 +235,10 @@ def cmd_cut(args) -> int:
     cfg = _config_from_args(args)
     material = load_material(args.material)
     BUILD_DIR.mkdir(exist_ok=True)
-    FIG_DIR.mkdir(exist_ok=True)
 
-    # Each spiral is cut as a standalone piece (own file) for flex-testing.
-    names = ["top", "bottom"] if args.part == "both" else [args.part]
-    for name in names:
-        parts = [(name, build_part(name, cfg))]
-        title = f"orpot {name} spiral: {_describe(cfg)}"
+    # One gcode file per group (top / bottom / ribs). Ribs share a sheet.
+    for group_name, parts in _cut_groups(args.part, cfg):
+        title = f"orpot {group_name}: {_describe(cfg)}"
         gcode = emit_cut_gcode(
             parts,
             material,
@@ -203,12 +247,15 @@ def cmd_cut(args) -> int:
             feed_override=args.feed,
             power_percent=args.power,
         )
-        out = BUILD_DIR / f"cut_{name}_{args.material}.gcode"
+        out = BUILD_DIR / f"cut_{group_name}_{args.material}.gcode"
         out.write_text(gcode)
         laser_on = gcode.count("\nM3 ")
         print(f"-> {out}  ({len(gcode.splitlines())} lines, {laser_on} cut(s))")
         png, _ = render_preview(
-            parts, BUILD_DIR / f"cut_{name}_{args.material}", title, write_svg=False
+            parts,
+            BUILD_DIR / f"cut_{group_name}_{args.material}",
+            title,
+            write_svg=False,
         )
         print(f"-> {png}")
     return 0
@@ -234,6 +281,7 @@ def main() -> int:
     _add_geometry_args(vw)
     vw.add_argument("--az", type=float, default=32.0, help="view azimuth deg")
     vw.add_argument("--el", type=float, default=22.0, help="view elevation deg")
+    vw.add_argument("--no-ribs", action="store_true", help="omit the vertical ribs")
     vw.set_defaults(func=cmd_view)
 
     args = p.parse_args()

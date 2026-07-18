@@ -1,62 +1,72 @@
 # orpot — laser-cut orchid pot
 
-A 3mm-MDF orchid pot built from **two spirals that fit together with vertical
-ribs**. You cut each spiral flat, then lift one end and the ribbon flexes/twists
-up into a 3D coil (like a lifted paper party-spiral). The two coils nest into a
-pot: an open, airy wall (good for orchid root airflow) over a drained base.
+A 3mm-MDF orchid pot built from **two flat spiral ramps + vertical ribs**. Each
+spiral is cut flat; lifting an end lets the flexible MDF climb into a shallow
+coil. The two ramps interleave as a **two-start helix** (180° apart) and radial
+ribs hold them at their graduated heights — an open, airy wall (good for orchid
+root airflow) over a drained base.
 
-## Status — phase 1: the spirals
+## Design (settled)
 
-This first phase generates **only the two flat spirals**, meant for
-**flex-testing**: cut them, lift an end, and measure how tall the MDF coils
-before it cracks. That measured height then drives the *next* phase.
+- **Two flat spiral ramps**, one revolution each, staying parallel to the floor
+  and climbing **~40mm** total (the measured flex limit; `--rise`).
+- **Interleaved 180°** (two-start helix): bottom winds **out** from the 2in base
+  disc, top winds **in** from the rim; they're offset half a turn.
+- **6 radial ribs** (`--n-ribs`) with horizontal **capture slots** (material-
+  thickness tall × strip-width long) that the ramps thread through, held top and
+  bottom without glue. Each rib also has a tab that plugs into a slot in the
+  base disc. Because the ramps are 180° out of phase, each rib meets them at two
+  different heights → two slots per rib, distributed like a spiral staircase.
 
-**Deferred** (not built yet):
-- vertical ribs sized to the measured flex height, tab/slot into the spirals
-- the interlocking end-joint between the two spirals
+Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 2in
+(50.8mm). All CLI-overridable.
+
+Preview the assembled form with `orpot.py view` (see `figs/assembly*.png`).
+
+**Deferred:**
+- the interlocking end-joint between the two spiral ends
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
   pattern to ease the curl
 - an inner net-pot liner ledge
 
-## The two spirals
+## The parts
 
-Built in machine mm (Y-up), each part placed so all coordinates are positive.
+Built in machine mm (Y-up), each placed so all coordinates are positive. The
+laser cuts interior holes (slots, openings) first, then each outer profile last.
 
-- **top** — the rim: a constant-width ribbon whose outer edge starts at the
-  widest radius and winds **inward** one turn (a "washer that spirals in").
-  Default pitch = strip width, so the turns nest tightly.
-- **bottom** — the base: a solid disc (the footprint) merged with a ribbon that
-  spirals **outward** one turn to the same max radius as the top. The pitch is
-  sized so the ribbon's *outer edge* lands on that radius; the open gaps between
-  turns are the drainage / airflow.
-
-Defaults follow the initial brief: rim inner Ø 4in (101.6mm), 15mm strip →
-Ø131.6mm outside; base Ø 2in (50.8mm). All are CLI-overridable.
-
-Each part is a single simply-connected polygon (a one-revolution offset ribbon
-leaves a radial slit, so no interior hole), so the laser cuts one exterior ring
-to free it.
+- **top** — the rim ramp: a constant-width ribbon whose outer edge starts at the
+  widest radius and winds **inward** one turn. Its nested turns enclose the
+  central opening, which is cut out as a hole.
+- **bottom** — the base ramp: a solid disc (footprint, with rib-tab slots)
+  merged with a ribbon spiralling **outward** one turn to the same max radius.
+- **ribs** — the N radial fins (one sheet), each with two capture slots + a base
+  tab. Built in the (radius, height) plane from where each ramp crosses that
+  rib's azimuth.
 
 ## Usage
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# Preview outlines (PNG in figs/; --svg also writes an SVG). "both" lays the
-# two parts side by side.
-.venv/bin/python orpot.py preview --part both --svg
+# Preview flat outlines (PNG in figs/; --svg also writes an SVG).
+.venv/bin/python orpot.py preview --part all --svg
 
-# Emit GRBL laser G-code (build/*.gcode) + a PNG. Each spiral is its own file.
-.venv/bin/python orpot.py cut --part both --material mdf_3mm
+# 3D wireframe sketch of the assembled pot (figs/assembly.png).
+.venv/bin/python orpot.py view                 # --az/--el rotate; --no-ribs
+.venv/bin/python orpot.py view --az 0 --el 8   # side profile
+
+# Emit GRBL laser G-code (build/*.gcode) + PNGs. One file per group
+# (top / bottom / ribs); "all" emits all three.
+.venv/bin/python orpot.py cut --part all --material mdf_3mm
 
 # Tweak geometry:
-.venv/bin/python orpot.py cut --part top --strip-w 12 --top-pitch 12
-.venv/bin/python orpot.py cut --part bottom --base-dia 45 --bottom-pitch 30
+.venv/bin/python orpot.py cut --part ribs --n-ribs 4
+.venv/bin/python orpot.py view --rise 30 --strip-w 20
 ```
 
-Key flags: `--part {top,bottom,both}`, `--inner-dia`, `--strip-w`, `--base-dia`,
-`--turns`, `--top-pitch`, `--bottom-pitch`, `--seg`, `--material`, `--feed`,
-`--power`. See `orpot.py cut -h`.
+Key flags: `--part {top,bottom,ribs,both,all}`, `--inner-dia`, `--strip-w`,
+`--base-dia`, `--turns`, `--top-pitch`, `--bottom-pitch`, `--rise`, `--n-ribs`,
+`--seg`, `--material`, `--feed`, `--power`. See `orpot.py cut -h` / `view -h`.
 
 ## Cutting
 
@@ -65,20 +75,22 @@ this machine: GRBL laser mode (`$32=1`), **static M3** constant power at 100%
 (the weak diode under-fires on M4 dynamic), a ~1s out-and-back **warmup wiggle**
 at the start of every cut to cover the diode cold-start ramp, and per-material
 feed/passes from `profiles/laser_materials.yaml` (`mdf_3mm`: 350 mm/min ×
-2 passes). The G-code assumes Z is already at focal height in your WCS.
+2 passes). Interior holes (slots, openings) are cut before each outer profile so
+parts stay anchored. The G-code assumes Z is already at focal height in your WCS.
 
-⚠️ MDF smoke is heavy — air assist mandatory. The spiral is a long thin part;
-keep it supported so it doesn't shift between passes. Always cut a small test
-first.
+⚠️ MDF smoke is heavy — air assist mandatory. The spirals are long thin parts;
+keep them supported so they don't shift between passes. Always cut a small test
+first, and dry-fit the rib slots before committing.
 
 ## Layout
 
 ```
-orpot.py                       CLI (preview / cut)
-spiral.py                      geometry (SpiralConfig, build_top/bottom_spiral)
-emit.py                        G-code emission + PNG/SVG preview
+orpot.py                       CLI (preview / cut / view)
+spiral.py                      spiral geometry + 3D helix (SpiralConfig)
+ribs.py                        radial ribs, capture slots, base-disc slots
+emit.py                        G-code emission + PNG/SVG + 3D assembly sketch
 profiles/laser_materials.yaml  per-material laser params
 tests/test_spiral.py           geometry + G-code invariants
-figs/                          committed preview snapshots
+figs/                          committed preview + assembly snapshots
 build/                         G-code + preview outputs (gitignored)
 ```

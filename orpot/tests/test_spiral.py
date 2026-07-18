@@ -16,7 +16,13 @@ from shapely.geometry import Point, Polygon
 PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
 
-from emit import emit_cut_gcode, load_material  # noqa: E402
+from emit import decimate_min_segment, emit_cut_gcode, load_material  # noqa: E402
+from ribs import (  # noqa: E402
+    base_disc_slots,
+    build_all_ribs,
+    rib_azimuths,
+    rib_crossings,
+)
 from spiral import (  # noqa: E402
     SpiralConfig,
     build_bottom_spiral,
@@ -91,45 +97,77 @@ def test_gcode_conventions_and_bounds():
     parts = [(n, build_part(n, cfg)) for n in ("top", "bottom")]
     gcode = emit_cut_gcode(parts, material, "test", cfg)
 
+    # One cut ring per exterior + per interior hole (holes cut first, profile
+    # last). The top spiral's nested turns enclose the central opening -> a hole.
+    rings = sum(1 + len(poly.interiors) for _, poly in parts)
+    assert rings == 3  # top: profile + 1 hole; bottom: profile only
+
     assert "$32=1" in gcode
     assert ";MATERIAL: mdf_3mm" in gcode
     assert ";LASER_MODE: static" in gcode
     assert "\nM4 " not in gcode  # static M3 only, never M4 dynamic
-    assert gcode.count("\nM3 ") == 2  # one cut per part
-    assert gcode.count("\nM5") >= 2
+    assert gcode.count("\nM3 ") == rings  # one laser-on per ring
+    assert gcode.count("\nM5") >= rings
 
     # S value in [0, 1000]; feed present.
     s_vals = [int(m) for m in re.findall(r"M3 S(\d+)", gcode)]
     assert s_vals and all(0 <= s <= 1000 for s in s_vals)
-    assert s_vals == [1000, 1000]  # 100% power
+    assert all(s == 1000 for s in s_vals)  # 100% power
     assert "F350" in gcode  # mdf_3mm feed
 
-    # 2 passes per part (mdf_3mm).
-    assert gcode.count("; pass 2 of 2") == 2
+    # 2 passes per ring (mdf_3mm).
+    assert gcode.count("; pass 2 of 2") == rings
 
     # All coordinates positive (within the machine work area, origin corner).
     coords = re.findall(r"[XY](-?\d+\.\d+)", gcode)
     assert coords and all(float(c) >= 0.0 for c in coords)
 
 
-def test_gcode_respects_min_segment():
+def test_decimate_respects_min_segment():
+    """The decimation guarantee is on the ring geometry: every emitted segment
+    of a decimated ring is >= the floor (endpoints preserved). (The warmup
+    wiggle is generated separately and may pivot short at turnarounds, so we
+    test the decimator directly rather than parsing gcode.)"""
     cfg = SpiralConfig(min_segment_mm=0.4)
-    material = load_material("mdf_3mm")
-    parts = [("top", build_part("top", cfg))]
-    gcode = emit_cut_gcode(parts, material, "test", cfg)
-    # Reconstruct consecutive G1 points and check segment lengths. The warmup
-    # wiggle can create short pivots at the turnaround, so only check the main
-    # cut ring: segments should be >= floor minus a small numeric epsilon.
-    pts = []
-    for ln in gcode.splitlines():
-        m = re.match(r"G1 X(-?\d+\.\d+) Y(-?\d+\.\d+)", ln)
-        if m:
-            pts.append((float(m.group(1)), float(m.group(2))))
-    # Count how many segments fall below floor; allow a tiny few from wiggle
-    # turnarounds / the closing chord, but the vast majority must comply.
-    short = sum(
-        1
-        for a, b in zip(pts, pts[1:])
-        if math.hypot(b[0] - a[0], b[1] - a[1]) < cfg.min_segment_mm - 1e-6
-    )
-    assert short <= 3, f"too many sub-floor segments: {short}"
+    ring = list(build_part("top", cfg).exterior.coords)
+    dec = decimate_min_segment(ring, cfg.min_segment_mm)
+    seglens = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(dec, dec[1:])]
+    # Every interior segment complies; only the forced closing chord may be
+    # shorter (endpoints are always preserved).
+    short = [s for s in seglens[:-1] if s < cfg.min_segment_mm - 1e-6]
+    assert not short, f"sub-floor segments after decimation: {short}"
+
+
+def test_ribs_count_and_slots():
+    cfg = SpiralConfig(n_ribs=6)
+    ribs = build_all_ribs(cfg)
+    assert len(ribs) == 6
+    for rib in ribs:
+        assert rib.is_valid and rib.area > 0
+        # Each rib captures both ramps -> 2 slot holes.
+        assert len(rib.interiors) == 2
+    # One base-disc slot per rib.
+    assert len(base_disc_slots(cfg)) == 6
+
+
+def test_rib_slots_sit_at_ramp_crossings():
+    """Every capture-slot hole should be centered on a ramp crossing (r, z)."""
+    cfg = SpiralConfig(n_ribs=6)
+    for a, rib in zip(rib_azimuths(cfg), build_all_ribs(cfg)):
+        crossings = rib_crossings(cfg, a)
+        hole_centers = [Polygon(r).centroid for r in rib.interiors]
+        for _, r, z in crossings:
+            near = min(
+                math.hypot(c.x - r, c.y - z) for c in hole_centers
+            )
+            assert near < 1.0, f"no slot near crossing r={r:.1f} z={z:.1f}"
+
+
+def test_base_disc_slots_removed_from_bottom():
+    """The bottom piece with rib slots has less area than the plain disc+ramp."""
+    from shapely.ops import unary_union
+
+    cfg = SpiralConfig(n_ribs=6)
+    plain = build_bottom_spiral(cfg)
+    slotted = plain.difference(unary_union(base_disc_slots(cfg)))
+    assert slotted.area < plain.area
