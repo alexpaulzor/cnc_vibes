@@ -44,8 +44,8 @@ class SpiralConfig:
     strip_w_mm: float = 15.0  # ribbon width for both spirals
     base_dia_mm: float = 2.0 * MM_PER_INCH  # bottom spiral base disc Ø = 50.8
     turns: float = 1.0  # revolutions per spiral
-    top_pitch_mm: float = 15.0  # top ribbon radial advance per rev (inward)
-    bottom_pitch_mm: float | None = None  # None => auto: reach r_max in `turns`
+    top_pitch_mm: float | None = None  # None => symmetric span (winds in to base_r)
+    bottom_pitch_mm: float | None = None  # None => symmetric span (winds out to R_max)
     seg_mm: float = 0.5  # spiral point spacing (curve smoothness)
     min_segment_mm: float = 0.3  # gcode decimation floor (see emit.py)
     margin_mm: float = 8.0  # inset from origin so coords stay positive
@@ -64,6 +64,9 @@ class SpiralConfig:
     rib_tab_depth_mm: float = (
         4.0  # how far the base tab drops below z=0 (into the disc)
     )
+    rib_style: str = "spine"  # "spine" (narrow struts) or "panel" (solid fin)
+    rib_collar_margin_mm: float = 5.0  # material around each capture slot (spine)
+    rib_strut_w_mm: float = 8.0  # width of the connecting struts (spine)
 
     # --- derived radii ---
     @property
@@ -134,18 +137,25 @@ def _ribbon(centerline: LineString, width: float, quad_segs: int) -> Polygon:
 
 def _part_polar_params(name: str, cfg: SpiralConfig) -> tuple[float, float, float]:
     """Shared (r0, pitch, turns) for a part's centerline, so the flat cut and
-    the 3D helix are guaranteed to agree. pitch is signed (negative = inward)."""
+    the 3D helix are guaranteed to agree. pitch is signed (negative = inward).
+
+    Both spirals span the SAME centerline radial range [r_lo, r_hi], in opposite
+    directions, so each one's start radius equals the other's end radius (needed
+    for the interlocking end-joint):
+      bottom: r_lo -> r_hi (winds out)     top: r_hi -> r_lo (winds in)
+    where r_lo = base_r and r_hi = top_outer_r - strip_w/2 (outer edge on R_max).
+    The optional *_pitch_mm overrides break the symmetry if you really want it."""
+    r_lo = cfg.base_r
+    r_hi = cfg.top_outer_r - cfg.strip_w_mm / 2.0
+    span_pitch = (r_hi - r_lo) / cfg.turns  # radial advance per rev to span it once
     if name == "top":
-        r0 = cfg.top_outer_r - cfg.strip_w_mm / 2.0
-        pitch = -abs(cfg.top_pitch_mm)  # winds inward
+        r0 = r_hi
+        pitch = -(abs(cfg.top_pitch_mm) if cfg.top_pitch_mm is not None else span_pitch)
     elif name == "bottom":
-        r0 = cfg.base_r  # centerline on the disc edge -> solid union
-        r_end = cfg.top_outer_r - cfg.strip_w_mm / 2.0  # outer edge lands on R_max
-        if cfg.bottom_pitch_mm is not None:
-            pitch = abs(cfg.bottom_pitch_mm)
-        else:
-            pitch = (r_end - r0) / cfg.turns
-        pitch = abs(pitch)  # winds outward
+        r0 = r_lo
+        pitch = (
+            abs(cfg.bottom_pitch_mm) if cfg.bottom_pitch_mm is not None else span_pitch
+        )
     else:
         raise ValueError(f"unknown part: {name!r} (expected 'top' or 'bottom')")
     return r0, pitch, cfg.turns

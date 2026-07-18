@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import LineString, Polygon, box
 from shapely.ops import unary_union
 
 from spiral import SpiralConfig, crossing_rz
@@ -47,32 +47,48 @@ def rib_crossings(
 
 def build_rib(cfg: SpiralConfig, azimuth_rad: float) -> Polygon:
     """Flat cut outline of one rib (in the s-z plane), with capture-slot holes
-    and a base tab. z=0 is the floor; the tab drops to negative z."""
+    and a base tab. z=0 is the floor; the tab drops to negative z.
+
+    cfg.rib_style: "panel" = solid rectangular fin; "spine" (default) = a narrow
+    strut skeleton — a small collar of material around each capture slot, joined
+    by thin struts down to the base tab (minimal material, most open)."""
     crossings = rib_crossings(cfg, azimuth_rad)
     if not crossings:
         raise ValueError("rib azimuth crosses no ramp")
 
     half_w = cfg.strip_w_mm / 2.0
-    s_out = max(r for _, r, _ in crossings) + half_w + cfg.rib_edge_margin_mm
-    s_in = min(cfg.rib_inner_r_mm, min(r for _, r, _ in crossings) - half_w)
-    z_top = max(z for _, _, z in crossings) + cfg.rib_top_lip_mm
-
-    body = box(s_in, 0.0, s_out, z_top)
+    fit = cfg.slot_fit_mm
+    sh = (cfg.material_th_mm + fit) / 2.0  # half slot height (z)
+    sw = (cfg.strip_w_mm + fit) / 2.0  # half slot length (radial)
 
     # Base tab (plugs down into the base disc).
     t0, t1 = cfg.rib_tab_span_mm
-    t0 = max(t0, s_in)
-    t1 = min(t1, s_out)
     tab = box(t0, -cfg.rib_tab_depth_mm, t1, 0.0)
-    outline = unary_union([body, tab])
+    tab_top = ((t0 + t1) / 2.0, 0.0)
+
+    if cfg.rib_style == "panel":
+        s_out = max(r for _, r, _ in crossings) + half_w + cfg.rib_edge_margin_mm
+        s_in = min(cfg.rib_inner_r_mm, min(r for _, r, _ in crossings) - half_w)
+        z_top = max(z for _, _, z in crossings) + cfg.rib_top_lip_mm
+        outline = unary_union([box(s_in, 0.0, s_out, z_top), tab])
+    else:  # spine
+        m = cfg.rib_collar_margin_mm
+        hw = cfg.rib_strut_w_mm / 2.0
+        pieces = [tab]
+        # A collar (small rounded-corner box) of material around each slot.
+        nodes = []  # collar centers, to route struts through
+        for _, r, z in crossings:
+            pieces.append(box(r - sw - m, z - sh - m, r + sw + m, z + sh + m))
+            nodes.append((r, z))
+        # Route struts: base tab -> nodes ordered by height (low to high).
+        route = [tab_top] + sorted(nodes, key=lambda p: p[1])
+        for a, b in zip(route, route[1:]):
+            pieces.append(LineString([a, b]).buffer(hw, cap_style="round"))
+        outline = unary_union(pieces)
 
     # Capture slots: material-thickness tall x strip-width long, + slip fit.
-    fit = cfg.slot_fit_mm
-    sh = (cfg.material_th_mm + fit) / 2.0  # half slot height
-    sw = (cfg.strip_w_mm + fit) / 2.0  # half slot length (radial)
     for _, r, z in crossings:
-        slot = box(r - sw, z - sh, r + sw, z + sh)
-        outline = outline.difference(slot)
+        outline = outline.difference(box(r - sw, z - sh, r + sw, z + sh))
 
     if not isinstance(outline, Polygon):
         outline = max(outline.geoms, key=lambda g: g.area)
