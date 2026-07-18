@@ -91,20 +91,22 @@ def _apply_size_overrides(cfg, args):
         over["banner_target_h_mm"] = args.banner_h_mm
     if getattr(args, "font", None) is not None:
         over["font_path"] = args.font
-    # Vertex-grid: opt-in letter-anchored seam layout (reuses tabs/pockets/emit).
-    if getattr(args, "vertex_grid", False):
-        over["vertex_grid"] = True
+    # Vertex-grid / wave-grid: opt-in letter-anchored seam layouts (both reuse the
+    # same tabs/pockets/emit and the same banner sizing).
+    if getattr(args, "vertex_grid", False) or getattr(args, "wave_grid", False):
+        over["vertex_grid"] = getattr(args, "vertex_grid", False)
+        over["wave_grid"] = getattr(args, "wave_grid", False)
         over["letter_aligned_grid"] = False
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
         # Extra inter-letter tracking so there's real background between glyphs
         # to seam through: without it, tight words (e.g. ALEX's big caps) leave
-        # gaps so narrow that any split makes a sub-4mm thin bridge, forcing the
-        # generator back to an un-split blobby layout. When the user hasn't pinned
-        # a value, the generator searches spacing (10mm then 20mm) per density and
-        # keeps the sparsest layout; 10mm is just the seed value shown in cfg.
+        # gaps so narrow that any split makes a sub-4mm thin bridge. Vertex-grid
+        # searches spacing (10mm then 20mm) per density and keeps the sparsest;
+        # wave-grid uses a fixed 10mm. 10mm is the seed value shown in cfg.
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 10.0
-            over["vg_spacing_search"] = True
+            if getattr(args, "vertex_grid", False):
+                over["vg_spacing_search"] = True
         # Size the panel to the letters' bbox + a uniform margin (>=30mm all
         # around) — not crammed, not forced to fill the whole stock.
         if getattr(args, "banner_h_mm", None) is None:
@@ -197,6 +199,15 @@ def _add_size_override_flags(sub):
         help="opt-in vertex-grid layout: background tiled with letter-anchored "
         "seams (perpendicular caps + S-curve gap seams carrying the tab) instead "
         "of the rectangular grid. Same tabs/pockets/GCode as the default path",
+    )
+    sub.add_argument(
+        "--wave-grid",
+        dest="wave_grid",
+        action="store_true",
+        help="opt-in wave-grid layout: a regular 2*(n_letters+1) tiling — the "
+        "letters are fence-post column dividers and a seeded weaving horizontal "
+        "edge splits each column top/bottom. Reuses vertex-grid's curve/tab rules "
+        "but not its letter-vertex anchoring",
     )
 
 
