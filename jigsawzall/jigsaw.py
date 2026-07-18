@@ -130,6 +130,15 @@ def _apply_size_overrides(cfg, args):
         # round the outer panel corners (name-plate look) regardless of --size,
         # so the default (e.g. --size full) matches the banner preset.
         over["corner_radius_mm"] = 5.0
+        # Fat capsule tabs (5mm neck into a ~9.4mm stadium bulb) regardless of
+        # --size, so the name layout keeps the wide interlocks it's tuned for
+        # instead of the plain round knobs some size presets use. Only when the
+        # user hasn't pinned tab dims via --tab-stem-mm / --tab-bulb-elong-mm.
+        if getattr(args, "tab_stem_mm", None) is None:
+            over["tab_stem_w_px"] = 25.0
+        if getattr(args, "tab_bulb_elong_mm", None) is None:
+            over["tab_bulb_elong_px"] = 25.0
+        over["tab_circle_r_px"] = 11
     return replace(cfg, **over) if over else cfg
 
 
@@ -639,7 +648,7 @@ def main():
     # preview
     pv = subs.add_parser("preview", help="render a verification diagram only")
     pv.add_argument(
-        "--size", default="full", choices=("small", "mini", "banner", "micro", "full")
+        "--size", default="banner", choices=("small", "mini", "banner", "micro", "full")
     )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
@@ -649,7 +658,7 @@ def main():
     # cut
     cu = subs.add_parser("cut", help="emit cut GCode")
     cu.add_argument(
-        "--size", default="full", choices=("small", "mini", "banner", "micro", "full")
+        "--size", default="banner", choices=("small", "mini", "banner", "micro", "full")
     )
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
