@@ -1,0 +1,61 @@
+# Laser materials profile for orpot (orchid pot).
+#
+# Per-material cut parameters for a ~10W optical-power diode laser running
+# through a GRBL controller in laser mode ($32=1). All cuts use STATIC M3
+# constant power at 100%, with a ~1s out-and-back warmup lead-in to cover the
+# diode cold-start ramp. Static M3 (not M4 dynamic) because this weak diode
+# under-fires on M4.
+#
+# Values are STARTING POINTS carried over from the sibling jigsawzall tool's
+# calibration. They are not tuned for your exact machine, lens, bed height, or
+# air-assist. Always cut a small test before committing to a real part.
+#
+# Schema per entry:
+#   id                 stable string id (referenced from the CLI --material)
+#   family             "wood" | ...
+#   thickness_mm       material thickness in mm
+#   laser:
+#     power_percent    S value as percent of 1000 (100 -> S1000)
+#     feed_mm_per_min  cut feedrate at static M3 (slower = deeper)
+#     passes           cut-through passes
+#     notes            free-form safety / quality notes
+
+- id: mdf_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 350
+    passes: 2
+    notes: |
+      Primary orpot stock. Denser than plywood. Smoke is heavy — air assist
+      mandatory. Edges char darker than plywood; sand/wipe before finishing.
+      The spiral ribbon is a long thin part: keep it tabbed to the sheet or
+      support it so it doesn't shift on the second pass.
+
+- id: plywood_baltic_birch_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 600
+    passes: 1
+    notes: |
+      Reliable workhorse alternative to MDF. Air assist strongly recommended.
+      600mm/min single pass. Springier than MDF — may flex/curl more readily
+      for the lift-into-a-coil test.
+
+- id: cardboard_corrugated_3mm
+  family: paper
+  thickness_mm: 3.0
+  laser:
+    power_percent: 70
+    feed_mm_per_min: 1400
+    passes: 1
+    notes: |
+      Cheap stock for a first spiral flex-test / fit mockup. FIRE RISK — air
+      assist non-negotiable; never dwell over a stationary spot.
+
+# NEVER cut these with a laser — release toxic gases:
+#   - PVC, polycarbonate/Lexan, ABS, vinyl, galvanized metal, or anything of
+#     unknown composition.

@@ -1,0 +1,7 @@
+# Runtime deps for the orpot spiral generator (orpot.py + modules):
+shapely>=2.0      # spiral ribbon construction (buffer, union), polygon ops
+numpy>=1.24       # spiral point math
+Pillow>=10.0      # PNG preview rendering
+pyyaml>=6.0       # material profile loading (profiles/laser_materials.yaml)
+# Test runner:
+pytest>=7.0
