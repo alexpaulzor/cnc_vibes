@@ -127,6 +127,9 @@ def _apply_size_overrides(cfg, args):
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
             over["letter_clearance_mm"] = 4.0
+        # round the outer panel corners (name-plate look) regardless of --size,
+        # so the default (e.g. --size full) matches the banner preset.
+        over["corner_radius_mm"] = 5.0
     return replace(cfg, **over) if over else cfg
 
 
