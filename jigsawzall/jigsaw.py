@@ -91,11 +91,16 @@ def _apply_size_overrides(cfg, args):
         over["banner_target_h_mm"] = args.banner_h_mm
     if getattr(args, "font", None) is not None:
         over["font_path"] = args.font
-    # Vertex-grid / wave-grid: opt-in letter-anchored seam layouts (both reuse the
-    # same tabs/pockets/emit and the same banner sizing).
-    if getattr(args, "vertex_grid", False) or getattr(args, "wave_grid", False):
-        over["vertex_grid"] = getattr(args, "vertex_grid", False)
-        over["wave_grid"] = getattr(args, "wave_grid", False)
+    # Layout mode. Wave-grid is the DEFAULT for names (regular 2*(n+1) tiling);
+    # --vertex-grid opts into the organic letter-anchored layout instead. Logo
+    # mode has its own path, so it isn't defaulted here.
+    want_vertex = getattr(args, "vertex_grid", False)
+    want_wave = getattr(args, "wave_grid", False)
+    if not (want_vertex or want_wave) and not getattr(args, "logo", None):
+        want_wave = True
+    if want_vertex or want_wave:
+        over["vertex_grid"] = want_vertex
+        over["wave_grid"] = want_wave and not want_vertex
         over["letter_aligned_grid"] = False
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
         # Extra inter-letter tracking so there's real background between glyphs
@@ -105,7 +110,7 @@ def _apply_size_overrides(cfg, args):
         # wave-grid uses a fixed 10mm. 10mm is the seed value shown in cfg.
         if getattr(args, "letter_gap_extra_mm", None) is None:
             over["letter_gap_extra_mm"] = 10.0
-            if getattr(args, "vertex_grid", False):
+            if want_vertex:
                 over["vg_spacing_search"] = True
         # Size the panel to the letters' bbox + a uniform margin (>=30mm all
         # around) — not crammed, not forced to fill the whole stock.
