@@ -207,18 +207,23 @@ def build_part(name: str, cfg: SpiralConfig) -> Polygon:
 # turn and their ends interlock. Total height ~= rise_per_rev (one revolution).
 
 
-def part_helix(name: str, cfg: SpiralConfig) -> dict:
+def part_helix(name: str, cfg: SpiralConfig, phase_rad: float = 0.0) -> dict:
     """3D rails for one spiral in its ASSEMBLED position: a flat (horizontal)
     ribbon climbing rise_per_rev over one revolution. Returns dict of numpy
     (x,y,z) polylines 'center', 'inner', 'outer' (edges offset RADIALLY by
-    +/- strip_w/2, same height), plus 'theta' and 'z_base'."""
+    +/- strip_w/2, same height), plus 'theta' and 'z_base'.
+
+    phase_rad rotates the ribbon's AZIMUTH only (not its height/radius), so the
+    two spirals can be interleaved as a two-start helix with their starts/ends
+    offset (pass pi for a 180-degree offset)."""
     r0, pitch, turns = _part_polar_params(name, cfg)
     theta, r = _spiral_polar(r0, pitch, turns, cfg.seg_mm)
     z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))  # both start at the floor
+    az = theta + phase_rad  # azimuth offset for two-start interleaving
 
     def rail(r_off: float) -> np.ndarray:
         rr = r + r_off
-        return np.column_stack([rr * np.cos(theta), rr * np.sin(theta), z])
+        return np.column_stack([rr * np.cos(az), rr * np.sin(az), z])
 
     return {
         "theta": theta,

@@ -18,6 +18,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -158,7 +159,11 @@ def cmd_preview(args) -> int:
 def cmd_view(args) -> int:
     """3D wireframe sketch of the assembled pot (both spirals stacked)."""
     cfg = _config_from_args(args)
-    helices = [(n, part_helix(n, cfg)) for n in ("bottom", "top")]
+    # Two-start helix: offset the top spiral's azimuth by 180 deg.
+    helices = [
+        ("bottom", part_helix("bottom", cfg, phase_rad=0.0)),
+        ("top", part_helix("top", cfg, phase_rad=math.pi)),
+    ]
     total_h = cfg.rise_per_rev_mm * cfg.turns  # interleaved: both share one rise
     FIG_DIR.mkdir(exist_ok=True)
     stem = FIG_DIR / "assembly"
