@@ -2818,6 +2818,48 @@ def _letter_edge_point(solid, side, target, ppm):
     return (x, y), ((-1.0, 0.0) if side == "left" else (1.0, 0.0))
 
 
+def _vg_deflection(pts):
+    """Max perpendicular distance (px) of a polyline from its straight chord —
+    i.e. how bowed it is. 0 for a dead-straight line."""
+    if len(pts) < 3:
+        return 0.0
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    L = math.hypot(x1 - x0, y1 - y0) or 1.0
+    return max(
+        abs((x1 - x0) * (y0 - y) - (x0 - x) * (y1 - y0)) / L for x, y in pts[1:-1]
+    )
+
+
+def _vg_bow(pts, letters_solid, cfg, min_bow_mm=3.0, min_r_mm=5.5):
+    """Bow a near-straight seam into a gentle arc so NO cut runs dead
+    straight/horizontal/vertical, while keeping the arc radius >= min_r_mm (a
+    half-sine of amplitude A over chord L has apex radius ~ L^2/(A*pi^2), so A is
+    capped accordingly). Bows toward whichever side keeps more letter clearance,
+    shrinking if it would come within the min material bridge of a letter."""
+    ppm = cfg.px_per_mm
+    p0, p1 = pts[0], pts[-1]
+    L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+    if L < 3 * ppm:
+        return pts
+    amax = L * L / (min_r_mm * ppm * math.pi**2)  # amplitude giving radius=min_r
+    A = min(max(min_bow_mm * ppm, 0.12 * L), amax)
+    if A <= 0.5:
+        return pts
+    for _ in range(4):
+        c1 = wavy_points(p0, p1, A)
+        c2 = wavy_points(p0, p1, -A)
+        cand = (
+            c1
+            if letters_solid.distance(LineString(c1))
+            >= letters_solid.distance(LineString(c2))
+            else c2
+        )
+        if letters_solid.distance(LineString(cand)) >= cfg.letter_clearance_px:
+            return cand
+        A *= 0.65  # too close to a letter -> gentler bow
+    return cand
+
+
 def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=24):
     """Wave-grid layout: a regular 2 x (n_letters+1) background tiling that reuses
     vertex-grid's curved-seam + tab rules and iterate-until-valid scoring, but
@@ -2899,6 +2941,16 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=24):
     def gen_seams(variant):
         rng = random.Random(seed * 131 + variant * 9973)
         seams = []
+
+        def curved(pts):
+            # Guarantee every cut bows a little (never dead straight/H/V) while
+            # keeping radius >= 5mm; leave already-curved seams alone.
+            if pts is None:
+                return None
+            if _vg_deflection(pts) < 2.5 * ppm:
+                pts = _vg_bow(pts, letters_solid, cfg)
+            return pts
+
         # n vertical dividers: a top cap + a bottom cap per letter (letter between).
         for gi, g in enumerate(glyphs):
             minx, _mn, maxx, _mx = g.bounds
@@ -2920,7 +2972,7 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=24):
                         (a[0], a[1]),
                         (a[0], py - 20 if side == "top" else py + ph + 20),
                     ]
-                seams.append(pts)
+                seams.append(curved(pts))
         # n+1 horizontal seams: one per column, at a seeded height in a mid band.
         mid = py + ph / 2
         for col in range(n + 1):
@@ -2949,9 +3001,12 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=24):
                 gi, gj = col - 1, col
                 lo = max(solids[gi].bounds[1], solids[gj].bounds[1]) + 3 * ppm
                 hi = min(solids[gi].bounds[3], solids[gj].bounds[3]) - 3 * ppm
-                hh = min(max(h, lo), hi) if hi > lo else h
-                ea = _letter_edge_point(solids[gi], "right", hh, ppm)
-                eb = _letter_edge_point(solids[gj], "left", hh, ppm)
+                ha = min(max(h, lo), hi) if hi > lo else h
+                # different attach height on each letter -> the seam slopes/curves
+                hb = h + rng.choice((-1.0, 1.0)) * rng.uniform(6, 12) * ppm
+                hb = min(max(hb, lo), hi) if hi > lo else hb
+                ea = _letter_edge_point(solids[gi], "right", ha, ppm)
+                eb = _letter_edge_point(solids[gj], "left", hb, ppm)
                 if ea is None or eb is None:
                     continue
                 a, na = ea
@@ -2959,7 +3014,7 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=24):
                 pts = _vg_curve(a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm)
                 if pts is None:
                     pts = [(a[0], a[1]), (b[0], b[1])]
-            seams.append(pts)
+            seams.append(curved(pts))
         return seams
 
     # Iterate-until-valid over seed variants (no density dimension: the structure
