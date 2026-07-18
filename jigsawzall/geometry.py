@@ -113,6 +113,10 @@ class PuzzleConfig:
     # Wave-grid: regular 2*(n+1) tiling — reuses vertex-grid's curve/tab rules and
     # validity, but no letter-vertex anchoring (see build_pieces_wave_grid).
     wave_grid: bool = False
+    # Wave-grid rows: how many background rows to split each column into. 2 = a top
+    # and bottom row (default); 3 = above / between / below the letters. Piece count
+    # is wave_rows * (n_letters + 1).
+    wave_rows: int = 2
 
     # Letter-aligned banner only: size the panel to the text (within the panel_mm
     # x panel_h_mm bounds) instead of forcing the text to fill fixed dimensions.
@@ -2937,6 +2941,7 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
     letters_solid = unary_union(solids)
     background = panel.difference(letter_union)
     n = len(glyphs)
+    rows = max(2, int(getattr(cfg, "wave_rows", 2)))  # background rows per column
 
     def obstacles(attach):
         return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
@@ -2996,67 +3001,78 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
                 border_seam(a, na, cand, {gi: "a"}) or [(a[0], a[1]), (a[0], ymiss)]
             )
 
+        def side_pt(gi, side, h):
+            return _letter_edge_point(solids[gi], side, h, ppm)
+
+        # Row-boundary base heights: rows-1 seams evenly spread down the panel
+        # (rows==2 -> one mid seam; rows==3 -> two, above/below the letters).
+        base_levels = [py + ph * (k + 1) / rows for k in range(rows - 1)]
+
         if continuity:
             # CONTINUITY mode (soft-preferred): each letter gets one through-x for
-            # its vertical divider (top & bottom caps share it) and one through-
-            # height H for the row edge (its left and right seams share it), so the
-            # cut lines read as continuous through the letter. Adjacent letters get
-            # different H's, so the row edge still curves in the gaps.
+            # its vertical divider (top & bottom caps share it) and, per row level,
+            # one through-height its left and right seams share, so the cut lines
+            # read as continuous through the letter. Adjacent letters differ, so
+            # the row edges still curve in the gaps.
             caps = [_letter_caps(solids[gi], rng, ppm) for gi in range(n)]
-            Hs = []
-            for gi in range(n):
-                miny, maxy = solids[gi].bounds[1], solids[gi].bounds[3]
-                lo, hi = miny + 4 * ppm, maxy - 4 * ppm
-                h = mid + rng.uniform(-0.14, 0.14) * ph
-                Hs.append(min(max(h, lo), hi) if hi > lo else (miny + maxy) / 2)
             for gi in range(n):
                 top_pt, bot_pt = caps[gi]
                 seams.append(cap_seam(top_pt, (0.0, -1.0), bv_top, gi, py - 20))
                 seams.append(cap_seam(bot_pt, (0.0, 1.0), bv_bot, gi, py + ph + 20))
-
-            def side_pt(gi, side, h):
-                return _letter_edge_point(solids[gi], side, h, ppm)
-
-            ep = side_pt(0, "left", Hs[0])
-            if ep is not None:
-                a, na = ep
-                cand = [(b, nb) for b, nb in bv_left if abs(b[1] - a[1]) < 45 * ppm]
-                seams.append(
-                    curved(
-                        border_seam(a, na, cand, {0: "a"})
-                        or [(a[0], a[1]), (px - 20, a[1])]
+            # Hs[gi] = list of per-level through-heights for letter gi.
+            Hs = []
+            for gi in range(n):
+                miny, maxy = solids[gi].bounds[1], solids[gi].bounds[3]
+                lo, hi = miny + 4 * ppm, maxy - 4 * ppm
+                hl = []
+                for base in base_levels:
+                    h = base + rng.uniform(-0.05, 0.05) * ph
+                    hl.append(min(max(h, lo), hi) if hi > lo else (miny + maxy) / 2)
+                Hs.append(hl)
+            for L in range(rows - 1):
+                ep = side_pt(0, "left", Hs[0][L])
+                if ep is not None:
+                    a, na = ep
+                    cand = [(b, nb) for b, nb in bv_left if abs(b[1] - a[1]) < 45 * ppm]
+                    seams.append(
+                        curved(
+                            border_seam(a, na, cand, {0: "a"})
+                            or [(a[0], a[1]), (px - 20, a[1])]
+                        )
                     )
-                )
-            for gi in range(n - 1):
-                ea, eb = (
-                    side_pt(gi, "right", Hs[gi]),
-                    side_pt(gi + 1, "left", Hs[gi + 1]),
-                )
-                if ea is None or eb is None:
-                    continue
-                (a, na), (b, nb) = ea, eb
-                seams.append(
-                    curved(
-                        _vg_curve(a, na, b, nb, obstacles({gi: "a", gi + 1: "b"}), ppm)
-                        or [(a[0], a[1]), (b[0], b[1])]
+                for gi in range(n - 1):
+                    ea, eb = (
+                        side_pt(gi, "right", Hs[gi][L]),
+                        side_pt(gi + 1, "left", Hs[gi + 1][L]),
                     )
-                )
-            ep = side_pt(n - 1, "right", Hs[n - 1])
-            if ep is not None:
-                a, na = ep
-                cand = [(b, nb) for b, nb in bv_right if abs(b[1] - a[1]) < 45 * ppm]
-                seams.append(
-                    curved(
-                        border_seam(a, na, cand, {n - 1: "a"})
-                        or [(a[0], a[1]), (px + pw + 20, a[1])]
+                    if ea is None or eb is None:
+                        continue
+                    (a, na), (b, nb) = ea, eb
+                    seams.append(
+                        curved(
+                            _vg_curve(
+                                a, na, b, nb, obstacles({gi: "a", gi + 1: "b"}), ppm
+                            )
+                            or [(a[0], a[1]), (b[0], b[1])]
+                        )
                     )
-                )
+                ep = side_pt(n - 1, "right", Hs[n - 1][L])
+                if ep is not None:
+                    a, na = ep
+                    cand = [
+                        (b, nb) for b, nb in bv_right if abs(b[1] - a[1]) < 45 * ppm
+                    ]
+                    seams.append(
+                        curved(
+                            border_seam(a, na, cand, {n - 1: "a"})
+                            or [(a[0], a[1]), (px + pw + 20, a[1])]
+                        )
+                    )
             return seams
 
-        # FALLBACK mode: independent per-side caps and per-column row heights (used
-        # when continuity can't hit the exact 2*(n+1) count — e.g. a terminal A,
-        # whose open bottom needs its two feet capped independently). Robust; this
-        # is the layout that tiles cleanly for every name tested.
+        # FALLBACK mode: independent per-side caps and per-column, per-level row
+        # heights (used when continuity can't hit the exact rows*(n+1) count — e.g.
+        # a terminal A, whose open bottom needs its two feet capped independently).
         for gi, g in enumerate(glyphs):
             minx, _mn, maxx, _mx = g.bounds
             cx = (minx + maxx) / 2
@@ -3074,42 +3090,50 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
                     continue
                 a, na = ep
                 seams.append(cap_seam(a, na, bvs, gi, ymiss))
-        for col in range(n + 1):
-            h = mid + rng.uniform(-0.12, 0.12) * ph
-            if col == 0:
-                ep = _letter_edge_point(solids[0], "left", h, ppm)
-                if ep is None:
-                    continue
-                a, na = ep
-                cand = [(b, nb) for b, nb in bv_left if abs(b[1] - a[1]) < 45 * ppm]
-                pts = border_seam(a, na, cand, {0: "a"}) or [(a[0], a[1]), (px - 20, a[1])]
-            elif col == n:
-                ep = _letter_edge_point(solids[-1], "right", h, ppm)
-                if ep is None:
-                    continue
-                a, na = ep
-                cand = [(b, nb) for b, nb in bv_right if abs(b[1] - a[1]) < 45 * ppm]
-                pts = border_seam(a, na, cand, {n - 1: "a"}) or [
-                    (a[0], a[1]),
-                    (px + pw + 20, a[1]),
-                ]
-            else:
-                gi, gj = col - 1, col
-                lo = max(solids[gi].bounds[1], solids[gj].bounds[1]) + 3 * ppm
-                hi = min(solids[gi].bounds[3], solids[gj].bounds[3]) - 3 * ppm
-                ha = min(max(h, lo), hi) if hi > lo else h
-                hb = h + rng.choice((-1.0, 1.0)) * rng.uniform(6, 12) * ppm
-                hb = min(max(hb, lo), hi) if hi > lo else hb
-                ea = _letter_edge_point(solids[gi], "right", ha, ppm)
-                eb = _letter_edge_point(solids[gj], "left", hb, ppm)
-                if ea is None or eb is None:
-                    continue
-                (a, na), (b, nb) = ea, eb
-                pts = _vg_curve(a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm) or [
-                    (a[0], a[1]),
-                    (b[0], b[1]),
-                ]
-            seams.append(curved(pts))
+        for base in base_levels:
+            for col in range(n + 1):
+                h = base + rng.uniform(-0.06, 0.06) * ph
+                if col == 0:
+                    ep = _letter_edge_point(solids[0], "left", h, ppm)
+                    if ep is None:
+                        continue
+                    a, na = ep
+                    cand = [(b, nb) for b, nb in bv_left if abs(b[1] - a[1]) < 45 * ppm]
+                    pts = border_seam(a, na, cand, {0: "a"}) or [
+                        (a[0], a[1]),
+                        (px - 20, a[1]),
+                    ]
+                elif col == n:
+                    ep = _letter_edge_point(solids[-1], "right", h, ppm)
+                    if ep is None:
+                        continue
+                    a, na = ep
+                    cand = [
+                        (b, nb) for b, nb in bv_right if abs(b[1] - a[1]) < 45 * ppm
+                    ]
+                    pts = border_seam(a, na, cand, {n - 1: "a"}) or [
+                        (a[0], a[1]),
+                        (px + pw + 20, a[1]),
+                    ]
+                else:
+                    gi, gj = col - 1, col
+                    lo = max(solids[gi].bounds[1], solids[gj].bounds[1]) + 3 * ppm
+                    hi = min(solids[gi].bounds[3], solids[gj].bounds[3]) - 3 * ppm
+                    ha = min(max(h, lo), hi) if hi > lo else h
+                    hb = h + rng.choice((-1.0, 1.0)) * rng.uniform(6, 12) * ppm
+                    hb = min(max(hb, lo), hi) if hi > lo else hb
+                    ea = _letter_edge_point(solids[gi], "right", ha, ppm)
+                    eb = _letter_edge_point(solids[gj], "left", hb, ppm)
+                    if ea is None or eb is None:
+                        continue
+                    (a, na), (b, nb) = ea, eb
+                    pts = _vg_curve(
+                        a, na, b, nb, obstacles({gi: "a", gj: "b"}), ppm
+                    ) or [
+                        (a[0], a[1]),
+                        (b[0], b[1]),
+                    ]
+                seams.append(curved(pts))
         return seams
 
     # Iterate-until-valid over seed variants (no density dimension: the structure
@@ -3121,7 +3145,7 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
     # A column that fails to split shows up as a short count, so the count term
     # subsumes the "didn't divide" case. Continuity-aligned variants are tried
     # FIRST; if none tile cleanly we fall through to the robust fallback layout.
-    target = 2 * (n + 1)
+    target = rows * (n + 1)
 
     def wave_score(surround):
         thin = sum(1 for p in surround if _vg_thin_bridge(p, cfg))

@@ -87,6 +87,8 @@ def _apply_size_overrides(cfg, args):
         over["letter_clearance_mm"] = args.letter_clearance_mm
     if getattr(args, "letter_gap_extra_mm", None) is not None:
         over["letter_gap_extra_mm"] = args.letter_gap_extra_mm
+    if getattr(args, "wave_rows", None) is not None:
+        over["wave_rows"] = args.wave_rows
     if getattr(args, "banner_h_mm", None) is not None:
         over["banner_target_h_mm"] = args.banner_h_mm
     if getattr(args, "font", None) is not None:
@@ -120,9 +122,9 @@ def _apply_size_overrides(cfg, args):
         # height and let the panel WIDTH flex to the word (up to 300mm stock),
         # instead of shrinking 6-letter words short to fit a 150mm width.
         if getattr(args, "panel_mm", None) is None:
-            over["panel_mm"] = 300.0
+            over["panel_mm"] = 290.0
         if getattr(args, "panel_h_mm", None) is None:
-            over["panel_h_mm"] = 150.0
+            over["panel_h_mm"] = 145.0
         over["banner_letter_h_mm"] = 46.0
         # enforce the ~4mm min material bridge beside every tab (was 2.2mm=1*R)
         if getattr(args, "letter_clearance_mm", None) is None:
@@ -225,6 +227,14 @@ def _add_size_override_flags(sub):
         "letters are fence-post column dividers and a seeded weaving horizontal "
         "edge splits each column top/bottom. Reuses vertex-grid's curve/tab rules "
         "but not its letter-vertex anchoring",
+    )
+    sub.add_argument(
+        "--wave-rows",
+        dest="wave_rows",
+        type=int,
+        default=None,
+        help="wave-grid: number of background rows per column (default 2 = top/"
+        "bottom; 3 = above/between/below the letters). Piece count = rows*(n+1)",
     )
 
 
@@ -647,19 +657,15 @@ def main():
 
     # preview
     pv = subs.add_parser("preview", help="render a verification diagram only")
-    pv.add_argument(
-        "--size", default="banner", choices=("small", "mini", "banner", "micro", "full")
-    )
     pv.add_argument("--word", default="NORA")
     pv.add_argument("--seed", type=int, default=7)
     _add_size_override_flags(pv)
-    pv.set_defaults(func=cmd_preview)
+    # --size is retired: the name layout always uses the banner base (Arial Black,
+    # fat tabs, rounded corners) at 290x145mm; override via --panel-mm/--panel-h-mm.
+    pv.set_defaults(func=cmd_preview, size="banner")
 
     # cut
     cu = subs.add_parser("cut", help="emit cut GCode")
-    cu.add_argument(
-        "--size", default="banner", choices=("small", "mini", "banner", "micro", "full")
-    )
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
     cu.add_argument("--material", default="plywood_baltic_birch_3mm")
@@ -725,8 +731,7 @@ def main():
         action="store_true",
         help="also write an SVG of the toolpath (default off — gcode is the output)",
     )
-    cu.set_defaults(func=cmd_cut)
-
+    cu.set_defaults(func=cmd_cut, size="banner")
 
     args = p.parse_args()
     args.func(args)
