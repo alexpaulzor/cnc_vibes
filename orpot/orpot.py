@@ -24,8 +24,13 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from emit import emit_cut_gcode, load_material, render_preview  # noqa: E402
-from spiral import SpiralConfig, build_part  # noqa: E402
+from emit import (  # noqa: E402
+    emit_cut_gcode,
+    load_material,
+    render_assembly_sketch,
+    render_preview,
+)
+from spiral import SpiralConfig, build_part, part_helix  # noqa: E402
 
 BUILD_DIR = SCRIPT_DIR / "build"
 FIG_DIR = SCRIPT_DIR / "figs"
@@ -84,6 +89,12 @@ def _add_geometry_args(sub: argparse.ArgumentParser) -> None:
         default=SpiralConfig.margin_mm,
         help="inset from origin so coords stay positive, mm",
     )
+    sub.add_argument(
+        "--rise",
+        type=float,
+        default=SpiralConfig.rise_per_rev_mm,
+        help="3D lift per full revolution, mm (assembly/view only)",
+    )
 
 
 def _config_from_args(args) -> SpiralConfig:
@@ -97,6 +108,7 @@ def _config_from_args(args) -> SpiralConfig:
         seg_mm=args.seg,
         min_segment_mm=args.min_segment,
         margin_mm=args.margin,
+        rise_per_rev_mm=args.rise,
     )
 
 
@@ -140,6 +152,30 @@ def cmd_preview(args) -> int:
     print(f"-> {png}")
     if svg is not None:
         print(f"-> {svg}")
+    return 0
+
+
+def cmd_view(args) -> int:
+    """3D wireframe sketch of the assembled pot (both spirals stacked)."""
+    cfg = _config_from_args(args)
+    helices = [(n, part_helix(n, cfg)) for n in ("bottom", "top")]
+    total_h = cfg.rise_per_rev_mm * cfg.turns  # interleaved: both share one rise
+    FIG_DIR.mkdir(exist_ok=True)
+    stem = FIG_DIR / "assembly"
+    title = (
+        f"orpot assembled (sketch): {_describe(cfg)}, "
+        f"rise {cfg.rise_per_rev_mm:g}mm/rev -> ~{total_h:g}mm tall"
+    )
+    png = render_assembly_sketch(
+        helices,
+        cfg,
+        stem,
+        title,
+        base_r=cfg.base_r,
+        az_deg=args.az,
+        el_deg=args.el,
+    )
+    print(f"-> {png}")
     return 0
 
 
@@ -188,6 +224,12 @@ def main() -> int:
     ct.add_argument("--feed", type=int, default=None, help="override feed mm/min")
     ct.add_argument("--power", type=float, default=None, help="override power percent")
     ct.set_defaults(func=cmd_cut)
+
+    vw = sub.add_parser("view", help="3D wireframe sketch of the assembled pot")
+    _add_geometry_args(vw)
+    vw.add_argument("--az", type=float, default=32.0, help="view azimuth deg")
+    vw.add_argument("--el", type=float, default=22.0, help="view elevation deg")
+    vw.set_defaults(func=cmd_view)
 
     args = p.parse_args()
     return args.func(args)

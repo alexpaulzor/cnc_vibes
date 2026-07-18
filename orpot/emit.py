@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import numpy as np
 import yaml
 from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import Polygon
@@ -274,3 +275,106 @@ def render_preview(
     )
     img.save(png_path, "PNG", optimize=True)
     return png_path, (svg_path if write_svg else None)
+
+
+# ---------------------------------------------------------------------------
+# 3D assembly sketch (orthographic wireframe; no extra deps)
+# ---------------------------------------------------------------------------
+
+
+def _project(pts: np.ndarray, az_deg: float, el_deg: float) -> np.ndarray:
+    """Rotate 3D points about Z by az, then about X by el, and orthographically
+    keep (x, z) as screen (u, v up). Returns Nx3 array [u, v, depth]; depth is
+    the post-rotation Y (larger = further from camera)."""
+    az, el = math.radians(az_deg), math.radians(el_deg)
+    x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+    x1 = x * math.cos(az) - y * math.sin(az)
+    y1 = x * math.sin(az) + y * math.cos(az)
+    z1 = z
+    y2 = y1 * math.cos(el) - z1 * math.sin(el)
+    z2 = y1 * math.sin(el) + z1 * math.cos(el)
+    return np.column_stack([x1, z2, y2])
+
+
+def render_assembly_sketch(
+    helices: list[tuple[str, dict]],
+    cfg,
+    out_stem: Path,
+    title: str,
+    base_r: float,
+    az_deg: float = 32.0,
+    el_deg: float = 22.0,
+) -> Path:
+    """Quick 3D wireframe sketch of the assembled pot: each spiral's inner/outer
+    rails plus ribbon rungs, and the base disc. Depth-sorted painter's order.
+    Colors distinguish the two spirals. Vertical ribs are not drawn yet."""
+    palette = {
+        "bottom": (184, 118, 58),  # warm ochre
+        "top": (176, 48, 32),  # brick red
+    }
+    rung_fade = 0.55  # rungs drawn lighter than rails
+
+    # Collect drawable segments as (depth, (u1,v1), (u2,v2), color, width).
+    segs: list[tuple] = []
+
+    def add_polyline(p3: np.ndarray, color, width, step=1):
+        pr = _project(p3, az_deg, el_deg)
+        for i in range(0, len(pr) - step, step):
+            a, b = pr[i], pr[i + step]
+            segs.append(
+                (
+                    (a[2] + b[2]) / 2.0,
+                    (a[0], a[1]),
+                    (b[0], b[1]),
+                    color,
+                    width,
+                )
+            )
+
+    def lighten(c, f):
+        return tuple(int(v + (255 - v) * f) for v in c)
+
+    # Base disc outline (at z=0).
+    ang = np.linspace(0, 2 * np.pi, 128)
+    disc = np.column_stack(
+        [base_r * np.cos(ang), base_r * np.sin(ang), np.zeros_like(ang)]
+    )
+    add_polyline(disc, (120, 120, 120), 2)
+
+    for name, hx in helices:
+        color = palette.get(name, (80, 80, 80))
+        inner, outer = hx["inner"], hx["outer"]
+        # Ribbon rungs (inner->outer) every ~8mm of travel to read as a surface.
+        n = len(inner)
+        stride = max(1, n // 48)
+        for i in range(0, n, stride):
+            rung = np.vstack([inner[i], outer[i]])
+            add_polyline(rung, lighten(color, rung_fade), 1)
+        # Rails on top.
+        add_polyline(inner, color, 2)
+        add_polyline(outer, color, 2)
+
+    # Screen transform: fit all segment endpoints into a padded canvas.
+    us = [u for _, (u, _), _, _, _ in segs] + [u for _, _, (u, _), _, _ in segs]
+    vs = [v for _, (_, v), _, _, _ in segs] + [v for _, _, (_, v), _, _ in segs]
+    minu, maxu, minv, maxv = min(us), max(us), min(vs), max(vs)
+    pad = 30.0
+    span = max(maxu - minu, maxv - minv)
+    scale = (900 - 2 * pad) / span
+    W = int((maxu - minu) * scale + 2 * pad)
+    H = int((maxv - minv) * scale + 2 * pad) + 24  # room for the title
+
+    def to_px(u, v):
+        # v is up in world -> flip for image y.
+        return (pad + (u - minu) * scale, 24 + pad + (maxv - v) * scale)
+
+    img = Image.new("RGB", (W, H), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+    # Painter's order: far (large depth) first.
+    for _, p1, p2, color, width in sorted(segs, key=lambda s: -s[0]):
+        d.line([to_px(*p1), to_px(*p2)], fill=color, width=width)
+    d.text((pad, 6), title, fill=(20, 20, 20), font=_load_font(15))
+
+    png_path = out_stem.with_suffix(".png")
+    img.save(png_path, "PNG", optimize=True)
+    return png_path

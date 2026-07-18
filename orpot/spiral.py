@@ -50,6 +50,7 @@ class SpiralConfig:
     min_segment_mm: float = 0.3  # gcode decimation floor (see emit.py)
     margin_mm: float = 8.0  # inset from origin so coords stay positive
     buffer_resolution: int = 16  # shapely quad_segs (round-join segs per quarter)
+    rise_per_rev_mm: float = 40.0  # 3D lift per full revolution (flex limit)
 
     # --- derived radii ---
     @property
@@ -66,13 +67,13 @@ class SpiralConfig:
         return self.base_dia_mm / 2.0
 
 
-def _spiral_centerline(
+def _spiral_polar(
     r0: float, pitch: float, turns: float, seg_mm: float
-) -> LineString:
-    """Archimedean centerline r(theta) = r0 + (pitch / 2pi) * theta over
-    theta in [0, turns * 2pi]. `pitch` is the signed radial advance per full
-    revolution (negative spirals inward). Points are spaced ~seg_mm apart along
-    the (approximate) arc length so the buffered ribbon stays smooth."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sampled (theta, r) for an Archimedean spiral r(theta) = r0 + (pitch/2pi)
+    * theta over theta in [0, turns*2pi]. `pitch` is the signed radial advance
+    per revolution (negative spirals inward). Points are spaced ~seg_mm apart
+    along the (planar) arc length."""
     theta_max = turns * 2.0 * math.pi
     b = pitch / (2.0 * math.pi)  # dr/dtheta
 
@@ -88,6 +89,14 @@ def _spiral_centerline(
 
     theta = np.linspace(0.0, theta_max, n)
     r = r0 + b * theta
+    return theta, r
+
+
+def _spiral_centerline(
+    r0: float, pitch: float, turns: float, seg_mm: float
+) -> LineString:
+    """Planar centerline polyline for the flat cut."""
+    theta, r = _spiral_polar(r0, pitch, turns, seg_mm)
     xs = r * np.cos(theta)
     ys = r * np.sin(theta)
     return LineString(np.column_stack([xs, ys]))
@@ -110,17 +119,31 @@ def _ribbon(centerline: LineString, width: float, quad_segs: int) -> Polygon:
     return poly
 
 
+def _part_polar_params(name: str, cfg: SpiralConfig) -> tuple[float, float, float]:
+    """Shared (r0, pitch, turns) for a part's centerline, so the flat cut and
+    the 3D helix are guaranteed to agree. pitch is signed (negative = inward)."""
+    if name == "top":
+        r0 = cfg.top_outer_r - cfg.strip_w_mm / 2.0
+        pitch = -abs(cfg.top_pitch_mm)  # winds inward
+    elif name == "bottom":
+        r0 = cfg.base_r  # centerline on the disc edge -> solid union
+        r_end = cfg.top_outer_r - cfg.strip_w_mm / 2.0  # outer edge lands on R_max
+        if cfg.bottom_pitch_mm is not None:
+            pitch = abs(cfg.bottom_pitch_mm)
+        else:
+            pitch = (r_end - r0) / cfg.turns
+        pitch = abs(pitch)  # winds outward
+    else:
+        raise ValueError(f"unknown part: {name!r} (expected 'top' or 'bottom')")
+    return r0, pitch, cfg.turns
+
+
 def build_top_spiral(cfg: SpiralConfig) -> Polygon:
     """Rim ribbon: outer edge starts at top_outer_r and winds INWARD one turn.
     The centerline sits half a strip-width inside the outer edge and spirals
     in by top_pitch_mm per revolution."""
-    r_start = cfg.top_outer_r - cfg.strip_w_mm / 2.0
-    line = _spiral_centerline(
-        r0=r_start,
-        pitch=-abs(cfg.top_pitch_mm),  # inward
-        turns=cfg.turns,
-        seg_mm=cfg.seg_mm,
-    )
+    r0, pitch, turns = _part_polar_params("top", cfg)
+    line = _spiral_centerline(r0=r0, pitch=pitch, turns=turns, seg_mm=cfg.seg_mm)
     return _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
 
 
@@ -131,16 +154,8 @@ def build_bottom_spiral(cfg: SpiralConfig) -> Polygon:
     piece (a tail emerging from the disc). Pitch is sized so the ribbon's OUTER
     EDGE — not its centerline — reaches top_outer_r, matching the top spiral's
     widest radius. Override with bottom_pitch_mm."""
-    r_start = cfg.base_r  # centerline on the disc edge -> guaranteed solid union
-    r_end = cfg.top_outer_r - cfg.strip_w_mm / 2.0  # outer edge lands on R_max
-    span = r_end - r_start
-    pitch = cfg.bottom_pitch_mm if cfg.bottom_pitch_mm is not None else span / cfg.turns
-    line = _spiral_centerline(
-        r0=r_start,
-        pitch=abs(pitch),  # outward
-        turns=cfg.turns,
-        seg_mm=cfg.seg_mm,
-    )
+    r0, pitch, turns = _part_polar_params("bottom", cfg)
+    line = _spiral_centerline(r0=r0, pitch=pitch, turns=turns, seg_mm=cfg.seg_mm)
     ribbon = _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
     disc = Point(0.0, 0.0).buffer(cfg.base_r, quad_segs=cfg.buffer_resolution * 2)
     part = ribbon.union(disc)
@@ -174,3 +189,41 @@ def build_part(name: str, cfg: SpiralConfig) -> Polygon:
     else:
         raise ValueError(f"unknown part: {name!r} (expected 'top' or 'bottom')")
     return place(poly, cfg.margin_mm)
+
+
+# ---------------------------------------------------------------------------
+# 3D assembled form (for visualization + future rib/joint design)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+#
+# Model: the flat ribbon stays FLAT relative to the floor (horizontal). Lifting
+# it into a coil keeps each point's (r, theta) and its horizontal orientation,
+# and only adds height z(theta) = rise_per_rev * theta / 2pi. The ribbon is a
+# gently climbing horizontal ramp, NOT a banked/twisted wall.
+#
+# The two spirals are interleaved (a two-start helix), BOTH occupying z in
+# [0, rise] over one revolution -- they do not stack. The bottom winds OUT from
+# the 2in base disc; the top winds IN from the rim. They cross radially over the
+# turn and their ends interlock. Total height ~= rise_per_rev (one revolution).
+
+
+def part_helix(name: str, cfg: SpiralConfig) -> dict:
+    """3D rails for one spiral in its ASSEMBLED position: a flat (horizontal)
+    ribbon climbing rise_per_rev over one revolution. Returns dict of numpy
+    (x,y,z) polylines 'center', 'inner', 'outer' (edges offset RADIALLY by
+    +/- strip_w/2, same height), plus 'theta' and 'z_base'."""
+    r0, pitch, turns = _part_polar_params(name, cfg)
+    theta, r = _spiral_polar(r0, pitch, turns, cfg.seg_mm)
+    z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))  # both start at the floor
+
+    def rail(r_off: float) -> np.ndarray:
+        rr = r + r_off
+        return np.column_stack([rr * np.cos(theta), rr * np.sin(theta), z])
+
+    return {
+        "theta": theta,
+        "center": rail(0.0),
+        "inner": rail(-cfg.strip_w_mm / 2.0),
+        "outer": rail(+cfg.strip_w_mm / 2.0),
+        "z_base": 0.0,
+    }
