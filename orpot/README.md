@@ -51,6 +51,28 @@ the default. (This is separate from the Python `scad` command's generated file.)
   pattern to ease the curl — see the excellent `~/src/boxes` (boxes.py) library
 - an inner net-pot liner ledge
 
+## G-code (`svg2laser.py`)
+
+The design lives in `orpot.scad`; laser G-code is generated from its SVG export
+by `svg2laser.py` — a standalone CLI (no dependency on the rest of orpot) built
+for a **weak diode laser**. Unlike typical svg→gcode tools (which assume an
+instant-on CO2 laser: M4 dynamic power, cut-on-fire), it emits **static M3
+constant power** and a front-loaded **warmup lead-in** that traces back and forth
+over the start of each cut so the beam reaches full power before it bites. It also
+orders cuts interior-first / outer-boundary-last so the part stays anchored.
+
+```bash
+# 1. export the flat cut from OpenSCAD (MODE=cut) to SVG
+openscad -o build/orpot_cut.svg -D 'MODE="cut"' orpot.scad
+# 2. SVG -> GRBL diode-laser G-code (static M3 + 1s warmup, mdf_3mm profile)
+python svg2laser.py build/orpot_cut.svg -o build/orpot_cut.gcode --material mdf_3mm
+```
+
+`svg2laser.py` works on any polygonal SVG (straight segments exact; curves
+flattened), reads material feed/power/passes from `profiles/laser_materials.yaml`
+(`--material`) or via `--feed/--power/--passes`, and takes `--warmup-ms`,
+`--min-seg`, `--margin`, `--origin {corner,center}`. See `svg2laser.py -h`.
+
 ## The parts
 
 Built in machine mm (Y-up), placed so all coordinates are positive.
