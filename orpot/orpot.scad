@@ -13,8 +13,8 @@
 // planes. The wood stays flat, so a cross-section reads as stacked rings.
 
 /* ================= parameters ================= */
-MODE       = "assembled";  // "cut" or "assembled"
-// MODE = "cut";
+// MODE       = "assembled";  // "cut" or "assembled"
+MODE = "cut";
 
 IN         = 25.4;  // mm per inch
 stock      = 300;   // square stock edge
@@ -32,11 +32,8 @@ n_ribs     = 4;       // radial ribs (from the corner offcuts)
 pot_height = 3*IN;    // assembled height (also rib height in the flat pattern)
 rib_w      = 0.5*IN;  // rib strut/body thickness reference
 tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
-tab_thru   = thickness;      // tab pokes this far through the slot (then a step)
+tab_thru   = thickness;      // ring tab pokes this far through the ring slot
 shoulder   = 3;              // min material each side of a slot / step width
-hub_lap    = 8;              // how far the rib body overlaps inside the hub edge
-hub_gap    = 3;              // rib tab lifts the hub this far off the table
-hook_len   = 16;            // how far the rib's tab reaches in under the hub
 
 $fn = 180;
 
@@ -80,48 +77,65 @@ module disc2d() {
         circle(r = r_out);
         for (k = [0 : n_spirals-1])
             rotate([0, 0, k*360/n_spirals]) spiral_cut(kerf);
-        // ring slot (pre-offset by twist) for the rib top tab; hub slot for the
-        // rib's under-hub hook (locks the leg so spring load can't rotate it out).
+        // ring slot (pre-offset by twist) for the rib top tab; hub slot (1/2" long
+        // along the radius) for the rib's drop-in hook tab.
         for (i = [0 : n_ribs-1]) {
             a = i*360/n_ribs;
-            rotate([0, 0, a])         radial_slot(r_hub - hook_len + slot_w/2, slot_w);
+            rotate([0, 0, a])         radial_slot(r_hub - tab_w/2, tab_w);
             rotate([0, 0, a + twist]) radial_slot(ring_c, tab_w + fit);
         }
     }
 }
 
 /* ================= rib =================
-   In the rib's (x = radius s, y = height z) frame. A SOLID leg with a flat
-   bottom on the table (z=0) and the outside-bottom right-angle corner at
-   (r_out, 0). The body is filled up to the lowest arm shelf (no thin edges),
-   then columns rise to a flat SHELF at each arm crossing (flat arm lands flat).
-   The ring top-tab plugs into the ring slot. The inner-bottom sends a TAB in
-   under the centre hub (lifting it hub_gap off the table) ending in an up-HOOK
-   that locks into a hub slot, so the spiral's spring load can't rotate the leg
-   and pop it out. */
+   In the rib's (x = radius s, y = height z) frame. ONE solid polygon: a right
+   triangle (flat foot on the table, outer riser at r_out) with STAIRS cut from
+   the hypotenuse — a monotonic staircase, so the profile only ever steps DOWN
+   going inward (never a valley / brittle gap). Each tread is a flat shelf at an
+   arm's height. The ring top-tab plugs into the ring slot. At the inner-bottom a
+   TAB drops through the hub slot and hooks INWARD 3mm below (not up) to retain
+   the leg. */
 
-// Where the arms cross this rib's radial plane (azimuth a, deg): [r, z] each.
-function rib_crossings(a) = [
+// Sort a list of [r,z] by radius (ascending).
+function _sortr(v) = len(v) <= 1 ? v : let(
+    p  = v[floor(len(v)/2)][0],
+    lo = [for (x = v) if (x[0] <  p) x],
+    eq = [for (x = v) if (x[0] == p) x],
+    hi = [for (x = v) if (x[0] >  p) x]
+) concat(_sortr(lo), eq, _sortr(hi));
+
+// Arm crossings on this rib's plane, kept clear of the hub edge and ring wall.
+function rib_crossings(a) = _sortr([
     for (k = [0:n_spirals-1]) for (m = [0:ceil(turns)+1])
-        let(u = (a - k*360/n_spirals + m*360) / Theta_eff)
-        if (u > 0.03 && u < 0.995)
-            [ r_hub + (r_rim - r_hub)*u, pot_height*u ]
-];
+        let(u = (a - k*360/n_spirals + m*360) / Theta_eff,
+            r = r_hub + (r_rim - r_hub)*u)
+        if (u > 0.03 && u < 0.995 && r > r_hub + ramp_w/2 && r < r_rim - ramp_w/2)
+            [ r, pot_height*u ]
+]);
 
 module rib2d(a) {
-    cr   = rib_crossings(a);
-    zmin = min([ for (c = cr) c[1] ]);            // lowest shelf height
-    hin  = r_hub - hook_len;                       // inner tip of the under-hub tab
+    cr = rib_crossings(a);
+    n  = len(cr);
+    rc = r_hub - tab_w/2;                    // hub-slot / tab centre
+    // tread boundaries: inner edge, midpoints between crossings, then r_rim
+    b = concat([rc - 5],
+               [for (i = [1:max(n-1,0)]) (cr[i-1][0] + cr[i][0]) / 2],
+               [r_rim]);
+    // monotonic staircase top edge, outer -> inner
+    stair = concat(
+        [ [r_rim, pot_height] ],
+        [ for (i = [n-1 : -1 : 0]) each [
+            [ b[i+1], cr[i][1] - thickness/2 ],   // outer end of tread i
+            [ b[i],   cr[i][1] - thickness/2 ] ]  // inner end of tread i
+        ]
+    );
+    body = concat([ [rc - 5, 0], [r_out, 0], [r_out, pot_height] ], stair);
     union() {
-        // solid base fill up to the lowest shelf — no gaps / thin bottom edges
-        translate([r_hub - hub_lap, 0]) square([r_out - (r_hub - hub_lap), zmin - thickness/2]);
-        translate([r_rim, 0]) square([r_out - r_rim, pot_height]);   // outer riser + ring wall
-        for (c = cr)                                                 // column up to each shelf
-            translate([c[0] - (ramp_w+fit)/2, 0]) square([ramp_w+fit, c[1] - thickness/2]);
+        polygon(body);                                          // solid staircase leg
         translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
-        // under-hub tab (lifts the hub hub_gap off the table) + up-hook into hub slot
-        translate([hin, 0]) square([r_hub - hub_lap - hin + 0.01, hub_gap]);
-        translate([hin, 0]) square([slot_w, hub_gap + thickness]);
+        // hub tab: 5mm wide, drops 3mm below the disc, then hooks inward
+        translate([rc - 2.5, -thickness]) square([5, thickness + 0.01]);
+        translate([rc - 2.5 - 5, -thickness]) square([5 + 2.5, thickness]);
     }
 }
 
