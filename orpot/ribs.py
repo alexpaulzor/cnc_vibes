@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import LineString, Polygon, box
 from shapely.ops import unary_union
 
 from spiral import ASSEMBLY_PHASE_RAD, SpiralConfig, _part_polar_params, disc_radii
@@ -59,47 +59,39 @@ def rib_crossings(
     return out
 
 
+def _cubic(p0, p1, p2, p3, t):
+    mt = 1.0 - t
+    x = mt**3 * p0[0] + 3 * mt**2 * t * p1[0] + 3 * mt * t**2 * p2[0] + t**3 * p3[0]
+    y = mt**3 * p0[1] + 3 * mt**2 * t * p1[1] + 3 * mt * t**2 * p2[1] + t**3 * p3[1]
+    return (x, y)
+
+
 def build_rib(cfg: SpiralConfig, azimuth_rad: float) -> Polygon:
-    """Flat outline of one rib in the (s, z) plane.
-
-    A solid wedge from the hub up the cone slant to the rim, with a <=5mm tab at
-    each end (bottom -> hub slot, top -> rim-ring slot) and a ~notch_depth open
-    shelf where each arm crosses so the arm rests in it. Solid below the notches,
-    so they can't sever the rib; ribs differ only by notch positions."""
+    """Flat outline of one rib in the (s, z) plane — a constant-width S-curve
+    strut. Its centerline sweeps as an ogee from the rim ring (top, outer) down
+    and INWARD, tucking under the spiral's slope, to the hub (bottom, inner), so
+    the rib sits mostly on the inside and reads as a graceful S rather than a
+    block. A <=5mm tab at each end plugs into a rim-ring slot (top) and a hub
+    slot (bottom). Same shape for every rib."""
     r_hub, r_rim_in, r_outer, ring_center, rise = _disc_geom(cfg)
-    nd = cfg.rib_notch_depth_mm
-    h_min = cfg.rib_band_mm  # inner-plateau height (gives the bottom tab material)
     tab = min(cfg.rib_tab_len_mm, 5.0)
-    r_flat = r_hub + h_min * (r_rim_in - r_hub) / rise  # slant reaches h_min here
-
-    wedge = Polygon(
-        [
-            (r_hub, 0.0),  # inner floor
-            (r_outer, 0.0),  # outer floor (out under the ring)
-            (r_outer, rise),  # outer top at the rim
-            (r_rim_in, rise),  # flat top meets the slant where arms end
-            (r_flat, h_min),  # slant down to the inner plateau
-            (r_hub, h_min),  # inner plateau
-        ]
-    )
-    # Bottom tab: at the inner end, reaching INTO the solid hub (r < r_hub) and
-    # dropping below z=0 into the hub slot.
+    hw = cfg.rib_band_mm / 2.0  # strut half-width
     btw = cfg.rib_bot_tab_w_mm
-    bot_tab = box(r_hub - btw, -tab, r_hub, h_min)
-    # Top tab: at the ring center, rising above the rim into the ring slot.
     ttw = cfg.rib_top_tab_w_mm / 2.0
-    top_tab = box(ring_center - ttw, rise - h_min, ring_center + ttw, rise + tab)
-    outline = unary_union([wedge, bot_tab, top_tab])
 
-    # Open shelf-notches where each arm crosses (skip the hub/rim ends, handled by
-    # the tabs). Each removes a ~nd-deep bite from the top edge; the arm rests on
-    # the notch floor.
-    sw = (cfg.strip_w_mm + cfg.slot_fit_mm) / 2.0  # half notch width (radial)
-    eps = 1.0
-    for _, r, z in rib_crossings(cfg, azimuth_rad):
-        if not (eps < z < rise - eps):
-            continue
-        outline = outline.difference(box(r - sw, z - nd, r + sw, 1e4))
+    top = (ring_center, rise - hw)  # top end (round cap reaches the rim, z=rise)
+    bot = (r_hub, hw)  # bottom end (round cap reaches the floor, z=0)
+    # Ogee centerline: leave the rim heading straight down (outer), sweep inward
+    # across the middle, then drop into the hub (inner) — an S.
+    p1 = (ring_center, rise * 0.55)
+    p2 = (r_hub, rise * 0.45)
+    cl = [_cubic(top, p1, p2, bot, t) for t in np.linspace(0.0, 1.0, 80)]
+    strut = LineString(cl).buffer(hw, cap_style="round", join_style="round")
+
+    # Tabs at each end (<=5mm protrusion beyond the rim / below the hub floor).
+    top_tab = box(ring_center - ttw, rise - hw, ring_center + ttw, rise + tab)
+    bot_tab = box(r_hub - btw, -tab, r_hub + hw, hw)
+    outline = unary_union([strut, top_tab, bot_tab])
 
     if not isinstance(outline, Polygon):
         outline = max(outline.geoms, key=lambda g: g.area)

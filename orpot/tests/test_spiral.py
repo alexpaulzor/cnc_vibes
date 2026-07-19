@@ -89,16 +89,11 @@ def test_ribs_have_end_tabs_within_5mm():
         assert rise < maxy <= rise + 5.0 + 1e-6
 
 
-def test_rib_notches_at_arm_crossings():
+def test_rib_is_single_connected_strut():
+    """Every rib is one valid connected polygon (the S-strut didn't sever)."""
     cfg = SpiralConfig()
-    rise = cfg.rise_per_rev_mm * cfg.turns
-    for a, rib in zip(rib_azimuths(cfg), build_all_ribs(cfg)):
-        for _, r, z in rib_crossings(cfg, a):
-            if not (1.0 < z < rise - 1.0):
-                continue
-            # Material removed at the crossing (notch), present well below it.
-            assert not rib.contains(Point(r, z - 0.5))
-            assert rib.contains(Point(r, z - cfg.rib_notch_depth_mm - 2.0))
+    for rib in build_all_ribs(cfg):
+        assert isinstance(rib, Polygon) and rib.is_valid and rib.area > 0
 
 
 def test_hub_and_ring_slots_present_and_removed():
