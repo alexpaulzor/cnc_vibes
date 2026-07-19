@@ -224,13 +224,16 @@ def cmd_preview(args) -> int:
 
 
 def cmd_overlay(args) -> int:
-    """Superimpose the two flat spiral patterns (concentric) in distinct colors."""
+    """Superimpose the two spiral patterns at their assembly registration (the
+    top rotated 180°) in distinct colors, to show how they interleave."""
+    from shapely.affinity import rotate
+
     cfg = _config_from_args(args)
     bottom = build_bottom_spiral(cfg)
-    top = build_top_spiral(cfg)
+    top = rotate(build_top_spiral(cfg), 180.0, origin=(0, 0))
     named = [
-        ("bottom (base disc + winds out)", bottom, (184, 118, 58)),  # ochre
-        ("top (rim ring + winds in)", top, (176, 48, 32)),  # brick red
+        ("bottom (base disc, winds out)", bottom, (184, 118, 58)),  # ochre
+        ("top (rim ring, winds out, +180°)", top, (176, 48, 32)),  # brick red
     ]
     FIG_DIR.mkdir(exist_ok=True)
     stem = FIG_DIR / "overlay"

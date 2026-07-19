@@ -66,6 +66,9 @@ class SpiralConfig:
     )
     rib_top_tab_w_mm: float = 10.0  # width of the top tab that enters the rim ring
     rib_top_tab_up_mm: float = 4.0  # how far the top tab rises through the rim ring
+    free_end_slot_mm: float = (
+        12.0  # radial length of the rib slot at a spiral's free end
+    )
 
     # --- derived radii ---
     @property
@@ -160,35 +163,27 @@ def _ribbon(centerline: LineString, width: float, quad_segs: int) -> Polygon:
 
 def _part_polar_params(name: str, cfg: SpiralConfig) -> tuple[float, float, float]:
     """Shared (r0, pitch, turns) for a part's centerline, so the flat cut and
-    the 3D helix are guaranteed to agree. pitch is signed (negative = inward).
+    the 3D helix are guaranteed to agree.
 
-    Both spirals span the SAME centerline radial range [r_lo, r_hi], in opposite
-    directions, so each one's start radius equals the other's end radius (needed
-    for the interlocking end-joint):
-      bottom: r_lo -> r_hi (winds out)     top: r_hi -> r_lo (winds in)
-    where r_lo = base_r and r_hi = top_outer_r - strip_w/2 (outer edge on R_max).
-    The optional *_pitch_mm overrides break the symmetry if you really want it."""
+    Both spirals are the SAME ramp — they wind OUTWARD from r_lo to r_hi the same
+    way — and in assembly the top is offset 180 deg (a true two-start helix that
+    never self-intersects). They differ only in their anchor: the bottom carries
+    the center base disc at its inner (start) end, the top carries the rim ring at
+    its outer (end) end. r_lo = base_r; r_hi = the rim ring's inner edge. The
+    optional *_pitch_mm overrides the per-rev advance."""
     r_lo = cfg.span_r_lo
     r_hi = cfg.span_r_hi
     span_pitch = (r_hi - r_lo) / cfg.turns  # radial advance per rev to span it once
-    if name == "top":
-        r0 = r_hi
-        pitch = -(abs(cfg.top_pitch_mm) if cfg.top_pitch_mm is not None else span_pitch)
-    elif name == "bottom":
-        r0 = r_lo
-        pitch = (
-            abs(cfg.bottom_pitch_mm) if cfg.bottom_pitch_mm is not None else span_pitch
-        )
-    else:
-        raise ValueError(f"unknown part: {name!r} (expected 'top' or 'bottom')")
-    return r0, pitch, cfg.turns
+    override = cfg.top_pitch_mm if name == "top" else cfg.bottom_pitch_mm
+    pitch = abs(override) if override is not None else span_pitch  # outward (+)
+    return r_lo, pitch, cfg.turns
 
 
 def build_top_spiral(cfg: SpiralConfig) -> Polygon:
-    """Top piece: a full outer RIM RING (a complete circle at the outer radius)
-    that blends into a ribbon winding INWARD one turn. The ring is the top
-    piece's anchor (mirror of the bottom's center base disc); the ribbon's outer
-    start merges smoothly into it."""
+    """Top piece: a ribbon that winds OUTWARD one turn from near the center to a
+    full outer RIM RING that it blends into at the outer end. The ring is the top
+    piece's anchor (mirror of the bottom's center base disc). Same ramp shape as
+    the bottom; in assembly it's offset 180 deg."""
     r0, pitch, turns = _part_polar_params("top", cfg)
     line = _spiral_centerline(r0=r0, pitch=pitch, turns=turns, seg_mm=cfg.seg_mm)
     ribbon = _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
@@ -201,16 +196,29 @@ def build_top_spiral(cfg: SpiralConfig) -> Polygon:
     part = ribbon.union(ring)
     if not isinstance(part, Polygon):
         part = max(part.geoms, key=lambda g: g.area)
+    # Rib slot at the free (inner) end, on the +x seam.
+    part = part.difference(_free_end_slot(cfg, cfg.span_r_lo))
+    if not isinstance(part, Polygon):
+        part = max(part.geoms, key=lambda g: g.area)
     return part
 
 
+def _free_end_slot(cfg: SpiralConfig, r_center: float) -> Polygon:
+    """A slot at a spiral's free end (which lies on the +x seam) that the seam
+    rib passes into — material-thick wide (tangential) x free_end_slot_mm long
+    (radial). Locks the free end onto the rib that also tabs into the ring/disc."""
+    from shapely.geometry import box
+
+    hw = (cfg.material_th_mm + cfg.slot_fit_mm) / 2.0
+    d = cfg.free_end_slot_mm / 2.0
+    return box(r_center - d, -hw, r_center + d, hw)
+
+
 def build_bottom_spiral(cfg: SpiralConfig) -> Polygon:
-    """Base disc (footprint) unioned with a ribbon spiralling OUTWARD one turn
-    from the disc edge to the pot's max radius. The centerline starts ON the
-    disc perimeter so the ribbon straddles the edge and merges into one solid
-    piece (a tail emerging from the disc). Pitch is sized so the ribbon's OUTER
-    EDGE — not its centerline — reaches top_outer_r, matching the top spiral's
-    widest radius. Override with bottom_pitch_mm."""
+    """Base disc (footprint) unioned with a ribbon spiralling OUTWARD one turn to
+    the rim ring's inner edge. The centerline starts ON the disc perimeter so the
+    ribbon straddles the edge and merges into one solid piece. A rib slot is cut
+    at the ribbon's free (outer) end. Override pitch with bottom_pitch_mm."""
     r0, pitch, turns = _part_polar_params("bottom", cfg)
     line = _spiral_centerline(r0=r0, pitch=pitch, turns=turns, seg_mm=cfg.seg_mm)
     ribbon = _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
@@ -226,6 +234,10 @@ def build_bottom_spiral(cfg: SpiralConfig) -> Polygon:
             "to ribbon) — check strip_w / base_dia / bottom_pitch",
             stacklevel=2,
         )
+        part = max(part.geoms, key=lambda g: g.area)
+    # Rib slot at the free (outer) end, on the +x seam.
+    part = part.difference(_free_end_slot(cfg, cfg.span_r_hi))
+    if not isinstance(part, Polygon):
         part = max(part.geoms, key=lambda g: g.area)
     return part
 

@@ -14,18 +14,20 @@ radial ribs.
 
 - **Two flat spiral ramps**, one revolution each, staying parallel to the floor;
   height rises linearly with radius so the ramps run up-and-out from the base to
-  the rim (`--rise`, default 40mm). The two ramps are the **same shape**, just
-  anchored at opposite ends: the **bottom** at its inner end (a center base
-  disc), the **top** at its outer end (a full rim ring). Each ramp is a full turn
-  that starts just inside the rim ring and winds in to the base.
-- **Interleaved 180°** (two-start helix): bottom winds **out**, top winds **in**,
-  offset half a turn.
+  the rim (`--rise`, default 40mm). The two ramps are the **same shape** and wind
+  the **same direction** (a true two-start helix, offset 180°, so they never
+  cross); they differ only in their anchor: the **bottom** carries a center base
+  disc at its inner (start) end, the **top** carries a full rim ring at its outer
+  (end) end. Each ramp is a full turn that starts just inside the rim ring.
+- Each ramp's **free end** (bottom: outer; top: inner) has a slot that the seam
+  rib passes through, so that rib pins the free end while also tabbing into the
+  ring/disc.
 - **6 radial ribs** (`--n-ribs`), all ~the same wedge: a base tab that drops into
   a slot in the center disc, a slant following the cone up to the rim, and a top
   tab that rises into a slot in the rim ring. Where a ramp crosses a rib mid-wall
   there's an **open notch** (≥3.5mm deep) the ramp rests in — the ribs don't fully
-  wrap the ramp, and the ramps are **not** notched (the twist under stretch is
-  still unknown, so their crossing angle is left free).
+  wrap the ramp, and the ramps are **not** notched mid-span (the twist under
+  stretch is still unknown, so their crossing angle is left free).
 
 Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 2in
 (50.8mm). All CLI-overridable.

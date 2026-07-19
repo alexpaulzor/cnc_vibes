@@ -143,7 +143,14 @@ def test_decimate_respects_min_segment():
     assert not short, f"sub-floor segments after decimation: {short}"
 
 
-def test_ribs_shape_and_tabs():
+def test_free_end_slots_present():
+    """Each spiral has a rib slot carved at its free end (bottom: outer end;
+    top: inner end), both on the +x seam — the slot center is cut away."""
+    cfg = SpiralConfig()
+    bot = build_bottom_spiral(cfg)
+    top = build_top_spiral(cfg)
+    assert not bot.contains(Point(cfg.span_r_hi, 0.0)), "bottom free-end slot missing"
+    assert not top.contains(Point(cfg.span_r_lo, 0.0)), "top free-end slot missing"
     cfg = SpiralConfig(n_ribs=6)
     ribs = build_all_ribs(cfg)
     assert len(ribs) == 6
