@@ -146,22 +146,23 @@ def test_ribs_count_and_slots():
     assert len(ribs) == 6
     for rib in ribs:
         assert rib.is_valid and rib.area > 0
-        # Each rib captures both ramps -> 2 slot holes.
-        assert len(rib.interiors) == 2
+        # At least the two ramp crossings are captured (floor-level ends become
+        # open notches rather than enclosed holes).
+        assert len(rib.interiors) >= 2
     # One base-disc slot per rib.
     assert len(base_disc_slots(cfg)) == 6
 
 
 def test_rib_slots_sit_at_ramp_crossings():
-    """Every capture-slot hole should be centered on a ramp crossing (r, z)."""
+    """Every enclosed capture slot should sit on a ramp crossing (r, z).
+    (Floor-level ends become open notches, not interior holes, so skip them.)"""
     cfg = SpiralConfig(n_ribs=6)
     for a, rib in zip(rib_azimuths(cfg), build_all_ribs(cfg)):
-        crossings = rib_crossings(cfg, a)
         hole_centers = [Polygon(r).centroid for r in rib.interiors]
-        for _, r, z in crossings:
-            near = min(
-                math.hypot(c.x - r, c.y - z) for c in hole_centers
-            )
+        for name, r, z in rib_crossings(cfg, a):
+            if z < cfg.material_th_mm:  # floor-level -> notch, not a hole
+                continue
+            near = min(math.hypot(c.x - r, c.y - z) for c in hole_centers)
             assert near < 1.0, f"no slot near crossing r={r:.1f} z={z:.1f}"
 
 

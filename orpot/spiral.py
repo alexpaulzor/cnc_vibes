@@ -54,7 +54,7 @@ class SpiralConfig:
 
     # --- vertical ribs (radial fins that capture both ramps) ---
     n_ribs: int = 6  # number of radial ribs
-    rib_offset_deg: float = 30.0  # azimuth of the first rib (avoid the seam at 0)
+    rib_offset_deg: float = 0.0  # first rib azimuth; 0 puts ribs on the end seams
     material_th_mm: float = 3.0  # MDF thickness -> capture-slot height & rib thickness
     slot_fit_mm: float = 0.1  # added to slot size for a slip fit (kerf gives clearance)
     rib_inner_r_mm: float = 10.0  # inner radius the rib reaches (toward the base disc)

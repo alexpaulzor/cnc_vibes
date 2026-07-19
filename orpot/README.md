@@ -9,14 +9,18 @@ root airflow) over a drained base.
 ## Design (settled)
 
 - **Two flat spiral ramps**, one revolution each, staying parallel to the floor
-  and climbing **~40mm** total (the measured flex limit; `--rise`).
+  and climbing **~40mm** total (the measured flex limit; `--rise`). The two
+  ramps are the **same shape** (both span base↔rim), just anchored at opposite
+  ends: the bottom at its inner end (the base disc), the top at its outer end.
 - **Interleaved 180°** (two-start helix): bottom winds **out** from the 2in base
   disc, top winds **in** from the rim; they're offset half a turn.
 - **6 radial ribs** (`--n-ribs`) with horizontal **capture slots** (material-
   thickness tall × strip-width long) that the ramps thread through, held top and
-  bottom without glue. Each rib also has a tab that plugs into a slot in the
-  base disc. Because the ramps are 180° out of phase, each rib meets them at two
-  different heights → two slots per rib, distributed like a spiral staircase.
+  bottom without glue. Ribs sit on the two end seams (az 0 / 180), so — since a
+  one-turn spiral starts and ends at the same azimuth — those ribs also capture
+  each ramp's free **end**, locking the joint. Each rib also tabs into a slot in
+  the base disc. Default rib style is a narrow **spine** strut (`--rib-style
+  panel` for a solid fin).
 
 Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 2in
 (50.8mm). All CLI-overridable.
@@ -24,7 +28,6 @@ Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 
 Preview the assembled form with `orpot.py view` (see `figs/assembly*.png`).
 
 **Deferred:**
-- the interlocking end-joint between the two spiral ends
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
   pattern to ease the curl
 - an inner net-pot liner ledge

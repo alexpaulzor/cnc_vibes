@@ -24,7 +24,7 @@ import numpy as np
 from shapely.geometry import LineString, Polygon, box
 from shapely.ops import unary_union
 
-from spiral import SpiralConfig, crossing_rz
+from spiral import ASSEMBLY_PHASE_RAD, SpiralConfig, _part_polar_params
 
 
 def rib_azimuths(cfg: SpiralConfig) -> list[float]:
@@ -36,12 +36,24 @@ def rib_azimuths(cfg: SpiralConfig) -> list[float]:
 def rib_crossings(
     cfg: SpiralConfig, azimuth_rad: float
 ) -> list[tuple[str, float, float]]:
-    """(name, r_center, z) for each ramp that crosses this rib's plane."""
+    """(name, r_center, z) for every point where a ramp crosses this rib's plane.
+
+    A one-revolution spiral starts AND ends at the same azimuth, so a rib on an
+    end seam (default: az 0 for the bottom, az 180 for the top) sees that ramp
+    twice — at its inner and outer endpoints. That is exactly how the free ends
+    get captured/locked into the ribs."""
     out = []
+    span = cfg.turns * 2.0 * math.pi
     for name in ("bottom", "top"):
-        rz = crossing_rz(name, cfg, azimuth_rad)
-        if rz is not None:
-            out.append((name, rz[0], rz[1]))
+        r0, pitch, _ = _part_polar_params(name, cfg)
+        base = (azimuth_rad - ASSEMBLY_PHASE_RAD[name]) % (2.0 * math.pi)
+        k = 0
+        while base + k * 2.0 * math.pi <= span + 1e-6:
+            theta = base + k * 2.0 * math.pi
+            r = r0 + (pitch / (2.0 * math.pi)) * theta
+            z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))
+            out.append((name, r, z))
+            k += 1
     return out
 
 
@@ -53,6 +65,13 @@ def build_rib(cfg: SpiralConfig, azimuth_rad: float) -> Polygon:
     strut skeleton — a small collar of material around each capture slot, joined
     by thin struts down to the base tab (minimal material, most open)."""
     crossings = rib_crossings(cfg, azimuth_rad)
+    # The bottom spiral's inner start (z~0, r~base_r) is fused into the base
+    # disc — it's the anchor, not a free ribbon, so it needs no capture slot.
+    crossings = [
+        c
+        for c in crossings
+        if not (c[0] == "bottom" and c[2] < 1e-6 and abs(c[1] - cfg.base_r) < 1e-3)
+    ]
     if not crossings:
         raise ValueError("rib azimuth crosses no ramp")
 
@@ -85,6 +104,10 @@ def build_rib(cfg: SpiralConfig, azimuth_rad: float) -> Polygon:
         for a, b in zip(route, route[1:]):
             pieces.append(LineString([a, b]).buffer(hw, cap_style="round"))
         outline = unary_union(pieces)
+
+    # Clamp the body to z>=0 (a floor-level end slot becomes an open-bottom
+    # notch rather than material poking below the table), then add the tab back.
+    outline = outline.intersection(box(-1e4, 0.0, 1e4, 1e4)).union(tab)
 
     # Capture slots: material-thickness tall x strip-width long, + slip fit.
     for _, r, z in crossings:
