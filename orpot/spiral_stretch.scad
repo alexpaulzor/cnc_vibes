@@ -34,21 +34,21 @@ rbar   = (r0 + R) / 2;               // representative radius (length approximat
 H      = stretch * max_height;       // current height
 dth    = (H / rbar) * 180 / PI;      // sweep (deg) traded for rise, from length conservation
 Theta_eff = sqrt(max(Theta*Theta - dth*dth, 0));   // remaining winding (the twist)
-beta   = atan2(H, R - r0);           // radial ramp tilt of the ribbon
 $fn    = 24;
 
 // Centerline radius at parameter u in [0,1].
 function rad(u) = r0 + (R - r0) * u;
 
 // A thin cross-section of the ribbon at parameter u (phase in deg for arm k).
+// The wood stays FLAT (horizontal): width is radial, thickness is vertical — so
+// a cross-section reads as stacked flat rings (stairs), not a smooth funnel.
 module section(u, phase) {
     r   = rad(u);
     z   = H * u;
     phi = Theta_eff * u + phase;
     translate([r * cos(phi), r * sin(phi), z])
-        rotate([0, 0, phi])            // local +x = radial
-            rotate([0, -beta, 0])      // tilt along the ramp slope
-                cube([width, 0.1, thickness], center = true);
+        rotate([0, 0, phi])            // local +x = radial; ribbon stays horizontal
+            cube([width, 0.1, thickness], center = true);
 }
 
 // One spiral arm = hull of consecutive cross-sections along the sweep.
