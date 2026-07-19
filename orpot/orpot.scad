@@ -118,10 +118,11 @@ module rib2d(a) {
     n  = len(cr);
     rc = r_hub - tab_w/2;                    // hub-slot / tab centre
     // tread boundaries: inner edge, midpoints between crossings, then r_rim
-    b = concat([rc - 5],
+    b = concat([rc - tab_w/2],
                [for (i = [1:max(n-1,0)]) (cr[i-1][0] + cr[i][0]) / 2],
                [r_rim]);
     // monotonic staircase top edge, outer -> inner
+    // TODO: make the staircase slope where possible instead of sheer face.
     stair = concat(
         [ [r_rim, pot_height] ],
         [ for (i = [n-1 : -1 : 0]) each [
@@ -129,31 +130,41 @@ module rib2d(a) {
             [ b[i],   cr[i][1] - thickness/2 ] ]  // inner end of tread i
         ]
     );
-    body = concat([ [rc - 5, 0], [r_out, 0], [r_out, pot_height] ], stair);
+    body = concat([ [rc - tab_w/2, 0], [r_out, 0], [r_out, pot_height] ], stair);
     union() {
         polygon(body);                                          // solid staircase leg
         translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
         // hub tab: 5mm wide, drops 3mm below the disc, then hooks inward
-        translate([rc - 2.5, -thickness]) square([5, thickness + 0.01]);
-        translate([rc - 2.5 - 5, -thickness]) square([5 + 2.5, thickness]);
+        translate([rc - tab_w/2, -thickness])
+            square([tab_w, thickness + 0.01]);
+        translate([rc - tab_w/2 - thickness, -2*thickness])
+            square([tab_w, thickness]);
     }
 }
+
+
+// ! rib2d(0);
 
 /* ================= 2D cutting layout ================= */
 
 module layout2d() {
+    side = 231;  // stock;
     *%square([stock, stock], center = true);   // stock outline (reference, not cut)
     disc2d();
     // Each rib's right-angle (outside-bottom) corner tucks into a STOCK corner,
     // its two legs along the sheet edges, hypotenuse (the slant) facing the disc.
     // scale flips send the body inward toward the center for each corner.
-    m = 4;  S = stock/2 - m;                 // small margin from the very edge
+    m = 4;
+    S = side/2 - m;                 // small margin from the very edge
     corners = [[ S,  S,  1, -1], [-S,  S, -1, -1],
                [-S, -S, -1,  1], [ S, -S,  1,  1]];
     for (i = [0 : n_ribs-1])
-        translate([corners[i][0], corners[i][1]]) scale([corners[i][2], corners[i][3]])
+        translate([corners[i][0], corners[i][1]])
+            scale([corners[i][2], corners[i][3]])
             translate([-r_out, 0]) rib2d(i*360/n_ribs);
 }
+
+// ! layout2d();
 
 /* ================= 3D assembled preview ================= */
 // True to the cut: the actual flat disc (extruded 3mm) is the BOTTOM plane; a
@@ -183,12 +194,16 @@ module arm3d(phase, seg = 60) {                    // extra-credit lofted spiral
 }
 
 module assembled3d() {
-    color("BurlyWood") linear_extrude(thickness) disc2d();                 // BOTTOM = the cut
+    color("BurlyWood")
+        translate([0, 0, -thickness])
+        linear_extrude(thickness) disc2d();                 // BOTTOM = the cut
     color("SteelBlue") translate([0,0,pot_height]) linear_extrude(thickness) ring2d(); // TOP ring
     color("SaddleBrown")                                                   // ribs between
-        for (i = [0:n_ribs-1])
-            rotate([0,0,i*360/n_ribs]) rotate([90,0,0])
-                linear_extrude(thickness, center=true) rib2d(i*360/n_ribs);
+            for (i = [0:n_ribs-1])
+            rotate([0,0,i*360/n_ribs])
+                rotate([90,0,0])
+                linear_extrude(thickness, center=true)
+                rib2d(i*360/n_ribs);
     color("Goldenrod")                                                     // extra: spiral arms
         for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals);
 }
