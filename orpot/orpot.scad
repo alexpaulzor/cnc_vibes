@@ -105,19 +105,13 @@ function rib_crossings(a) = [
 ];
 
 module rib2d(a) {
-    difference() {
-        union() {
-            // solid body: foot(z=0) -> outer riser -> top under ring -> slant to hub
-            polygon([[r_hub, 0], [r_out, 0], [r_out, pot_height], [r_rim, pot_height]]);
-            translate([r_hub - hub_lap, 0]) square([hub_lap, pot_height*0.5]); // inner leg lapping the hub
-            translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
-        }
-        // flat shelves: carve the top down to each arm's underside
-        for (c = rib_crossings(a))
-            translate([c[0] - (ramp_w+fit)/2, c[1] - thickness/2]) square([ramp_w+fit, pot_height]);
-        // hub cross-lap: notch the inner-bottom up by one thickness so the centre
-        // disc (flush on the table) slots into the rib; both bottoms stay flat.
-        translate([r_hub - hub_lap, 0]) square([hub_lap + 0.01, thickness + fit]);
+    inner = r_hub - hub_lap;                       // inner extent (laps the hub edge)
+    union() {
+        translate([inner, 0]) square([r_out - inner, shoulder]);    // flat foot (leg on table)
+        translate([r_rim, 0]) square([r_out - r_rim, pot_height]);  // outer riser + ring wall
+        for (c = rib_crossings(a))                                  // solid column up to each shelf
+            translate([c[0] - (ramp_w+fit)/2, 0]) square([ramp_w+fit, c[1] - thickness/2]);
+        translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
     }
 }
 
@@ -138,8 +132,21 @@ module layout2d() {
 }
 
 /* ================= 3D assembled preview ================= */
+// True to the cut: the actual flat disc (extruded 3mm) is the BOTTOM plane; a
+// copy of just the rim ring (from the same cut) is the TOP plane at pot_height;
+// the ribs stand between, in radial planes, feet into the bottom / tops into the
+// ring. Extra: the 3D spiral arms lofting from bottom to top.
 
-module arm3d(phase, seg = 60) {              // twist model; wood stays flat
+module ring2d() {                                  // the top-circle cut (ring + its slots)
+    difference() {
+        circle(r = r_out);
+        circle(r = r_rim);
+        for (i = [0 : n_ribs-1])
+            rotate([0, 0, i*360/n_ribs + twist]) radial_slot(ring_c, tab_w + fit);
+    }
+}
+
+module arm3d(phase, seg = 60) {                    // extra-credit lofted spiral
     n = seg * turns;
     for (i = [0 : n-1]) hull()
         for (u = [i/n, (i+1)/n]) {
@@ -151,28 +158,15 @@ module arm3d(phase, seg = 60) {              // twist model; wood stays flat
         }
 }
 
-// The rim ring, blended: its inner edge is the outermost spiral cut, so it flows
-// into the arms instead of meeting them at a hard circular edge.
-module ring3d() {
-    translate([0,0,pot_height - thickness/2]) linear_extrude(thickness)
-        difference() {
-            circle(r = r_out);
-            circle(r = r_rim);                       // ring proper
-            for (k=[0:n_spirals-1])                  // let the cuts run out through it
-                rotate([0,0,k*360/n_spirals]) spiral_cut(kerf);
-        }
-}
-
 module assembled3d() {
-    color("SaddleBrown")                                     // hub (bottom, on the table)
-        cylinder(r = r_hub, h = thickness);
-    color("SteelBlue") ring3d();                            // blended rim ring
-    color("Goldenrod")                                      // the two spiral arms
-        for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals);
-    color("Tan")                                            // ribs, in radial planes
+    color("BurlyWood") linear_extrude(thickness) disc2d();                 // BOTTOM = the cut
+    color("SteelBlue") translate([0,0,pot_height]) linear_extrude(thickness) ring2d(); // TOP ring
+    color("SaddleBrown")                                                   // ribs between
         for (i = [0:n_ribs-1])
             rotate([0,0,i*360/n_ribs]) rotate([90,0,0])
                 linear_extrude(thickness, center=true) rib2d(i*360/n_ribs);
+    color("Goldenrod")                                                     // extra: spiral arms
+        for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals);
 }
 
 /* ================= top level ================= */
