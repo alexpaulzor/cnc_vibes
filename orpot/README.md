@@ -35,6 +35,16 @@ Preview: `orpot.py preview` (flat disc + ribs). 3D: `orpot.py view` (wireframe)
 or `orpot.py scad` → `build/orpot.scad` (open in OpenSCAD, F5). See
 `figs/preview_disc.png`, `figs/assembly.png`.
 
+## Hand-editable OpenSCAD (`orpot.scad`)
+
+`orpot.scad` is a **legible, parametric, hand-authored** OpenSCAD file (not
+generated) — the starting point for refining the shape directly in OpenSCAD. It
+lays out a 2D cutting pattern for one 300×300mm sheet: a spiral disc (two
+interleaved cuts + hub/ring slots) with the 4 S-curve ribs nested in the corner
+offcuts. Tune `disc_dia` (main size knob) and the rib placement, then Render (F6)
+and File → Export → DXF/SVG for the laser. `figs/orpot_scad_preview.png` shows
+the default. (This is separate from the Python `scad` command's generated file.)
+
 **Deferred / TODO:**
 - a 4-spiral variant (`--n-spirals`, someday)
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
