@@ -519,6 +519,10 @@ def main() -> int:
     loops = []
     for idx, (pts, closed) in enumerate(subs):
         mpts = xf(pts)
+        # close closed loops so the final edge is cut (SVG marks a loop closed
+        # without repeating the first point -> otherwise the last side is skipped)
+        if closed and len(mpts) >= 3 and mpts[0] != mpts[-1]:
+            mpts = mpts + [mpts[0]]
         area = abs(_signed_area(mpts)) if closed and len(mpts) >= 3 else 0.0
         loops.append((area, closed, mpts, idx))
     # interior/small loops first, outer boundary (largest area) last; open paths first
