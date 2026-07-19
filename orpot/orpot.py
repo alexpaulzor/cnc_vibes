@@ -39,7 +39,13 @@ from spiral import (  # noqa: E402
     build_top_spiral,
     part_helix,
 )
-from ribs import rib_azimuths, rib_3d, build_all_ribs, base_disc_slots  # noqa: E402
+from ribs import (  # noqa: E402
+    base_disc_slots,
+    build_all_ribs,
+    rib_3d,
+    rib_azimuths,
+    ring_slots,
+)
 
 BUILD_DIR = SCRIPT_DIR / "build"
 FIG_DIR = SCRIPT_DIR / "figs"
@@ -137,6 +143,18 @@ def _bottom_with_slots(cfg: SpiralConfig):
     return place(poly, cfg.margin_mm)
 
 
+def _top_with_slots(cfg: SpiralConfig):
+    """Top spiral (rim ring + inward ramp) with the rib top-tab slots cut into
+    the ring, placed into positive coords."""
+    from spiral import build_top_spiral, place
+
+    poly = build_top_spiral(cfg)
+    if cfg.n_ribs > 0:
+        for slot in ring_slots(cfg):
+            poly = poly.difference(slot)
+    return place(poly, cfg.margin_mm)
+
+
 def _placed_ribs(cfg: SpiralConfig):
     """The N rib outlines (in s-z coords) each placed into positive coords,
     laid out left-to-right for a single sheet."""
@@ -153,7 +171,7 @@ def _cut_groups(part: str, cfg: SpiralConfig):
     """List of (group_name, [(part_name, polygon), ...]); each group becomes one
     gcode file. Spirals are one part each; 'ribs' is all N ribs on one sheet."""
     groups = {
-        "top": [("top", [("top", build_part("top", cfg))])],
+        "top": [("top", [("top", _top_with_slots(cfg))])],
         "bottom": [("bottom", [("bottom", _bottom_with_slots(cfg))])],
         "ribs": [("ribs", _placed_ribs(cfg))],
     }

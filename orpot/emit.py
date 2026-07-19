@@ -397,6 +397,14 @@ def render_assembly_sketch(
     )
     add_polyline(disc, (120, 120, 120), 2)
 
+    # Rim ring (full circle, outer + inner) at the top height.
+    z_rim = cfg.rise_per_rev_mm * cfg.turns
+    for rr in (cfg.top_outer_r, cfg.top_outer_r - cfg.top_ring_w_mm):
+        ring = np.column_stack(
+            [rr * np.cos(ang), rr * np.sin(ang), np.full_like(ang, z_rim)]
+        )
+        add_polyline(ring, (120, 120, 120), 2)
+
     for name, hx in helices:
         color = palette.get(name, (80, 80, 80))
         inner, outer = hx["inner"], hx["outer"]

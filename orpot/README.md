@@ -8,28 +8,36 @@ root airflow) over a drained base.
 
 ## Design (settled)
 
-- **Two flat spiral ramps**, one revolution each, staying parallel to the floor
-  and climbing **~40mm** total (the measured flex limit; `--rise`). The two
-  ramps are the **same shape** (both span base↔rim), just anchored at opposite
-  ends: the bottom at its inner end (the base disc), the top at its outer end.
-- **Interleaved 180°** (two-start helix): bottom winds **out** from the 2in base
-  disc, top winds **in** from the rim; they're offset half a turn.
-- **6 radial ribs** (`--n-ribs`) with horizontal **capture slots** (material-
-  thickness tall × strip-width long) that the ramps thread through, held top and
-  bottom without glue. Ribs sit on the two end seams (az 0 / 180), so — since a
-  one-turn spiral starts and ends at the same azimuth — those ribs also capture
-  each ramp's free **end**, locking the joint. Each rib also tabs into a slot in
-  the base disc. Default rib style is a narrow **spine** strut (`--rib-style
-  panel` for a solid fin).
+The pot is a shallow cone: a small base disc low at the center, a full rim ring
+high at the outside, and a wall of two spiral ramps rising between them, tied by
+radial ribs.
+
+- **Two flat spiral ramps**, one revolution each, staying parallel to the floor;
+  height rises linearly with radius so the ramps run up-and-out from the base to
+  the rim (`--rise`, default 40mm). The two ramps are the **same shape**, just
+  anchored at opposite ends: the **bottom** at its inner end (a center base
+  disc), the **top** at its outer end (a full rim ring). Each ramp is a full turn
+  that starts just inside the rim ring and winds in to the base.
+- **Interleaved 180°** (two-start helix): bottom winds **out**, top winds **in**,
+  offset half a turn.
+- **6 radial ribs** (`--n-ribs`), all ~the same wedge: a base tab that drops into
+  a slot in the center disc, a slant following the cone up to the rim, and a top
+  tab that rises into a slot in the rim ring. Where a ramp crosses a rib mid-wall
+  there's an **open notch** (≥3.5mm deep) the ramp rests in — the ribs don't fully
+  wrap the ramp, and the ramps are **not** notched (the twist under stretch is
+  still unknown, so their crossing angle is left free).
 
 Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 2in
 (50.8mm). All CLI-overridable.
 
-Preview the assembled form with `orpot.py view` (see `figs/assembly*.png`).
+Preview: `orpot.py overlay` (both flat patterns superimposed) and `orpot.py view`
+(3D assembly). See `figs/overlay.png`, `figs/assembly*.png`.
 
 **Deferred:**
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
   pattern to ease the curl
+- notching the ramps to positively locate them in the ribs (needs the measured
+  twist-under-stretch)
 - an inner net-pot liner ledge
 
 ## The parts
@@ -37,14 +45,10 @@ Preview the assembled form with `orpot.py view` (see `figs/assembly*.png`).
 Built in machine mm (Y-up), each placed so all coordinates are positive. The
 laser cuts interior holes (slots, openings) first, then each outer profile last.
 
-- **top** — the rim ramp: a constant-width ribbon whose outer edge starts at the
-  widest radius and winds **inward** one turn. Its nested turns enclose the
-  central opening, which is cut out as a hole.
-- **bottom** — the base ramp: a solid disc (footprint, with rib-tab slots)
-  merged with a ribbon spiralling **outward** one turn to the same max radius.
-- **ribs** — the N radial fins (one sheet), each with two capture slots + a base
-  tab. Built in the (radius, height) plane from where each ramp crosses that
-  rib's azimuth.
+- **top** — rim ring + inward ramp; the ring gets rib top-tab slots.
+- **bottom** — center base disc + outward ramp; the disc gets rib base-tab slots.
+- **ribs** — the N radial wedges (one sheet): base tab, cone slant with open
+  notches at the mid ramp crossings, flat top, and a top tab into the rim ring.
 
 ## Usage
 

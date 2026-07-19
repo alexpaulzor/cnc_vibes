@@ -56,18 +56,16 @@ class SpiralConfig:
     # --- vertical ribs (radial fins that capture both ramps) ---
     n_ribs: int = 6  # number of radial ribs
     rib_offset_deg: float = 0.0  # first rib azimuth; 0 puts ribs on the end seams
-    material_th_mm: float = 3.0  # MDF thickness -> capture-slot height & rib thickness
+    material_th_mm: float = 3.0  # MDF thickness -> notch/slot width & rib thickness
     slot_fit_mm: float = 0.1  # added to slot size for a slip fit (kerf gives clearance)
-    rib_inner_r_mm: float = 10.0  # inner radius the rib reaches (toward the base disc)
-    rib_edge_margin_mm: float = 4.0  # rib material beyond the outermost ramp edge
-    rib_top_lip_mm: float = 6.0  # rib material above the highest capture slot
+    rib_band_mm: float = 10.0  # width of the diagonal rib strut (below the cone slant)
+    rib_notch_depth_mm: float = 3.5  # open notch depth where a spiral rests (>= 3mm)
     rib_tab_span_mm: tuple = (12.0, 22.0)  # radial [inner, outer] of the base-disc tab
     rib_tab_depth_mm: float = (
         4.0  # how far the base tab drops below z=0 (into the disc)
     )
-    rib_style: str = "spine"  # "spine" (narrow struts) or "panel" (solid fin)
-    rib_collar_margin_mm: float = 5.0  # material around each capture slot (spine)
-    rib_strut_w_mm: float = 8.0  # width of the connecting struts (spine)
+    rib_top_tab_w_mm: float = 10.0  # width of the top tab that enters the rim ring
+    rib_top_tab_up_mm: float = 4.0  # how far the top tab rises through the rim ring
 
     # --- derived radii ---
     @property
@@ -90,7 +88,15 @@ class SpiralConfig:
 
     @property
     def span_r_hi(self) -> float:
-        return self.top_outer_r - self.strip_w_mm / 2.0
+        # Spiral runs a full turn whose outer end sits at the rim ring's INNER
+        # edge, overlapping half a strip into the ring so the ribbon merges with
+        # it (a clean blend, and a full turn is visible inside the ring).
+        return self.top_outer_r - self.top_ring_w_mm
+
+    @property
+    def ring_center_r(self) -> float:
+        """Mid-radius of the rim ring (where rib top tabs plug in)."""
+        return self.top_outer_r - self.top_ring_w_mm / 2.0
 
     def z_at_r(self, r):
         """Assembled height as a function of centerline radius: the pot is a cone
@@ -162,8 +168,8 @@ def _part_polar_params(name: str, cfg: SpiralConfig) -> tuple[float, float, floa
       bottom: r_lo -> r_hi (winds out)     top: r_hi -> r_lo (winds in)
     where r_lo = base_r and r_hi = top_outer_r - strip_w/2 (outer edge on R_max).
     The optional *_pitch_mm overrides break the symmetry if you really want it."""
-    r_lo = cfg.base_r
-    r_hi = cfg.top_outer_r - cfg.strip_w_mm / 2.0
+    r_lo = cfg.span_r_lo
+    r_hi = cfg.span_r_hi
     span_pitch = (r_hi - r_lo) / cfg.turns  # radial advance per rev to span it once
     if name == "top":
         r0 = r_hi

@@ -22,6 +22,7 @@ from ribs import (  # noqa: E402
     build_all_ribs,
     rib_azimuths,
     rib_crossings,
+    ring_slots,
 )
 from spiral import (  # noqa: E402
     SpiralConfig,
@@ -80,10 +81,10 @@ def test_bottom_contains_base_disc():
     bot = build_bottom_spiral(cfg)
     disc = Point(0, 0).buffer(cfg.base_r * 0.98)
     assert bot.contains(disc), "base disc footprint missing from bottom spiral"
-    # And it reaches out to ~top_outer_r.
+    # Its outer edge reaches the rim ring's inner edge (span_r_hi + half strip).
     minx, miny, maxx, maxy = bot.bounds
     reach = max(maxx, maxy, -minx, -miny)
-    assert reach == pytest.approx(cfg.top_outer_r, abs=1.0)
+    assert reach == pytest.approx(cfg.span_r_hi + cfg.strip_w_mm / 2.0, abs=1.0)
 
 
 def test_placed_part_is_positive():
@@ -142,30 +143,46 @@ def test_decimate_respects_min_segment():
     assert not short, f"sub-floor segments after decimation: {short}"
 
 
-def test_ribs_count_and_slots():
+def test_ribs_shape_and_tabs():
     cfg = SpiralConfig(n_ribs=6)
     ribs = build_all_ribs(cfg)
     assert len(ribs) == 6
     for rib in ribs:
         assert rib.is_valid and rib.area > 0
-        # At least the two ramp crossings are captured (floor-level ends become
-        # open notches rather than enclosed holes).
-        assert len(rib.interiors) >= 2
-    # One base-disc slot per rib.
+        minx, miny, maxx, maxy = rib.bounds
+        # Base tab drops below the floor; top tab rises above the rim.
+        assert miny <= -cfg.rib_tab_depth_mm + 0.5
+        assert maxy >= cfg.rise_per_rev_mm + cfg.rib_top_tab_up_mm - 0.5
+    # One base-disc slot and one rim-ring slot per rib.
     assert len(base_disc_slots(cfg)) == 6
+    assert len(ring_slots(cfg)) == 6
 
 
-def test_rib_slots_sit_at_ramp_crossings():
-    """Every enclosed capture slot should sit on a ramp crossing (r, z).
-    (Floor-level ends become open notches, not interior holes, so skip them.)"""
+def test_rib_notches_at_crossings():
+    """Each MID spiral crossing carves an open notch (>= notch depth) from the
+    rib's top edge: material is gone at the crossing but present below."""
     cfg = SpiralConfig(n_ribs=6)
+    rise, nd, h_min = cfg.rise_per_rev_mm, cfg.rib_notch_depth_mm, cfg.rib_band_mm
     for a, rib in zip(rib_azimuths(cfg), build_all_ribs(cfg)):
-        hole_centers = [Polygon(r).centroid for r in rib.interiors]
         for name, r, z in rib_crossings(cfg, a):
-            if z < cfg.material_th_mm:  # floor-level -> notch, not a hole
+            if not (h_min < z < rise - h_min):  # only mid crossings are notched
                 continue
-            near = min(math.hypot(c.x - r, c.y - z) for c in hole_centers)
-            assert near < 1.0, f"no slot near crossing r={r:.1f} z={z:.1f}"
+            assert not rib.contains(Point(r, z - 0.5)), (
+                f"expected notch at r={r:.1f} z={z:.1f}"
+            )
+            below = z - nd - 1.0
+            if below > -cfg.rib_band_mm:  # still within the strut band
+                assert rib.contains(Point(r, below))
+
+
+def test_top_ring_has_slots_removed():
+    """The top piece with rim-ring slots has less area than the plain top."""
+    from shapely.ops import unary_union
+
+    cfg = SpiralConfig(n_ribs=6)
+    plain = build_top_spiral(cfg)
+    slotted = plain.difference(unary_union(ring_slots(cfg)))
+    assert slotted.area < plain.area
 
 
 def test_base_disc_slots_removed_from_bottom():
