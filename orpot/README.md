@@ -51,27 +51,43 @@ the default. (This is separate from the Python `scad` command's generated file.)
   pattern to ease the curl — see the excellent `~/src/boxes` (boxes.py) library
 - an inner net-pot liner ledge
 
-## G-code (`svg2laser.py`)
+## G-code
 
-The design lives in `orpot.scad`; laser G-code is generated from its SVG export
-by `svg2laser.py` — a standalone CLI (no dependency on the rest of orpot) built
-for a **weak diode laser**. Unlike typical svg→gcode tools (which assume an
-instant-on CO2 laser: M4 dynamic power, cut-on-fire), it emits **static M3
-constant power** and a front-loaded **warmup lead-in** that traces back and forth
-over the start of each cut so the beam reaches full power before it bites. It also
-orders cuts interior-first / outer-boundary-last so the part stays anchored.
+Both tools are built for a **weak diode laser**: unlike typical svg→gcode tools
+(which assume an instant-on CO2 laser — M4 dynamic power, cut-on-fire), they emit
+**static M3 constant power** with a front-loaded **warmup lead-in** that traces
+back and forth over the start of each cut so the beam reaches full power before it
+bites. Cuts are ordered interior-first / outer-boundary-last so the part stays
+anchored to the sheet.
+
+### One command: `orpot_gcode.py`
 
 ```bash
-# 1. export the flat cut from OpenSCAD (MODE=cut) to SVG
-openscad -o build/orpot_cut.svg -D 'MODE="cut"' orpot.scad
-# 2. SVG -> GRBL diode-laser G-code (static M3 + 1s warmup, mdf_3mm profile)
-python svg2laser.py build/orpot_cut.svg -o build/orpot_cut.gcode --material mdf_3mm
+python orpot_gcode.py --material mdf_3mm          # -> build/orpot.gcode
 ```
 
-`svg2laser.py` works on any polygonal SVG (straight segments exact; curves
-flattened), reads material feed/power/passes from `profiles/laser_materials.yaml`
-(`--material`) or via `--feed/--power/--passes`, and takes `--warmup-ms`,
-`--min-seg`, `--margin`, `--origin {corner,center}`. See `svg2laser.py -h`.
+This drives everything from `orpot.scad`: it exports the **frame** (disc without
+the spiral slots + the 4 ribs) as SVG outlines, reads the **spiral centerlines**
+the .scad echoes, and cuts the spirals as **single-kerf** open paths (traced once
+down the centerline, not both sides of a slot). The spiral is rotated
+`spiral_offset` (45°) off the rib slots so the tab between a slot and the spiral
+start can't split. Extra flags (`--feed`, `--power`, `--warmup-ms`,
+`--origin`, …) pass through to `svg2laser.py`.
+
+### General tool: `svg2laser.py`
+
+Standalone CLI (no dependency on the rest of orpot) — turns *any* polygonal SVG
+of cut paths into diode-laser G-code. Closed loops are cut once around; **open
+paths (`<polyline>`) are cut once = single kerf**. Straight segments are exact,
+curves/arcs flattened. Reads feed/power/passes from
+`profiles/laser_materials.yaml` (`--material`) or `--feed/--power/--passes`; also
+`--warmup-ms`, `--min-seg`, `--margin`, `--origin {corner,center}`. See
+`svg2laser.py -h`.
+
+```bash
+openscad -o build/cut.svg -D 'MODE="cut"' orpot.scad   # (double-cuts the spirals)
+python svg2laser.py build/cut.svg --material mdf_3mm    # any SVG works
+```
 
 ## The parts
 

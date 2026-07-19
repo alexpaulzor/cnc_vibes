@@ -27,6 +27,8 @@ ring_id    = 6*IN;    // rim ring INNER diameter (152.4) = opening
 ring_w     = 0.75*IN; // rim ring width (19.05) — 3/4" so a 1/2" tab has margin
 ramp_w     = 0.5*IN;  // spiral arm width (12.7)
 n_spirals  = 2;       // interleaved spiral arms
+spiral_offset = 45;   // rotate the spiral cuts off the rib slots (keeps a gap so
+                      // the tab between a slot and the spiral start can't split)
 
 n_ribs     = 4;       // radial ribs (from the corner offcuts)
 pot_height = 3*IN;    // assembled height (also rib height in the flat pattern)
@@ -72,11 +74,18 @@ module radial_slot(rc, len) {
     rotate([0,0,90]) translate([0, rc]) square([slot_w, len], center = true);
 }
 
-module disc2d() {
+// The spiral centerline as a point list (open path), phase in degrees.
+function spiral_centerline(phase, steps = 300) = [
+    for (i = [0:steps]) let(a = turns*360*i/steps, r = spiral_r(a))
+        [ r*cos(a + phase), r*sin(a + phase) ]
+];
+
+module disc2d(with_spirals = true) {
     difference() {
         circle(r = r_out);
-        for (k = [0 : n_spirals-1])
-            rotate([0, 0, k*360/n_spirals]) spiral_cut(kerf);
+        if (with_spirals)
+            for (k = [0 : n_spirals-1])
+                rotate([0, 0, k*360/n_spirals + spiral_offset]) spiral_cut(kerf);
         // ring slot (pre-offset by twist) for the rib top tab; hub slot (1/2" long
         // along the radius) for the rib's drop-in hook tab.
         for (i = [0 : n_ribs-1]) {
@@ -107,7 +116,7 @@ function _sortr(v) = len(v) <= 1 ? v : let(
 // Arm crossings on this rib's plane, kept clear of the hub edge and ring wall.
 function rib_crossings(a) = _sortr([
     for (k = [0:n_spirals-1]) for (m = [0:ceil(turns)+1])
-        let(u = (a - k*360/n_spirals + m*360) / Theta_eff,
+        let(u = (a - k*360/n_spirals - spiral_offset + m*360) / Theta_eff,
             r = r_hub + (r_rim - r_hub)*u)
         if (u > 0.03 && u < 0.995 && r > r_hub + ramp_w/2 && r < r_rim - ramp_w/2)
             [ r, pot_height*u ]
@@ -147,13 +156,10 @@ module rib2d(a) {
 
 /* ================= 2D cutting layout ================= */
 
-module layout2d() {
-    side = 231;  // stock;
-    *%square([stock, stock], center = true);   // stock outline (reference, not cut)
-    disc2d();
-    // Each rib's right-angle (outside-bottom) corner tucks into a STOCK corner,
-    // its two legs along the sheet edges, hypotenuse (the slant) facing the disc.
-    // scale flips send the body inward toward the center for each corner.
+layout_side = 240;   // square envelope the parts are packed into (<= stock)
+
+// Place the 4 ribs into the corners of a `side` square.
+module ribs_layout(side) {
     m = 4;
     S = side/2 - m;                 // small margin from the very edge
     corners = [[ S,  S,  1, -1], [-S,  S, -1, -1],
@@ -162,6 +168,12 @@ module layout2d() {
         translate([corners[i][0], corners[i][1]])
             scale([corners[i][2], corners[i][3]])
             translate([-r_out, 0]) rib2d(i*360/n_ribs);
+}
+
+module layout2d() {
+    *%square([stock, stock], center = true);   // stock outline (reference, not cut)
+    disc2d();
+    ribs_layout(layout_side);
 }
 
 // ! layout2d();
@@ -205,10 +217,24 @@ module assembled3d() {
                 linear_extrude(thickness, center=true)
                 rib2d(i*360/n_ribs);
     color("Goldenrod")                                                     // extra: spiral arms
-        for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals);
+        for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals + spiral_offset);
+}
+
+/* ================= 2D frame (single-kerf pipeline) ================= */
+// The disc WITHOUT the spiral slots (so the outline export doesn't double-cut
+// the thin spirals) + the ribs. The spiral centerlines are echoed for the
+// wrapper (orpot_gcode.py) to cut single-kerf as open paths.
+
+module frame2d() {
+    disc2d(with_spirals = false);
+    ribs_layout(layout_side);
 }
 
 /* ================= top level ================= */
 echo(str("turns=", turns, "  twist=", twist, " deg  disc od=", 2*r_out/IN, "in"));
+if (MODE == "frame")
+    for (k = [0:n_spirals-1])   // echoed for the single-kerf wrapper
+        echo("SPIRAL", spiral_centerline(k*360/n_spirals + spiral_offset));
 if (MODE == "assembled") assembled3d();
-else                     layout2d();
+else if (MODE == "frame") frame2d();
+else                      layout2d();
