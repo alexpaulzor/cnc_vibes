@@ -141,6 +141,27 @@ def ring_slots(cfg: SpiralConfig) -> list[Polygon]:
     return _radial_slots(cfg, cfg.ring_center_r - ttw, cfg.ring_center_r + ttw)
 
 
+def disc_rib_slots(cfg: SpiralConfig) -> list[Polygon]:
+    """Mortise slots cut into the single disc's arms — one per rib azimuth per
+    arm crossing. Each is a short radial slot (material-thick wide) the rib tab
+    threads through once the disc is expanded. Uses the same arm crossings as the
+    ribs, so slots and rib notches line up."""
+    half_len = cfg.disc_slot_len_mm / 2.0
+    slots = []
+    for a in rib_azimuths(cfg):
+        for _, r, _z in rib_crossings(cfg, a):
+            slots.extend(_radial_slots_at(cfg, a, r - half_len, r + half_len))
+    return slots
+
+
+def _radial_slots_at(cfg: SpiralConfig, a: float, r0: float, r1: float):
+    """A single radial slot at azimuth a spanning r0..r1, material-thick wide."""
+    hw = (cfg.material_th_mm + cfg.slot_fit_mm) / 2.0
+    ca, sa = math.cos(a), math.sin(a)
+    corners = [(r0, -hw), (r1, -hw), (r1, hw), (r0, hw)]
+    return [Polygon([(x * ca - y * sa, x * sa + y * ca) for x, y in corners])]
+
+
 def rib_3d(cfg: SpiralConfig, azimuth_rad: float) -> dict:
     """Map a rib's outline (and slot holes) into the assembled 3D view: each
     (s, z) becomes (s*cos, s*sin, z) at this azimuth. Returns exterior + holes

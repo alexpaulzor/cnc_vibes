@@ -213,6 +213,64 @@ def emit_cut_gcode(
     return "\n".join(lines)
 
 
+def emit_disc_gcode(
+    profile: Polygon,
+    cuts: list,
+    material: dict,
+    title: str,
+    cfg,
+    feed_override: int | None = None,
+    power_percent: float | None = None,
+) -> str:
+    """Emit cut GCode for the SINGLE-PIECE disc: rib-slot holes first, then the
+    open spiral cut paths, then the outer profile last (so the piece stays
+    anchored to the sheet until the final cut). `cuts` are open LineStrings."""
+    laser = material["laser"]
+    pct = power_percent if power_percent is not None else laser["power_percent"]
+    power_s = int(round(pct * 10))
+    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
+    passes = laser["passes"]
+    warmup_mm = WARMUP_MS / 60000.0 * feed
+
+    extra = [
+        "orpot single-piece disc: 2 interleaved spiral cuts, expands into a pot",
+        "order: rib slots, then spiral cuts, then outer profile last",
+        "spiral cuts are OPEN paths (kerf gap); the disc stays one piece",
+        "ASSUMES Z already at focal height in your WCS",
+        f"warmup: {WARMUP_MS:.0f}ms = {warmup_mm:.1f}mm out-and-back at F{feed}",
+    ]
+    lines = _header(title=title, material_id=material["id"], extra=extra)
+
+    def cut_path(pts, label, closed):
+        pts = decimate_min_segment(pts, cfg.min_segment_mm)
+        if len(pts) < (3 if closed else 2):
+            return
+        x0, y0 = pts[0]
+        lines.append(f"; --- {label} ---")
+        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+        lines.append(f"M3 S{power_s}")
+        lines.append(f"F{feed}")
+        for wx, wy in _warmup_wiggle(pts, warmup_mm):
+            lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
+        for pass_n in range(passes):
+            if passes > 1:
+                lines.append(f"; pass {pass_n + 1} of {passes}")
+            for x, y in pts[1:]:
+                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        lines.append("M5")
+        lines.append("")
+
+    for i, interior in enumerate(profile.interiors):  # rib slots first
+        cut_path(_ring_coords(interior), f"rib slot {i + 1}", closed=True)
+    for i, ln in enumerate(cuts):  # open spiral cuts
+        pts = [(float(x), float(y)) for x, y in ln.coords]
+        cut_path(pts, f"spiral cut {i + 1}", closed=False)
+    cut_path(_exterior_coords(profile), "disc profile", closed=True)  # outer last
+
+    lines += ["G0 X0 Y0", ""]
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Preview (PIL raster; SVG opt-in). Mirrors jigsawzall's render approach.
 # ---------------------------------------------------------------------------
@@ -232,6 +290,70 @@ def _poly_rings(poly: Polygon) -> list[list[tuple[float, float]]]:
     for interior in poly.interiors:
         rings.append([(float(x), float(y)) for x, y in interior.coords])
     return rings
+
+
+def render_disc(
+    profile: Polygon,
+    cuts: list,
+    out_stem: Path,
+    title: str,
+    write_svg: bool = False,
+) -> tuple[Path, "Path | None"]:
+    """Render the single-piece disc: outer profile + rib-slot holes (dark) and
+    the open spiral cut paths (distinct colors). Returns (png, svg_or_None)."""
+    rings = _poly_rings(profile)  # [exterior, *holes]
+    cut_rings = [[(float(x), float(y)) for x, y in c.coords] for c in cuts]
+    xs = [x for r in rings for x, _ in r]
+    ys = [y for r in rings for _, y in r]
+    pad = 10.0
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    vw, vh = (maxx - minx) + 2 * pad, (maxy - miny) + 2 * pad
+    scale = max(4, int(900 / max(vw, vh)))
+    W, H = int(vw * scale), int(vh * scale) + 24
+
+    cut_colors = [(40, 90, 200), (200, 90, 40), (40, 150, 90), (150, 60, 160)]
+
+    def px(x, y):
+        return ((x - minx + pad) * scale, 24 + (maxy - y + pad) * scale)
+
+    png_path = out_stem.with_suffix(".png")
+    svg_path = out_stem.with_suffix(".svg")
+
+    if write_svg:
+
+        def fy(y):
+            return maxy - y + pad
+
+        svg = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{vw}mm" '
+            f'height="{vh}mm" viewBox="0 0 {vw} {vh}">',
+            f'<rect x="0" y="0" width="{vw}" height="{vh}" fill="white"/>',
+            f"<title>{title}</title>",
+        ]
+        for r in rings:
+            pts = " ".join(f"{x - minx + pad:.3f},{fy(y):.3f}" for x, y in r)
+            svg.append(
+                f'<polyline points="{pts}" fill="none" stroke="#333" stroke-width="0.3"/>'
+            )
+        for i, r in enumerate(cut_rings):
+            col = cut_colors[i % len(cut_colors)]
+            pts = " ".join(f"{x - minx + pad:.3f},{fy(y):.3f}" for x, y in r)
+            svg.append(
+                f'<polyline points="{pts}" fill="none" '
+                f'stroke="rgb{col}" stroke-width="0.4"/>'
+            )
+        svg.append("</svg>")
+        svg_path.write_text("\n".join(svg))
+
+    img = Image.new("RGB", (W, H), (255, 255, 255))
+    d = ImageDraw.Draw(img)
+    for r in rings:
+        d.line([px(x, y) for x, y in r], fill=(60, 60, 60), width=2)
+    for i, r in enumerate(cut_rings):
+        d.line([px(x, y) for x, y in r], fill=cut_colors[i % len(cut_colors)], width=2)
+    d.text((pad, 6), title, fill=(20, 20, 20), font=_load_font(14))
+    img.save(png_path, "PNG", optimize=True)
+    return png_path, (svg_path if write_svg else None)
 
 
 def render_overlay(

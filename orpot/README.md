@@ -1,56 +1,49 @@
 # orpot — laser-cut orchid pot
 
-A 3mm-MDF orchid pot built from **two flat spiral ramps + vertical ribs**. Each
-spiral is cut flat; lifting an end lets the flexible MDF climb into a shallow
-coil. The two ramps interleave as a **two-start helix** (180° apart) and radial
-ribs hold them at their graduated heights — an open, airy wall (good for orchid
-root airflow) over a drained base.
+A 3mm-MDF orchid pot cut from **one disc** with two interleaved thin spiral cuts,
+plus separate slot-in **ribs**. The disc stays a single connected piece (solid
+central hub + solid outer rim joined by two spiral arms); lifting the hub away
+from the rim expands the arms into a two-start helical wall — an open, airy wall
+(good for orchid root airflow). The ribs slot in to lock the expanded height.
 
-## Design (settled)
+## Design (single-piece, current)
 
-The pot is a shallow cone: a small base disc low at the center, a full rim ring
-high at the outside, and a wall of two spiral ramps rising between them, tied by
-radial ribs.
+- **One solid disc.** Two interleaved **open spiral cuts** (thin kerf, nothing
+  removed) run from the hub edge out to the rim inner edge. Because the cuts are
+  open curves that stop short of both the center and the edge, the disc remains
+  one connected piece: a **solid hub**, a **solid rim**, and two spiral **arms**
+  between them. Expanding it (lift hub vs rim) raises the arms into the wall.
+- **Ramp width = cut spacing.** Two cuts 180° apart with pitch = `n_spirals ×
+  strip_w` → the arms sit edge-to-edge (tight pack, no gap). Default ½″ (12.7mm)
+  arms and rim; ½″ ribs. `--turns` sets how many revolutions (taller wall).
+- **Rib mortises.** Short radial slots are cut into the arms at each rib azimuth
+  × arm crossing, sized for the rib to thread through once expanded.
+- **Separate ribs** (`--n-ribs`, default 4): radial wedges that span hub→rim,
+  with open notches where the arms cross and tabs at hub/rim. They lock the 3D
+  height.
 
-- **Two flat spiral ramps**, one revolution each, staying parallel to the floor;
-  height rises linearly with radius so the ramps run up-and-out from the base to
-  the rim (`--rise`, default 40mm). The two ramps are the **same shape** and wind
-  the **same direction** (a true two-start helix, offset 180°, so they never
-  cross); they differ only in their anchor: the **bottom** carries a center base
-  disc at its inner (start) end, the **top** carries a full rim ring at its outer
-  (end) end. Each ramp is a full turn that starts just inside the rim ring.
-- Each ramp's **free end** (bottom: outer; top: inner) has a slot that the seam
-  rib passes through, so that rib pins the free end while also tabbing into the
-  ring/disc.
-- **6 radial ribs** (`--n-ribs`), all ~the same wedge: a base tab that drops into
-  a slot in the center disc, a slant following the cone up to the rim, and a top
-  tab that rises into a slot in the rim ring. Where a ramp crosses a rib mid-wall
-  there's an **open notch** (≥3.5mm deep) the ramp rests in — the ribs don't fully
-  wrap the ramp, and the ramps are **not** notched mid-span (the twist under
-  stretch is still unknown, so their crossing angle is left free).
+Defaults (tight pack): hub Ø 2in (50.8mm), ½″ arms ×2, 1 turn → disc Ø ~127mm.
+All CLI-overridable.
 
-Defaults: rim inner Ø 4in (101.6mm), 15mm strip → Ø131.6mm outside; base Ø 2in
-(50.8mm). All CLI-overridable.
+Preview: `orpot.py preview` (flat disc + ribs). 3D: `orpot.py view` / `scad`
+(these still render the expanded arms + ribs; being updated for the single
+piece). See `figs/preview_disc.png`.
 
-Preview: `orpot.py overlay` (both flat patterns superimposed) and `orpot.py view`
-(3D assembly). See `figs/overlay.png`, `figs/assembly*.png`.
-
-**Deferred:**
+**Deferred / TODO:**
+- refine the rib shape + hub/rim tab engagement for the single-piece assembly
+- rework the 3D `view`/`scad` export to show the single disc expanding
+- a 4-spiral variant (`--n-spirals`, someday)
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
-  pattern to ease the curl
-- notching the ramps to positively locate them in the ribs (needs the measured
-  twist-under-stretch)
+  pattern to ease the curl — see the excellent `~/src/boxes` (boxes.py) library
 - an inner net-pot liner ledge
 
 ## The parts
 
-Built in machine mm (Y-up), each placed so all coordinates are positive. The
-laser cuts interior holes (slots, openings) first, then each outer profile last.
+Built in machine mm (Y-up), placed so all coordinates are positive.
 
-- **top** — rim ring + inward ramp; the ring gets rib top-tab slots.
-- **bottom** — center base disc + outward ramp; the disc gets rib base-tab slots.
-- **ribs** — the N radial wedges (one sheet): base tab, cone slant with open
-  notches at the mid ramp crossings, flat top, and a top tab into the rim ring.
+- **disc** — the single spiral piece: outer profile + rib mortise slots (cut
+  first) + the two open spiral cuts (cut before the profile so it stays anchored).
+- **ribs** — the N radial wedges (one sheet), with notches at the arm crossings.
 
 ## Usage
 
@@ -58,24 +51,23 @@ laser cuts interior holes (slots, openings) first, then each outer profile last.
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 # Preview flat outlines (PNG in figs/; --svg also writes an SVG).
-.venv/bin/python orpot.py preview --part all --svg
+.venv/bin/python orpot.py preview --part all --svg     # disc + ribs
+.venv/bin/python orpot.py preview --part disc
 
-# 3D wireframe sketch of the assembled pot (figs/assembly.png).
-.venv/bin/python orpot.py view                 # --az/--el rotate; --no-ribs
-.venv/bin/python orpot.py view --az 0 --el 8   # side profile
-
-# Emit GRBL laser G-code (build/*.gcode) + PNGs. One file per group
-# (top / bottom / ribs); "all" emits all three.
+# Emit GRBL laser G-code (build/*.gcode) + PNGs. "all" = disc + ribs.
 .venv/bin/python orpot.py cut --part all --material mdf_3mm
 
+# 3D sketch / OpenSCAD of the assembled pot.
+.venv/bin/python orpot.py view
+.venv/bin/python orpot.py scad          # -> build/orpot.scad (open, press F5)
+
 # Tweak geometry:
-.venv/bin/python orpot.py cut --part ribs --n-ribs 4
-.venv/bin/python orpot.py view --rise 30 --strip-w 20
+.venv/bin/python orpot.py preview --turns 2 --n-ribs 6
 ```
 
-Key flags: `--part {top,bottom,ribs,both,all}`, `--inner-dia`, `--strip-w`,
-`--base-dia`, `--turns`, `--top-pitch`, `--bottom-pitch`, `--rise`, `--n-ribs`,
-`--seg`, `--material`, `--feed`, `--power`. See `orpot.py cut -h` / `view -h`.
+Key flags: `--part {disc,ribs,all}`, `--n-ribs`, `--strip-w`, `--base-dia`
+(hub Ø), `--turns`, `--top-ring-w`… `--rise`, `--seg`, `--material`, `--feed`,
+`--power`. See `orpot.py <cmd> -h`.
 
 ## Cutting
 

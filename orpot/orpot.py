@@ -27,24 +27,20 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from emit import (  # noqa: E402
     emit_cut_gcode,
+    emit_disc_gcode,
     load_material,
     render_assembly_sketch,
-    render_overlay,
+    render_disc,
     render_preview,
 )
 from spiral import (  # noqa: E402
     SpiralConfig,
-    build_bottom_spiral,
-    build_part,
-    build_top_spiral,
     part_helix,
 )
 from ribs import (  # noqa: E402
-    base_disc_slots,
     build_all_ribs,
     rib_3d,
     rib_azimuths,
-    ring_slots,
 )
 
 BUILD_DIR = SCRIPT_DIR / "build"
@@ -54,8 +50,15 @@ FIG_DIR = SCRIPT_DIR / "figs"
 def _add_geometry_args(sub: argparse.ArgumentParser) -> None:
     sub.add_argument(
         "--part",
-        choices=["top", "bottom", "ribs", "both", "all"],
+        choices=["disc", "ribs", "all"],
         default="all",
+        help="disc (single spiral piece), ribs, or all",
+    )
+    sub.add_argument(
+        "--n-ribs",
+        type=int,
+        default=SpiralConfig.n_ribs,
+        help="number of radial ribs",
     )
     sub.add_argument(
         "--inner-dia",
@@ -128,31 +131,21 @@ def _config_from_args(args) -> SpiralConfig:
         min_segment_mm=args.min_segment,
         margin_mm=args.margin,
         rise_per_rev_mm=args.rise,
+        n_ribs=args.n_ribs,
     )
 
 
-def _bottom_with_slots(cfg: SpiralConfig):
-    """Bottom spiral (base disc + ramp) with the rib base-tab slots cut into the
-    disc, placed into positive coords."""
-    from spiral import build_bottom_spiral, place
+def _placed_disc(cfg: SpiralConfig):
+    """The single spiral disc (profile + cuts) placed into positive coords."""
+    from shapely.affinity import translate
+    from spiral import build_disc
 
-    poly = build_bottom_spiral(cfg)
-    if cfg.n_ribs > 0:
-        for slot in base_disc_slots(cfg):
-            poly = poly.difference(slot)
-    return place(poly, cfg.margin_mm)
-
-
-def _top_with_slots(cfg: SpiralConfig):
-    """Top spiral (rim ring + inward ramp) with the rib top-tab slots cut into
-    the ring, placed into positive coords."""
-    from spiral import build_top_spiral, place
-
-    poly = build_top_spiral(cfg)
-    if cfg.n_ribs > 0:
-        for slot in ring_slots(cfg):
-            poly = poly.difference(slot)
-    return place(poly, cfg.margin_mm)
+    profile, cuts = build_disc(cfg)
+    minx, miny, _, _ = profile.bounds
+    dx, dy = cfg.margin_mm - minx, cfg.margin_mm - miny
+    profile = translate(profile, xoff=dx, yoff=dy)
+    cuts = [translate(c, xoff=dx, yoff=dy) for c in cuts]
+    return profile, cuts
 
 
 def _placed_ribs(cfg: SpiralConfig):
@@ -167,27 +160,9 @@ def _placed_ribs(cfg: SpiralConfig):
     return _layout_row(raw, gap=cfg.strip_w_mm)
 
 
-def _cut_groups(part: str, cfg: SpiralConfig):
-    """List of (group_name, [(part_name, polygon), ...]); each group becomes one
-    gcode file. Spirals are one part each; 'ribs' is all N ribs on one sheet."""
-    groups = {
-        "top": [("top", [("top", _top_with_slots(cfg))])],
-        "bottom": [("bottom", [("bottom", _bottom_with_slots(cfg))])],
-        "ribs": [("ribs", _placed_ribs(cfg))],
-    }
-    if part in groups:
-        return groups[part]
-    if part == "both":
-        return groups["top"] + groups["bottom"]
-    if part == "all":
-        return groups["top"] + groups["bottom"] + groups["ribs"]
-    raise ValueError(f"unknown part: {part!r}")
-
-
 def _layout_row(parts, gap: float):
     """Translate parts left-to-right with `gap` between bboxes so a multi-part
-    preview reads side by side instead of overlapping. (Cut files keep one part
-    each, so this is preview-only cosmetics.)"""
+    preview reads side by side instead of overlapping."""
     from shapely.affinity import translate
 
     out = []
@@ -200,46 +175,42 @@ def _layout_row(parts, gap: float):
 
 
 def _describe(cfg: SpiralConfig) -> str:
+    from spiral import disc_radii
+
+    r_hub, r_rim_in, r_outer = disc_radii(cfg)
     return (
-        f"rim Ø{cfg.inner_dia_mm:.1f}mm..Ø{2 * cfg.top_outer_r:.1f}mm, "
-        f"base Ø{cfg.base_dia_mm:.1f}mm, strip {cfg.strip_w_mm:.1f}mm, "
-        f"{cfg.turns:g} turn(s)"
+        f"disc Ø{2 * r_outer:.1f}mm, hub Ø{2 * r_hub:.1f}mm, "
+        f"ramp {cfg.strip_w_mm:.1f}mm x{cfg.n_spirals}, {cfg.turns:g} turn(s), "
+        f"{cfg.n_ribs} ribs"
     )
 
 
 def cmd_preview(args) -> int:
     cfg = _config_from_args(args)
-    # Flatten all groups' parts into one image, laid out in a row.
-    parts = [p for _, group in _cut_groups(args.part, cfg) for p in group]
-    if len(parts) > 1:
-        parts = _layout_row(parts, gap=cfg.strip_w_mm)
     FIG_DIR.mkdir(exist_ok=True)
-    stem = FIG_DIR / f"preview_{args.part}"
-    title = f"orpot {args.part}: {_describe(cfg)}"
-    png, svg = render_preview(parts, stem, title, write_svg=args.svg)
-    print(f"-> {png}")
-    if svg is not None:
-        print(f"-> {svg}")
-    return 0
-
-
-def cmd_overlay(args) -> int:
-    """Superimpose the two spiral patterns at their assembly registration (the
-    top rotated 180°) in distinct colors, to show how they interleave."""
-    from shapely.affinity import rotate
-
-    cfg = _config_from_args(args)
-    bottom = build_bottom_spiral(cfg)
-    top = rotate(build_top_spiral(cfg), 180.0, origin=(0, 0))
-    named = [
-        ("bottom (base disc, winds out)", bottom, (184, 118, 58)),  # ochre
-        ("top (rim ring, winds out, +180°)", top, (176, 48, 32)),  # brick red
-    ]
-    FIG_DIR.mkdir(exist_ok=True)
-    stem = FIG_DIR / "overlay"
-    title = f"orpot overlay: {_describe(cfg)}"
-    png = render_overlay(named, stem, title)
-    print(f"-> {png}")
+    if args.part in ("disc", "all"):
+        profile, cuts = _placed_disc(cfg)
+        png, svg = render_disc(
+            profile,
+            cuts,
+            FIG_DIR / "preview_disc",
+            f"orpot disc: {_describe(cfg)}",
+            write_svg=args.svg,
+        )
+        print(f"-> {png}")
+        if svg is not None:
+            print(f"-> {svg}")
+    if args.part in ("ribs", "all"):
+        ribs = _placed_ribs(cfg)
+        png, svg = render_preview(
+            ribs,
+            FIG_DIR / "preview_ribs",
+            f"orpot ribs: {_describe(cfg)}",
+            write_svg=args.svg,
+        )
+        print(f"-> {png}")
+        if svg is not None:
+            print(f"-> {svg}")
     return 0
 
 
@@ -276,31 +247,61 @@ def cmd_view(args) -> int:
     return 0
 
 
+def cmd_scad(args) -> int:
+    """Write an OpenSCAD file of the ASSEMBLED 3D pot for interactive viewing."""
+    from scad import write_scad
+
+    cfg = _config_from_args(args)
+    BUILD_DIR.mkdir(exist_ok=True)
+    out = write_scad(cfg, BUILD_DIR / "orpot.scad")
+    print(f"-> {out}")
+    print("   open in OpenSCAD and press F5 to preview the assembled pot")
+    return 0
+
+
 def cmd_cut(args) -> int:
     cfg = _config_from_args(args)
     material = load_material(args.material)
     BUILD_DIR.mkdir(exist_ok=True)
 
-    # One gcode file per group (top / bottom / ribs). Ribs share a sheet.
-    for group_name, parts in _cut_groups(args.part, cfg):
-        title = f"orpot {group_name}: {_describe(cfg)}"
-        gcode = emit_cut_gcode(
-            parts,
+    if args.part in ("disc", "all"):
+        profile, cuts = _placed_disc(cfg)
+        title = f"orpot disc: {_describe(cfg)}"
+        gcode = emit_disc_gcode(
+            profile,
+            cuts,
             material,
             title,
             cfg,
             feed_override=args.feed,
             power_percent=args.power,
         )
-        out = BUILD_DIR / f"cut_{group_name}_{args.material}.gcode"
+        out = BUILD_DIR / f"cut_disc_{args.material}.gcode"
+        out.write_text(gcode)
+        laser_on = gcode.count("\nM3 ")
+        print(f"-> {out}  ({len(gcode.splitlines())} lines, {laser_on} cut(s))")
+        png, _ = render_disc(
+            profile, cuts, BUILD_DIR / f"cut_disc_{args.material}", title
+        )
+        print(f"-> {png}")
+
+    if args.part in ("ribs", "all"):
+        ribs = _placed_ribs(cfg)
+        title = f"orpot ribs: {_describe(cfg)}"
+        gcode = emit_cut_gcode(
+            ribs,
+            material,
+            title,
+            cfg,
+            feed_override=args.feed,
+            power_percent=args.power,
+        )
+        out = BUILD_DIR / f"cut_ribs_{args.material}.gcode"
         out.write_text(gcode)
         laser_on = gcode.count("\nM3 ")
         print(f"-> {out}  ({len(gcode.splitlines())} lines, {laser_on} cut(s))")
         png, _ = render_preview(
-            parts,
-            BUILD_DIR / f"cut_{group_name}_{args.material}",
-            title,
-            write_svg=False,
+            ribs, BUILD_DIR / f"cut_ribs_{args.material}", title, write_svg=False
         )
         print(f"-> {png}")
     return 0
@@ -315,10 +316,6 @@ def main() -> int:
     pv.add_argument("--svg", action="store_true", help="also write an SVG")
     pv.set_defaults(func=cmd_preview)
 
-    ov = sub.add_parser("overlay", help="superimpose the two flat spirals")
-    _add_geometry_args(ov)
-    ov.set_defaults(func=cmd_overlay)
-
     ct = sub.add_parser("cut", help="emit GRBL laser GCode (+ a PNG)")
     _add_geometry_args(ct)
     ct.add_argument("--material", default="mdf_3mm")
@@ -332,6 +329,10 @@ def main() -> int:
     vw.add_argument("--el", type=float, default=22.0, help="view elevation deg")
     vw.add_argument("--no-ribs", action="store_true", help="omit the vertical ribs")
     vw.set_defaults(func=cmd_view)
+
+    sc = sub.add_parser("scad", help="write an OpenSCAD file of the assembled pot")
+    _add_geometry_args(sc)
+    sc.set_defaults(func=cmd_scad)
 
     args = p.parse_args()
     return args.func(args)

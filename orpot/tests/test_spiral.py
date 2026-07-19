@@ -16,7 +16,12 @@ from shapely.geometry import Point, Polygon
 PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
 
-from emit import decimate_min_segment, emit_cut_gcode, load_material  # noqa: E402
+from emit import (  # noqa: E402
+    decimate_min_segment,
+    emit_cut_gcode,
+    emit_disc_gcode,
+    load_material,
+)
 from ribs import (  # noqa: E402
     base_disc_slots,
     build_all_ribs,
@@ -27,8 +32,10 @@ from ribs import (  # noqa: E402
 from spiral import (  # noqa: E402
     SpiralConfig,
     build_bottom_spiral,
+    build_disc,
     build_part,
     build_top_spiral,
+    disc_radii,
 )
 
 
@@ -81,10 +88,11 @@ def test_bottom_contains_base_disc():
     bot = build_bottom_spiral(cfg)
     disc = Point(0, 0).buffer(cfg.base_r * 0.98)
     assert bot.contains(disc), "base disc footprint missing from bottom spiral"
-    # Its outer edge reaches the rim ring's inner edge (span_r_hi + half strip).
+    # The ramp reaches at least the rim ring's inner edge (the free-end boss may
+    # extend a bit past it).
     minx, miny, maxx, maxy = bot.bounds
     reach = max(maxx, maxy, -minx, -miny)
-    assert reach == pytest.approx(cfg.span_r_hi + cfg.strip_w_mm / 2.0, abs=1.0)
+    assert reach >= cfg.ring_inner_r - 1.0
 
 
 def test_placed_part_is_positive():
@@ -200,3 +208,50 @@ def test_base_disc_slots_removed_from_bottom():
     plain = build_bottom_spiral(cfg)
     slotted = plain.difference(unary_union(base_disc_slots(cfg)))
     assert slotted.area < plain.area
+
+
+# --- single-piece disc (the real fabrication model) ---
+
+
+def test_disc_is_single_connected_piece():
+    cfg = SpiralConfig()
+    profile, cuts = build_disc(cfg)
+    assert isinstance(profile, Polygon) and profile.is_valid
+    r_hub, r_rim_in, r_outer = disc_radii(cfg)
+    # Outer radius matches; solid hub present (center is material).
+    reach = max(profile.bounds[2], profile.bounds[3])
+    assert reach == pytest.approx(r_outer, abs=0.5)
+    assert profile.contains(Point(0, 0)), "solid hub missing"
+    # n_spirals open cuts, each spanning hub->rim (endpoints differ = open).
+    assert len(cuts) == cfg.n_spirals
+    for c in cuts:
+        (x0, y0), (x1, y1) = c.coords[0], c.coords[-1]
+        assert math.hypot(x1 - x0, y1 - y0) > cfg.strip_w_mm  # not a closed loop
+        rs = [math.hypot(x, y) for x, y in c.coords]
+        assert min(rs) == pytest.approx(r_hub, abs=1.0)
+        assert max(rs) == pytest.approx(r_rim_in, abs=1.0)
+
+
+def test_disc_cuts_do_not_reach_edges():
+    """Cuts must stop inside the solid rim and outside the solid hub so the disc
+    stays one connected piece."""
+    cfg = SpiralConfig()
+    _, _, r_outer = disc_radii(cfg)
+    _, cuts = build_disc(cfg)
+    for c in cuts:
+        rs = [math.hypot(x, y) for x, y in c.coords]
+        assert max(rs) < r_outer - 1.0  # stays inside the rim band
+        assert min(rs) >= cfg.base_r - 1e-6  # starts at/after the hub edge
+
+
+def test_disc_gcode_open_cuts_and_order():
+    cfg = SpiralConfig()
+    material = load_material("mdf_3mm")
+    profile, cuts = build_disc(cfg)
+    g = emit_disc_gcode(profile, cuts, material, "test", cfg)
+    assert "$32=1" in g and ";MATERIAL: mdf_3mm" in g and ";LASER_MODE: static" in g
+    assert "\nM4 " not in g
+    assert g.count("; --- spiral cut") == cfg.n_spirals
+    assert "disc profile" in g
+    # rib slots come before the profile; profile is the last cut section.
+    assert g.index("rib slot 1") < g.index("spiral cut 1") < g.index("disc profile")
