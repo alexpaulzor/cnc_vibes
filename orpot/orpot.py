@@ -61,37 +61,25 @@ def _add_geometry_args(sub: argparse.ArgumentParser) -> None:
         help="number of radial ribs",
     )
     sub.add_argument(
-        "--inner-dia",
-        type=float,
-        default=SpiralConfig.inner_dia_mm,
-        help="top spiral inner Ø (rim opening) in mm",
-    )
-    sub.add_argument(
         "--strip-w",
         type=float,
         default=SpiralConfig.strip_w_mm,
-        help="ribbon width in mm",
+        help="arm/ribbon width in mm",
     )
     sub.add_argument(
         "--base-dia",
         type=float,
         default=SpiralConfig.base_dia_mm,
-        help="bottom spiral base disc Ø in mm",
+        help="center hub Ø in mm",
     )
     sub.add_argument(
         "--turns", type=float, default=SpiralConfig.turns, help="revolutions per spiral"
     )
     sub.add_argument(
-        "--top-pitch",
+        "--top-ring-w",
         type=float,
-        default=SpiralConfig.top_pitch_mm,
-        help="top ribbon radial advance per rev (inward), mm",
-    )
-    sub.add_argument(
-        "--bottom-pitch",
-        type=float,
-        default=None,
-        help="bottom ribbon radial advance per rev; default auto",
+        default=SpiralConfig.top_ring_w_mm,
+        help="outer rim ring width, mm",
     )
     sub.add_argument(
         "--seg",
@@ -121,12 +109,10 @@ def _add_geometry_args(sub: argparse.ArgumentParser) -> None:
 
 def _config_from_args(args) -> SpiralConfig:
     return SpiralConfig(
-        inner_dia_mm=args.inner_dia,
         strip_w_mm=args.strip_w,
         base_dia_mm=args.base_dia,
         turns=args.turns,
-        top_pitch_mm=args.top_pitch,
-        bottom_pitch_mm=args.bottom_pitch,
+        top_ring_w_mm=args.top_ring_w,
         seg_mm=args.seg,
         min_segment_mm=args.min_segment,
         margin_mm=args.margin,

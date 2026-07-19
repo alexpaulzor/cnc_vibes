@@ -356,47 +356,6 @@ def render_disc(
     return png_path, (svg_path if write_svg else None)
 
 
-def render_overlay(
-    named_parts: list[tuple[str, Polygon, tuple]],
-    out_stem: Path,
-    title: str,
-) -> Path:
-    """Superimpose several flat patterns in one frame (shared origin), each drawn
-    in its own RGB color, for comparing how they register. named_parts is a list
-    of (label, polygon, color)."""
-    all_rings = [
-        (color, ring) for _, poly, color in named_parts for ring in _poly_rings(poly)
-    ]
-    xs = [x for _, ring in all_rings for x, _ in ring]
-    ys = [y for _, ring in all_rings for _, y in ring]
-    pad = 10.0
-    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-    vw, vh = (maxx - minx) + 2 * pad, (maxy - miny) + 2 * pad
-    scale = max(4, int(900 / max(vw, vh)))
-    W, H = int(vw * scale), int(vh * scale) + 24
-
-    img = Image.new("RGB", (W, H), (255, 255, 255))
-    d = ImageDraw.Draw(img)
-
-    def px(x, y):
-        return ((x - minx + pad) * scale, 24 + (maxy - y + pad) * scale)
-
-    for color, ring in all_rings:
-        d.line([px(x, y) for x, y in ring], fill=color, width=2)
-    font = _load_font(14)
-    d.text((pad, 4), title, fill=(20, 20, 20), font=font)
-    # Legend.
-    ly = 22 + 6
-    for label, _, color in named_parts:
-        d.line([(pad, ly + 6), (pad + 24, ly + 6)], fill=color, width=3)
-        d.text((pad + 30, ly), label, fill=(20, 20, 20), font=font)
-        ly += 20
-
-    png_path = out_stem.with_suffix(".png")
-    img.save(png_path, "PNG", optimize=True)
-    return png_path
-
-
 def render_preview(
     parts: list[tuple[str, Polygon]],
     out_stem: Path,

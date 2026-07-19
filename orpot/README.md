@@ -25,13 +25,17 @@ from the rim expands the arms into a two-start helical wall — an open, airy wa
 Defaults (tight pack): hub Ø 2in (50.8mm), ½″ arms ×2, 1 turn → disc Ø ~127mm.
 All CLI-overridable.
 
-Preview: `orpot.py preview` (flat disc + ribs). 3D: `orpot.py view` / `scad`
-(these still render the expanded arms + ribs; being updated for the single
-piece). See `figs/preview_disc.png`.
+- **Ribs** (`--n-ribs`, default 4): radial wedges spanning hub→rim along the cone
+  slant, each with a ≤5mm **tab at each end** — the inner-bottom tab drops into a
+  hub slot, the outer-top tab rises into a rim-ring slot (always the same
+  distance from the outer edge). A ~5mm **shelf notch** wherever a spiral arm
+  crosses cradles it. The arms themselves are **not** slotted.
+
+Preview: `orpot.py preview` (flat disc + ribs). 3D: `orpot.py view` (wireframe)
+or `orpot.py scad` → `build/orpot.scad` (open in OpenSCAD, F5). See
+`figs/preview_disc.png`, `figs/assembly.png`.
 
 **Deferred / TODO:**
-- refine the rib shape + hub/rim tab engagement for the single-piece assembly
-- rework the 3D `view`/`scad` export to show the single disc expanding
 - a 4-spiral variant (`--n-spirals`, someday)
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
   pattern to ease the curl — see the excellent `~/src/boxes` (boxes.py) library
