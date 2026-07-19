@@ -29,9 +29,16 @@ from emit import (  # noqa: E402
     emit_cut_gcode,
     load_material,
     render_assembly_sketch,
+    render_overlay,
     render_preview,
 )
-from spiral import SpiralConfig, build_part, part_helix  # noqa: E402
+from spiral import (  # noqa: E402
+    SpiralConfig,
+    build_bottom_spiral,
+    build_part,
+    build_top_spiral,
+    part_helix,
+)
 from ribs import rib_azimuths, rib_3d, build_all_ribs, base_disc_slots  # noqa: E402
 
 BUILD_DIR = SCRIPT_DIR / "build"
@@ -198,6 +205,23 @@ def cmd_preview(args) -> int:
     return 0
 
 
+def cmd_overlay(args) -> int:
+    """Superimpose the two flat spiral patterns (concentric) in distinct colors."""
+    cfg = _config_from_args(args)
+    bottom = build_bottom_spiral(cfg)
+    top = build_top_spiral(cfg)
+    named = [
+        ("bottom (base disc + winds out)", bottom, (184, 118, 58)),  # ochre
+        ("top (rim ring + winds in)", top, (176, 48, 32)),  # brick red
+    ]
+    FIG_DIR.mkdir(exist_ok=True)
+    stem = FIG_DIR / "overlay"
+    title = f"orpot overlay: {_describe(cfg)}"
+    png = render_overlay(named, stem, title)
+    print(f"-> {png}")
+    return 0
+
+
 def cmd_view(args) -> int:
     """3D wireframe sketch of the assembled pot (both spirals + ribs)."""
     cfg = _config_from_args(args)
@@ -269,6 +293,10 @@ def main() -> int:
     _add_geometry_args(pv)
     pv.add_argument("--svg", action="store_true", help="also write an SVG")
     pv.set_defaults(func=cmd_preview)
+
+    ov = sub.add_parser("overlay", help="superimpose the two flat spirals")
+    _add_geometry_args(ov)
+    ov.set_defaults(func=cmd_overlay)
 
     ct = sub.add_parser("cut", help="emit GRBL laser GCode (+ a PNG)")
     _add_geometry_args(ct)

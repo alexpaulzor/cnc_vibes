@@ -46,6 +46,7 @@ class SpiralConfig:
     turns: float = 1.0  # revolutions per spiral
     top_pitch_mm: float | None = None  # None => symmetric span (winds in to base_r)
     bottom_pitch_mm: float | None = None  # None => symmetric span (winds out to R_max)
+    top_ring_w_mm: float = 12.0  # radial width of the top spiral's full outer rim ring
     seg_mm: float = 0.5  # spiral point spacing (curve smoothness)
     min_segment_mm: float = 0.3  # gcode decimation floor (see emit.py)
     margin_mm: float = 8.0  # inset from origin so coords stay positive
@@ -81,6 +82,22 @@ class SpiralConfig:
     @property
     def base_r(self) -> float:
         return self.base_dia_mm / 2.0
+
+    # Shared centerline radial span of both spirals (bottom out, top in).
+    @property
+    def span_r_lo(self) -> float:
+        return self.base_r
+
+    @property
+    def span_r_hi(self) -> float:
+        return self.top_outer_r - self.strip_w_mm / 2.0
+
+    def z_at_r(self, r):
+        """Assembled height as a function of centerline radius: the pot is a cone
+        with the base disc low at the center and the rim ring high at the outside,
+        so z rises with radius (this is what keeps BOTH spirals right-side up)."""
+        lo, hi = self.span_r_lo, self.span_r_hi
+        return self.rise_per_rev_mm * (r - lo) / (hi - lo)
 
 
 def _spiral_polar(
@@ -162,12 +179,23 @@ def _part_polar_params(name: str, cfg: SpiralConfig) -> tuple[float, float, floa
 
 
 def build_top_spiral(cfg: SpiralConfig) -> Polygon:
-    """Rim ribbon: outer edge starts at top_outer_r and winds INWARD one turn.
-    The centerline sits half a strip-width inside the outer edge and spirals
-    in by top_pitch_mm per revolution."""
+    """Top piece: a full outer RIM RING (a complete circle at the outer radius)
+    that blends into a ribbon winding INWARD one turn. The ring is the top
+    piece's anchor (mirror of the bottom's center base disc); the ribbon's outer
+    start merges smoothly into it."""
     r0, pitch, turns = _part_polar_params("top", cfg)
     line = _spiral_centerline(r0=r0, pitch=pitch, turns=turns, seg_mm=cfg.seg_mm)
-    return _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
+    ribbon = _ribbon(line, cfg.strip_w_mm, cfg.buffer_resolution)
+    # Full outer rim ring: annulus from (top_outer_r - ring_w) to top_outer_r.
+    outer = Point(0.0, 0.0).buffer(cfg.top_outer_r, quad_segs=cfg.buffer_resolution * 2)
+    inner = Point(0.0, 0.0).buffer(
+        cfg.top_outer_r - cfg.top_ring_w_mm, quad_segs=cfg.buffer_resolution * 2
+    )
+    ring = outer.difference(inner)
+    part = ribbon.union(ring)
+    if not isinstance(part, Polygon):
+        part = max(part.geoms, key=lambda g: g.area)
+    return part
 
 
 def build_bottom_spiral(cfg: SpiralConfig) -> Polygon:
@@ -231,7 +259,7 @@ def crossing_rz(name: str, cfg: SpiralConfig, azimuth_rad: float):
     if theta > span + 1e-9:
         return None
     r = r0 + (pitch / (2.0 * math.pi)) * theta
-    z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))
+    z = cfg.z_at_r(r)
     return (r, z)
 
 
@@ -262,7 +290,7 @@ def part_helix(name: str, cfg: SpiralConfig, phase_rad: float = 0.0) -> dict:
     offset (pass pi for a 180-degree offset)."""
     r0, pitch, turns = _part_polar_params(name, cfg)
     theta, r = _spiral_polar(r0, pitch, turns, cfg.seg_mm)
-    z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))  # both start at the floor
+    z = cfg.z_at_r(r)  # height follows radius (outer=rim high, inner=base low)
     az = theta + phase_rad  # azimuth offset for two-start interleaving
 
     def rail(r_off: float) -> np.ndarray:

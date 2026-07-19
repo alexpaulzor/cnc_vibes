@@ -51,7 +51,7 @@ def rib_crossings(
         while base + k * 2.0 * math.pi <= span + 1e-6:
             theta = base + k * 2.0 * math.pi
             r = r0 + (pitch / (2.0 * math.pi)) * theta
-            z = cfg.rise_per_rev_mm * (theta / (2.0 * math.pi))
+            z = cfg.z_at_r(r)  # height follows radius (rim high, base low)
             out.append((name, r, z))
             k += 1
     return out

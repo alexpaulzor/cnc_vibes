@@ -54,23 +54,25 @@ def test_top_spiral_radii_and_width():
 
 
 def test_top_ribbon_width_via_radial_probe():
-    """Probe the ribbon width on the -x axis (theta=pi), where a single turn
-    crosses cleanly, away from the end caps and the seam at theta=0."""
+    """Width of the inward ribbon on the -x axis (theta=pi). Walk outward from
+    the centerline until material ends, so the new outer rim ring doesn't skew
+    the measurement."""
     from spiral import _part_polar_params
 
     cfg = SpiralConfig()
     top = build_top_spiral(cfg)
     r0, pitch, _ = _part_polar_params("top", cfg)
     r_mid = r0 + pitch * 0.5  # centerline radius at theta=pi
-    lo = int((r_mid + cfg.strip_w_mm) * 10) + 40
-    inside = [
-        -x / 10.0
-        for x in range(int((r_mid - cfg.strip_w_mm) * 10) - 40, lo)
-        if top.contains(Point(-x / 10.0, 0.0))
-    ]
-    assert inside, "no material found along -x probe"
-    span = max(inside) - min(inside)
-    assert span == pytest.approx(cfg.strip_w_mm, abs=0.6)
+    step = 0.05
+
+    def edge(direction):
+        r = r_mid
+        while top.contains(Point(-r, 0.0)):
+            r += direction * step
+        return r
+
+    width = edge(+1) - edge(-1)
+    assert width == pytest.approx(cfg.strip_w_mm, abs=0.6)
 
 
 def test_bottom_contains_base_disc():
