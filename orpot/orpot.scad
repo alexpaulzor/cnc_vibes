@@ -13,7 +13,8 @@
 // planes. The wood stays flat, so a cross-section reads as stacked rings.
 
 /* ================= parameters ================= */
-MODE       = "assembled";  // "cut" or "assembled"
+// MODE       = "assembled";  // "cut" or "assembled"
+MODE = "cut";
 
 IN         = 25.4;  // mm per inch
 stock      = 300;   // square stock edge
@@ -33,6 +34,7 @@ rib_w      = 0.5*IN;  // rib strut/body thickness reference
 tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
 tab_thru   = thickness;      // tab pokes this far through the slot (then a step)
 shoulder   = 3;              // min material each side of a slot / step width
+hub_lap    = 8;              // cross-lap depth where the hub disc meets a rib leg
 
 $fn = 180;
 
@@ -76,22 +78,23 @@ module disc2d() {
         circle(r = r_out);
         for (k = [0 : n_spirals-1])
             rotate([0, 0, k*360/n_spirals]) spiral_cut(kerf);
-        // hub slot at the rib azimuth; ring slot PRE-OFFSET by `twist` so both
-        // land in one radial plane once the pot twists open. (tab_w + fit long)
+        // ring slot (pre-offset by twist) for the rib top tab; hub cross-lap slot
+        // (cut inward from the hub edge) that the rib's bottom notch interlocks with.
         for (i = [0 : n_ribs-1]) {
             a = i*360/n_ribs;
-            rotate([0, 0, a])         radial_slot(r_hub - shoulder - tab_w/2, tab_w + fit);
+            rotate([0, 0, a])         radial_slot(r_hub - hub_lap/2, hub_lap);
             rotate([0, 0, a + twist]) radial_slot(ring_c, tab_w + fit);
         }
     }
 }
 
 /* ================= rib =================
-   In the rib's (x = radius s, y = height z) frame. The top edge is a STAIRCASE:
-   one horizontal SHELF at each spiral-arm crossing, at that arm's height, so a
-   flat (horizontal) arm lands flat on it and never sinks into the rib. Right
-   angle at the outside-bottom corner (r_out, 0). Stepped tabs: a tab_thru nub
-   (fits the slot) then the wide body catches it. */
+   In the rib's (x = radius s, y = height z) frame. The rib is a SOLID leg: a
+   flat bottom on the table (z=0), the outside-bottom right-angle corner at
+   (r_out, 0), a solid body up under the arms, and the outer/ring wall. The only
+   things carved away are flat SHELVES where each arm lands (so a flat arm lands
+   flat, no tunnelling) and a hub cross-lap notch so the centre disc slots in.
+   Ring top tab (stepped) plugs into the ring slot. */
 
 // Where the arms cross this rib's radial plane (azimuth a, deg): [r, z] each.
 function rib_crossings(a) = [
@@ -102,21 +105,26 @@ function rib_crossings(a) = [
 ];
 
 module rib2d(a) {
-    inner = r_hub - shoulder - tab_w;             // inner extent (hosts hub tab)
-    union() {
-        translate([inner, 0]) square([r_out - inner, max(shoulder, thickness)]); // foot
-        translate([r_rim, 0]) square([r_out - r_rim, pot_height]);               // outer/ring support
-        for (c = rib_crossings(a))                 // stair tread up to each shelf
-            translate([c[0] - (ramp_w+fit)/2, 0]) square([ramp_w+fit, c[1] - thickness/2]);
-        translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]);     // ring tab
-        translate([inner + (tab_w)/2 - tab_w/2, -tab_thru]) square([tab_w, tab_thru]); // hub tab
+    difference() {
+        union() {
+            // solid body: foot(z=0) -> outer riser -> top under ring -> slant to hub
+            polygon([[r_hub, 0], [r_out, 0], [r_out, pot_height], [r_rim, pot_height]]);
+            translate([r_hub - hub_lap, 0]) square([hub_lap, pot_height*0.5]); // inner leg lapping the hub
+            translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
+        }
+        // flat shelves: carve the top down to each arm's underside
+        for (c = rib_crossings(a))
+            translate([c[0] - (ramp_w+fit)/2, c[1] - thickness/2]) square([ramp_w+fit, pot_height]);
+        // hub cross-lap: notch the inner-bottom up by one thickness so the centre
+        // disc (flush on the table) slots into the rib; both bottoms stay flat.
+        translate([r_hub - hub_lap, 0]) square([hub_lap + 0.01, thickness + fit]);
     }
 }
 
 /* ================= 2D cutting layout ================= */
 
 module layout2d() {
-    %square([stock, stock], center = true);   // stock outline (reference, not cut)
+    *%square([stock, stock], center = true);   // stock outline (reference, not cut)
     disc2d();
     // Each rib's right-angle (outside-bottom) corner tucks into a STOCK corner,
     // its two legs along the sheet edges, hypotenuse (the slant) facing the disc.
@@ -156,8 +164,8 @@ module ring3d() {
 }
 
 module assembled3d() {
-    color("SaddleBrown")                                     // hub (bottom)
-        translate([0,0,-thickness]) cylinder(r = r_hub, h = thickness);
+    color("SaddleBrown")                                     // hub (bottom, on the table)
+        cylinder(r = r_hub, h = thickness);
     color("SteelBlue") ring3d();                            // blended rim ring
     color("Goldenrod")                                      // the two spiral arms
         for (k = [0:n_spirals-1]) arm3d(k*360/n_spirals);
