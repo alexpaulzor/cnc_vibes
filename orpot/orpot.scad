@@ -13,8 +13,8 @@
 // planes. The wood stays flat, so a cross-section reads as stacked rings.
 
 /* ================= parameters ================= */
-MODE       = "assembled";  // "cut" or "assembled"
-// MODE = "cut";
+// MODE       = "assembled";  // "cut" or "assembled"
+MODE = "cut";
 
 IN         = 25.4;  // mm per inch
 stock      = 300;   // square stock edge
@@ -28,8 +28,8 @@ ring_w     = 0.75*IN; // rim ring width (19.05) — 3/4" so a 1/2" tab has margi
 ramp_w     = 0.5*IN;  // spiral arm width (12.7)
 n_spirals  = 1;       // 1 = single spiral (gentler bend: same width, 2x turns, half
                       // the stretch per length); 2 = double helix
-spiral_offset = 10;   // rotate the spiral cut(s) off the rib slots — ~6.6mm arc gap
-                      // at the hub, enough (>=5mm) that the tab-to-spiral can't split
+spiral_offset = 45;   // rotate the spiral cut(s) well off the rib slots so the
+                      // slot-to-spiral sliver is wide enough not to crack
 
 n_ribs     = 4;       // radial ribs (from the corner offcuts)
 pot_height = 3*IN;    // spiral rise, disc floor -> rim
@@ -241,15 +241,15 @@ module assembled3d() {
     // BOTTOM: only the centre disc (trimmed near where the spiral starts), so the
     // view is neat — the real cut disc includes the whole spiral, but showing just
     // the hub + rib slots reads more clearly. Disc rides foot_drop up on the feet.
-    # // color("BurlyWood")
+    color("BurlyWood")
         translate([0,0,foot_drop])
         linear_extrude(thickness) intersection() {
             disc2d(with_spirals = false);
-            circle(r = r_hub + base_engage + 10);   // trim to just past the hub slots
+            circle(r = r_hub + 1/4 * IN);   // trim to just past the hub slots
         }
     color("SteelBlue") translate([0,0,foot_drop+pot_height])
         linear_extrude(thickness) ring2d();                                // TOP ring
-    * color("SaddleBrown")                                                   // ribs between
+    color("SaddleBrown")                                                   // ribs between
             for (i = [0:n_ribs-1])
             rotate([0,0,i*360/n_ribs])
                 rotate([90,0,0])
