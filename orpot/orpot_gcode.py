@@ -114,6 +114,23 @@ def main() -> int:
     )
     combined.write_text(svg.replace("</svg>", polylines + "\n</svg>"))
 
+    # guard: if parts overlap in the layout they fuse into one outline (a rib
+    # merges into the disc). Detect it by comparing the closed-loop count to what
+    # the .scad expects, so a too-small layout_side can't silently ruin a cut.
+    m = re.search(r'"EXPECT_CLOSED",\s*(\d+)', proc.stderr)
+    if m:
+        sys.path.insert(0, str(DIR))
+        import svg2laser as _s
+
+        closed = sum(1 for _, c in _s.svg_subpaths(combined.read_text())[0] if c)
+        expect = int(m.group(1))
+        if closed < expect:
+            raise SystemExit(
+                f"parts overlap: found {closed} closed outlines, expected {expect} "
+                "— a rib is fused into the disc. Increase layout_side in orpot.scad "
+                "(>=242 for the default disc) and re-run."
+            )
+
     # 4: hand off to svg2laser (open polylines -> single-kerf; closed -> outline)
     cmd = [
         sys.executable,

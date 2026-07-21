@@ -25,7 +25,7 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 350
+    feed_mm_per_min: 500
     passes: 2
     notes: |
       Primary orpot stock. Denser than plywood. Smoke is heavy — air assist

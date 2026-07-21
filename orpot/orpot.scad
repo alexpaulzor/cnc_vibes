@@ -26,8 +26,9 @@ hub_dia    = 3*IN;    // solid center hub diameter (76.2)
 ring_id    = 6*IN;    // rim ring INNER diameter (152.4) = opening
 ring_w     = 0.75*IN; // rim ring width (19.05) — 3/4" so a 1/2" tab has margin
 ramp_w     = 0.5*IN;  // spiral arm width (12.7)
-n_spirals  = 2;       // interleaved spiral arms
-spiral_offset = 45;   // rotate the spiral cuts off the rib slots (keeps a gap so
+n_spirals  = 1;       // 1 = single spiral (gentler bend: same width, 2x turns, half
+                      // the stretch per length); 2 = double helix
+spiral_offset = 45;   // rotate the spiral cut(s) off the rib slots (keeps a gap so
                       // the tab between a slot and the spiral start can't split)
 
 n_ribs     = 4;       // radial ribs (from the corner offcuts)
@@ -36,6 +37,8 @@ rib_w      = 0.5*IN;  // rib strut/body thickness reference
 tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
 tab_thru   = thickness;      // ring tab pokes this far through the ring slot
 shoulder   = 3;              // min material each side of a slot / step width
+
+layout_side = 245;   // square envelope the parts are packed into (<= stock)
 
 $fn = 180;
 
@@ -156,7 +159,6 @@ module rib2d(a) {
 
 /* ================= 2D cutting layout ================= */
 
-layout_side = 240;   // square envelope the parts are packed into (<= stock)
 
 // Place the 4 ribs into the corners of a `side` square.
 module ribs_layout(side) {
@@ -232,9 +234,11 @@ module frame2d() {
 
 /* ================= top level ================= */
 echo(str("turns=", turns, "  twist=", twist, " deg  disc od=", 2*r_out/IN, "in"));
-if (MODE == "frame")
-    for (k = [0:n_spirals-1])   // echoed for the single-kerf wrapper
+if (MODE == "frame") {
+    echo("EXPECT_CLOSED", 1 + 3*n_ribs);   // disc + hub slots + ring slots + ribs
+    for (k = [0:n_spirals-1])              // echoed for the single-kerf wrapper
         echo("SPIRAL", spiral_centerline(k*360/n_spirals + spiral_offset));
+}
 if (MODE == "assembled") assembled3d();
 else if (MODE == "frame") frame2d();
 else                      layout2d();
