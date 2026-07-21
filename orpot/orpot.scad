@@ -37,8 +37,12 @@ rib_w      = 0.5*IN;  // rib strut/body thickness reference
 tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
 tab_thru   = thickness;      // ring tab pokes this far through the ring slot
 shoulder   = 3;              // min material each side of a slot / step width
+base_engage = 20;    // rib<->hub cross-lap length (hub slot reaches this far in
+                     // from the first spiral; rib base slot matches)
+outer_fillet = 1*IN; // round the rib's outer-bottom corner (bigger later)
 
-layout_side = 245;   // square envelope the parts are packed into (<= stock)
+layout_side = 310;   // square envelope the parts pack into (parts are big now;
+                     // stock size is not a constraint for the moment)
 
 $fn = 180;
 
@@ -72,10 +76,15 @@ module spiral_cut(w, steps = 300) {               // one thin spiral cut, hub->r
     polygon(concat(outer, inner));
 }
 
-// A radial slot centred on radius `rc`, `len` long (radial), `slot_w` wide.
+// A radial slot centred on radius `rc`, `len` long (radial), `slot_w` wide,
+// lying on the +x axis (rotate it to the target azimuth).
 module radial_slot(rc, len) {
-    rotate([0,0,90]) translate([0, rc]) square([slot_w, len], center = true);
+    translate([rc, 0]) square([len, slot_w], center = true);
 }
+
+// Radius where the spiral CUT crosses azimuth a (deg) on its first turn — the
+// seam a hub slot must reach so a rib can slide in and mate.
+function first_cut_r(a) = r_hub + (pitch/360) * ((a - spiral_offset + 3600) % 360);
 
 // The spiral centerline as a point list (open path), phase in degrees.
 function spiral_centerline(phase, steps = 300) = [
@@ -89,24 +98,27 @@ module disc2d(with_spirals = true) {
         if (with_spirals)
             for (k = [0 : n_spirals-1])
                 rotate([0, 0, k*360/n_spirals + spiral_offset]) spiral_cut(kerf);
-        // ring slot (pre-offset by twist) for the rib top tab; hub slot for the
-        // rib's drop-in hook tab. The spiral is offset (spiral_offset) so its
-        // start clears these by >=5mm.
+        // ring slot (pre-offset by twist) for the rib top tab. Hub slot runs from
+        // base_engage inside the hub OUT to the first cut seam, so it's not a blind
+        // pocket — the rib slides in through the seam and mates with it.
         for (i = [0 : n_ribs-1]) {
             a = i*360/n_ribs;
-            rotate([0, 0, a])         radial_slot(r_hub - tab_w/2, tab_w);
+            hub_in  = r_hub - base_engage;
+            hub_out = first_cut_r(a);
+            rotate([0, 0, a])         radial_slot((hub_in + hub_out)/2, hub_out - hub_in);
             rotate([0, 0, a + twist]) radial_slot(ring_c, tab_w + fit);
         }
     }
 }
 
 /* ================= rib =================
-   In the rib's (x = radius s, y = height z) frame. The rib is a solid fin whose
-   INNER edge follows the spiral's inner edge (r_i - ramp_w/2 at each crossing),
-   slanting up toward the next layer. Each spiral turn threads through a full-width
-   SLOT (ramp_w x thickness) that opens at the inner edge, so the spiral's inside
-   edge sits flush with the rib's inside edge. Outer edge at r_out for the ring
-   tab; hub tab + inward hook at the bottom. */
+   In the rib's (x = radius s, y = height z) frame. The rib is a full-height,
+   full-width fin (outer-bottom corner rounded, outer_fillet). The spiral threads
+   through a full-width SLOT at each crossing. Its BASE cross-laps the hub: a
+   horizontal slot 3mm above the bottom takes the disc (so the disc rides 3mm up
+   and the rib's bottom 3mm are feet through the disc's radial slot). A top tab
+   plugs into the (closed) ring slot. Assembly: stretch the spiral, slide each rib
+   in from outside, then set the ring onto the top tabs. */
 
 // Sort a list of [r,z] by radius (ascending).
 function _sortr(v) = len(v) <= 1 ? v : let(
@@ -127,34 +139,27 @@ function rib_crossings(a) = _sortr([
 
 module rib2d(a) {
     cr = rib_crossings(a);
-    n  = len(cr);
-    sw = ramp_w / 2;                         // half spiral width
-    hw = (thickness + fit) / 2;              // half slot height (spiral thickness)
-    rc = r_hub - tab_w/2;                    // hub-slot / tab centre
-    // INNER edge, bottom -> top, flush with each spiral inner edge (r_i - sw, z_i);
-    // it slants up toward the next layer between crossings.
-    inner = concat(
-        [ [rc - tab_w/2, 0] ],
-        [ for (c = cr) [c[0] - sw, c[1]] ],
-        [ [r_rim - sw, pot_height] ]
-    );
-    // solid fin: inner edge (up) -> across the top to r_out -> down the outer riser
-    // -> foot back to the inner-bottom.
-    body = concat(
-        inner,
-        [ [r_out, pot_height], [r_out, 0] ]
-    );
+    sw = ramp_w / 2;                 // half spiral width
+    hw = (thickness + fit) / 2;      // half slot height (spiral thickness)
+    r_in = r_hub - base_engage;      // inner edge (over the hub, for the cross-lap)
     difference() {
         union() {
-            polygon(body);                                           // solid fin
+            // triangle with a DIAGONAL cutoff (inner-top removed): inner-bottom ->
+            // diagonal up to the rim -> flat top to r_out -> rounded outer-bottom.
+            hull() {
+                translate([r_in, 0]) square(0.01);
+                translate([r_rim, pot_height]) square(0.01);
+                translate([r_out, pot_height]) square(0.01);
+                translate([r_out - outer_fillet, outer_fillet]) circle(r = outer_fillet);
+            }
             translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
-            // hub tab: 5mm wide, drops 3mm below the disc, then hooks inward
-            translate([rc - tab_w/2, -thickness]) square([tab_w, thickness + 0.01]);
-            translate([rc - tab_w/2 - thickness, -2*thickness]) square([tab_w, thickness]);
         }
-        // full-width slots the spiral threads through, opening at the inner edge
+        // full-width slots the spiral threads through
         for (c = cr)
-            translate([c[0] - sw - 0.01, c[1] - hw]) square([ramp_w + 0.02, thickness + fit]);
+            translate([c[0] - sw, c[1] - hw]) square([ramp_w, thickness + fit]);
+        // base cross-lap: horizontal slot 3mm above the bottom takes the hub disc
+        // (open at the inner edge so the rib slides on from outside)
+        translate([r_in - 1, thickness]) square([base_engage + 1, thickness + fit]);
     }
 }
 
@@ -239,7 +244,7 @@ module frame2d() {
 /* ================= top level ================= */
 echo(str("turns=", turns, "  twist=", twist, " deg  disc od=", 2*r_out/IN, "in"));
 if (MODE == "frame") {
-    echo("EXPECT_CLOSED", 1 + 3*n_ribs);   // disc + hub slots + ring slots + ribs
+    echo("DISC_AREA", PI*r_out*r_out);      // guard: a rib fused into the disc blows this up
     for (k = [0:n_spirals-1])              // echoed for the single-kerf wrapper
         echo("SPIRAL", spiral_centerline(k*360/n_spirals + spiral_offset));
 }
