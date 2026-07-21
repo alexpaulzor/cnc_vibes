@@ -13,8 +13,8 @@
 // planes. The wood stays flat, so a cross-section reads as stacked rings.
 
 /* ================= parameters ================= */
-// MODE       = "assembled";  // "cut" or "assembled"
-MODE = "cut";
+MODE       = "assembled";  // "cut" or "assembled"
+// MODE = "cut";
 
 IN         = 25.4;  // mm per inch
 stock      = 300;   // square stock edge
@@ -32,17 +32,18 @@ spiral_offset = 10;   // rotate the spiral cut(s) off the rib slots — ~6.6mm a
                       // at the hub, enough (>=5mm) that the tab-to-spiral can't split
 
 n_ribs     = 4;       // radial ribs (from the corner offcuts)
-pot_height = 3*IN;    // assembled height (also rib height in the flat pattern)
+pot_height = 3*IN;    // spiral rise, disc floor -> rim
+foot_drop  = 0.5*IN;  // ribs protrude this far below the disc (feet); disc rides up
 rib_w      = 0.5*IN;  // rib strut/body thickness reference
 tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
-tab_thru   = thickness;      // ring tab pokes this far through the ring slot
+tab_thru   = thickness;      // (unused legacy)
+top_tab_up = 2*thickness;    // ring tab: through the ring (thickness) + proud by one thickness
 shoulder   = 3;              // min material each side of a slot / step width
 base_engage = 20;    // rib<->hub cross-lap length (hub slot reaches this far in
                      // from the first spiral; rib base slot matches)
-outer_fillet = 1*IN; // round the rib's outer-bottom corner (bigger later)
+outer_fillet = 2*IN; // round the rib's outer-bottom corner
 
-layout_side = 310;   // square envelope the parts pack into (parts are big now;
-                     // stock size is not a constraint for the moment)
+layout_side = 300;   // square envelope the parts pack into (= stock; not shrunk yet)
 
 $fn = 180;
 
@@ -112,13 +113,13 @@ module disc2d(with_spirals = true) {
 }
 
 /* ================= rib =================
-   In the rib's (x = radius s, y = height z) frame. The rib is a full-height,
-   full-width fin (outer-bottom corner rounded, outer_fillet). The spiral threads
-   through a full-width SLOT at each crossing. Its BASE cross-laps the hub: a
-   horizontal slot 3mm above the bottom takes the disc (so the disc rides 3mm up
-   and the rib's bottom 3mm are feet through the disc's radial slot). A top tab
-   plugs into the (closed) ring slot. Assembly: stretch the spiral, slide each rib
-   in from outside, then set the ring onto the top tabs. */
+   In the rib's (x = radius s, y = height z) frame. Inner-top edge is the hybrid
+   slant: VERTICAL along each spiral slot's inner edge (so the spiral threads in
+   flush, no lip) and SLANTED between slots. Outer-bottom corner rounded to
+   outer_fillet. Feet drop foot_drop below the disc; a horizontal cross-lap slot at
+   the disc height takes the hub disc. Ring top tab plugs the (closed) ring slot
+   and stands proud by one thickness. Assembly: stretch the spiral, slide each rib
+   in from outside through the seam, then set the ring onto the top tabs. */
 
 // Sort a list of [r,z] by radius (ascending).
 function _sortr(v) = len(v) <= 1 ? v : let(
@@ -128,40 +129,60 @@ function _sortr(v) = len(v) <= 1 ? v : let(
     hi = [for (x = v) if (x[0] >  p) x]
 ) concat(_sortr(lo), eq, _sortr(hi));
 
-// Arm crossings on this rib's plane, kept clear of the hub edge and ring wall.
+// Arm crossings on this rib's plane: [r, z]. z is offset by foot_drop (disc rides
+// that far up on the rib feet). Kept clear of the hub edge and ring wall.
 function rib_crossings(a) = _sortr([
     for (k = [0:n_spirals-1]) for (m = [0:ceil(turns)+1])
         let(u = (a - k*360/n_spirals - spiral_offset + m*360) / Theta_eff,
             r = r_hub + (r_rim - r_hub)*u)
         if (u > 0.03 && u < 0.995 && r > r_hub + ramp_w/2 && r < r_rim - ramp_w/2)
-            [ r, pot_height*u ]
+            [ r, foot_drop + pot_height*u ]
 ]);
 
 module rib2d(a) {
     cr = rib_crossings(a);
     sw = ramp_w / 2;                 // half spiral width
-    hw = (thickness + fit) / 2;      // half slot height (spiral thickness)
+    // spiral crosses the rib at a slight helical slant, so it needs slightly more
+    // than one thickness of clearance through the slot.
+    slot_slant = pot_height * (thickness / rbar) / (Theta_eff * PI/180);
+    hh = (thickness + fit + slot_slant) / 2;   // half slot height
     r_in = r_hub - base_engage;      // inner edge (over the hub, for the cross-lap)
+    z_rim = foot_drop + pot_height;  // rim height (feet on the table at z=0)
+    // Inner-top edge: VERTICAL along each slot's inner edge (at the spiral inner
+    // radius r_i-sw, over the slot height), then SLANT between slots. This keeps the
+    // rib from ever slanting inside the spiral (no lip/hook on the slot inner edge).
+    inner = [ for (c = cr) each [ [c[0]-sw, c[1]-hh], [c[0]-sw, c[1]+hh] ] ];
     difference() {
         union() {
-            // triangle with a DIAGONAL cutoff (inner-top removed): inner-bottom ->
-            // diagonal up to the rim -> flat top to r_out -> rounded outer-bottom.
-            hull() {
-                translate([r_in, 0]) square(0.01);
-                translate([r_rim, pot_height]) square(0.01);
-                translate([r_out, pot_height]) square(0.01);
-                translate([r_out - outer_fillet, outer_fillet]) circle(r = outer_fillet);
-            }
-            translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
+            // fin: foot (z=0) -> up the slanted inner edge through the slot corners
+            // -> to the rim -> flat top to r_out -> rounded outer-bottom corner.
+            polygon(concat(
+                [ [r_in, 0] ],
+                inner,
+                [ [r_rim - sw, z_rim] ],
+                round_outer(z_rim)
+            ));
+            // solid base block under the disc: feet (0..foot_drop) + slot material,
+            // overlapping the fin so it's one piece.
+            translate([r_in, 0]) square([base_engage + ramp_w, foot_drop + thickness + shoulder]);
+            translate([ring_c - tab_w/2, z_rim]) square([tab_w, top_tab_up]); // ring top tab
         }
-        // full-width slots the spiral threads through
+        // spiral slots, open on the slanted inner edge (spiral threads through)
         for (c = cr)
-            translate([c[0] - sw, c[1] - hw]) square([ramp_w, thickness + fit]);
-        // base cross-lap: horizontal slot 3mm above the bottom takes the hub disc
-        // (open at the inner edge so the rib slides on from outside)
-        translate([r_in - 1, thickness]) square([base_engage + 1, thickness + fit]);
+            translate([c[0] - sw - 0.01, c[1] - hh]) square([ramp_w + 0.02, 2*hh]);
+        // disc cross-lap: horizontal slot at the disc height (foot_drop)
+        translate([r_in - 1, foot_drop]) square([base_engage + 1, thickness + fit]);
     }
 }
+
+// Outer profile from the rim corner down to the foot, with an outer_fillet-radius
+// rounded outer-bottom corner (point list for the rib polygon).
+function round_outer(z_rim, n = 24) = concat(
+    [ [r_out, z_rim] ],
+    [ for (i = [0:n]) let(t = 90*i/n)          // arc: (r_out, fillet) -> (r_out-fillet, 0)
+        [ r_out - outer_fillet + outer_fillet*cos(t),
+          outer_fillet - outer_fillet*sin(t) ] ]
+);
 
 
 // ! rib2d(0);
@@ -209,7 +230,7 @@ module arm3d(phase, seg = 60) {                    // extra-credit lofted spiral
     for (i = [0 : n-1]) hull()
         for (u = [i/n, (i+1)/n]) {
             r   = r_hub + (r_rim - r_hub)*u;
-            z   = pot_height*u;
+            z   = foot_drop + pot_height*u;
             phi = Theta_eff*u + phase;
             translate([r*cos(phi), r*sin(phi), z]) rotate([0,0,phi])
                 cube([ramp_w, 0.1, thickness], center = true);
@@ -217,11 +238,18 @@ module arm3d(phase, seg = 60) {                    // extra-credit lofted spiral
 }
 
 module assembled3d() {
-    color("BurlyWood")
-        translate([0, 0, -thickness])
-        linear_extrude(thickness) disc2d();                 // BOTTOM = the cut
-    color("SteelBlue") translate([0,0,pot_height]) linear_extrude(thickness) ring2d(); // TOP ring
-    color("SaddleBrown")                                                   // ribs between
+    // BOTTOM: only the centre disc (trimmed near where the spiral starts), so the
+    // view is neat — the real cut disc includes the whole spiral, but showing just
+    // the hub + rib slots reads more clearly. Disc rides foot_drop up on the feet.
+    # // color("BurlyWood")
+        translate([0,0,foot_drop])
+        linear_extrude(thickness) intersection() {
+            disc2d(with_spirals = false);
+            circle(r = r_hub + base_engage + 10);   // trim to just past the hub slots
+        }
+    color("SteelBlue") translate([0,0,foot_drop+pot_height])
+        linear_extrude(thickness) ring2d();                                // TOP ring
+    * color("SaddleBrown")                                                   // ribs between
             for (i = [0:n_ribs-1])
             rotate([0,0,i*360/n_ribs])
                 rotate([90,0,0])
