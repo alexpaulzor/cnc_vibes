@@ -49,8 +49,8 @@
   family: paper
   thickness_mm: 3.0
   laser:
-    power_percent: 70
-    feed_mm_per_min: 1400
+    power_percent: 100
+    feed_mm_per_min: 1200
     passes: 1
     notes: |
       Cheap stock for a first spiral flex-test / fit mockup. FIRE RISK — air
