@@ -28,8 +28,8 @@ ring_w     = 0.75*IN; // rim ring width (19.05) — 3/4" so a 1/2" tab has margi
 ramp_w     = 0.5*IN;  // spiral arm width (12.7)
 n_spirals  = 1;       // 1 = single spiral (gentler bend: same width, 2x turns, half
                       // the stretch per length); 2 = double helix
-spiral_offset = 45;   // rotate the spiral cut(s) off the rib slots (keeps a gap so
-                      // the tab between a slot and the spiral start can't split)
+spiral_offset = 10;   // rotate the spiral cut(s) off the rib slots — ~6.6mm arc gap
+                      // at the hub, enough (>=5mm) that the tab-to-spiral can't split
 
 n_ribs     = 4;       // radial ribs (from the corner offcuts)
 pot_height = 3*IN;    // assembled height (also rib height in the flat pattern)
@@ -89,8 +89,9 @@ module disc2d(with_spirals = true) {
         if (with_spirals)
             for (k = [0 : n_spirals-1])
                 rotate([0, 0, k*360/n_spirals + spiral_offset]) spiral_cut(kerf);
-        // ring slot (pre-offset by twist) for the rib top tab; hub slot (1/2" long
-        // along the radius) for the rib's drop-in hook tab.
+        // ring slot (pre-offset by twist) for the rib top tab; hub slot for the
+        // rib's drop-in hook tab. The spiral is offset (spiral_offset) so its
+        // start clears these by >=5mm.
         for (i = [0 : n_ribs-1]) {
             a = i*360/n_ribs;
             rotate([0, 0, a])         radial_slot(r_hub - tab_w/2, tab_w);
@@ -100,13 +101,12 @@ module disc2d(with_spirals = true) {
 }
 
 /* ================= rib =================
-   In the rib's (x = radius s, y = height z) frame. ONE solid polygon: a right
-   triangle (flat foot on the table, outer riser at r_out) with STAIRS cut from
-   the hypotenuse — a monotonic staircase, so the profile only ever steps DOWN
-   going inward (never a valley / brittle gap). Each tread is a flat shelf at an
-   arm's height. The ring top-tab plugs into the ring slot. At the inner-bottom a
-   TAB drops through the hub slot and hooks INWARD 3mm below (not up) to retain
-   the leg. */
+   In the rib's (x = radius s, y = height z) frame. The rib is a solid fin whose
+   INNER edge follows the spiral's inner edge (r_i - ramp_w/2 at each crossing),
+   slanting up toward the next layer. Each spiral turn threads through a full-width
+   SLOT (ramp_w x thickness) that opens at the inner edge, so the spiral's inside
+   edge sits flush with the rib's inside edge. Outer edge at r_out for the ring
+   tab; hub tab + inward hook at the bottom. */
 
 // Sort a list of [r,z] by radius (ascending).
 function _sortr(v) = len(v) <= 1 ? v : let(
@@ -128,29 +128,33 @@ function rib_crossings(a) = _sortr([
 module rib2d(a) {
     cr = rib_crossings(a);
     n  = len(cr);
+    sw = ramp_w / 2;                         // half spiral width
+    hw = (thickness + fit) / 2;              // half slot height (spiral thickness)
     rc = r_hub - tab_w/2;                    // hub-slot / tab centre
-    // tread boundaries: inner edge, midpoints between crossings, then r_rim
-    b = concat([rc - tab_w/2],
-               [for (i = [1:max(n-1,0)]) (cr[i-1][0] + cr[i][0]) / 2],
-               [r_rim]);
-    // monotonic staircase top edge, outer -> inner
-    // TODO: make the staircase slope where possible instead of sheer face.
-    stair = concat(
-        [ [r_rim, pot_height] ],
-        [ for (i = [n-1 : -1 : 0]) each [
-            [ b[i+1], cr[i][1] - thickness/2 ],   // outer end of tread i
-            [ b[i],   cr[i][1] - thickness/2 ] ]  // inner end of tread i
-        ]
+    // INNER edge, bottom -> top, flush with each spiral inner edge (r_i - sw, z_i);
+    // it slants up toward the next layer between crossings.
+    inner = concat(
+        [ [rc - tab_w/2, 0] ],
+        [ for (c = cr) [c[0] - sw, c[1]] ],
+        [ [r_rim - sw, pot_height] ]
     );
-    body = concat([ [rc - tab_w/2, 0], [r_out, 0], [r_out, pot_height] ], stair);
-    union() {
-        polygon(body);                                          // solid staircase leg
-        translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
-        // hub tab: 5mm wide, drops 3mm below the disc, then hooks inward
-        translate([rc - tab_w/2, -thickness])
-            square([tab_w, thickness + 0.01]);
-        translate([rc - tab_w/2 - thickness, -2*thickness])
-            square([tab_w, thickness]);
+    // solid fin: inner edge (up) -> across the top to r_out -> down the outer riser
+    // -> foot back to the inner-bottom.
+    body = concat(
+        inner,
+        [ [r_out, pot_height], [r_out, 0] ]
+    );
+    difference() {
+        union() {
+            polygon(body);                                           // solid fin
+            translate([ring_c - tab_w/2, pot_height]) square([tab_w, tab_thru]); // ring top tab
+            // hub tab: 5mm wide, drops 3mm below the disc, then hooks inward
+            translate([rc - tab_w/2, -thickness]) square([tab_w, thickness + 0.01]);
+            translate([rc - tab_w/2 - thickness, -2*thickness]) square([tab_w, thickness]);
+        }
+        // full-width slots the spiral threads through, opening at the inner edge
+        for (c = cr)
+            translate([c[0] - sw - 0.01, c[1] - hw]) square([ramp_w + 0.02, thickness + fit]);
     }
 }
 
