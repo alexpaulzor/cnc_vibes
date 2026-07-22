@@ -11,7 +11,21 @@ you (all reversible) + questions batched for your return.
    clean dir. Minimal set now (spiral_cal + get_ip/find-machine); the rest is
    inventoried below for you to pick later.
 
-## Decisions made (reversible)
+## STATUS (end of autonomous /makeitso session)
+DONE & committed:
+- cnc_calibrate/ scaffold (README, .gitignore, calibrate.py CLI, font_7seg, tests, figs).
+- spiral_cal.py upgraded: ellipse + pass-count zigzag + engraving + rebuilt KEY.
+  Recommended MDF plate generated (feeds 100–997 over 10 rings, passes 1/2/3,
+  aspect 1.35, ~81×65mm, ~2.8m cut). gcode verified: static M3 only, S1000 cut /
+  S150 engrave, ping-pong (no G0 between passes), sector counts [2,3,1].
+- get_ip/find-machine forklifted (findmachine.py + find_cnc.py + cnc_state.py);
+  cnc_vibes gutted (tombstones); 50 cnc_calibrate tests pass; cnc_vibes 556 tests
+  still collect clean.
+KNOWN caveat: on-part FEED digits are stacked at top-center and cross the ring
+cuts / are cramped near the middle — legible but not pretty; the KEY png is the
+authoritative decoder. Pass-count digits are engraved outside the rings (clean).
+
+
 - **Forklift = move (git rm from cnc_vibes) but MINIMAL**: only the flagship
   spiral_cal (rebuilt/upgraded here as canonical) and the get_ip stack
   (find_cnc.py, cnc_state.py) move now. Rest of cnc_vibes left intact to pick

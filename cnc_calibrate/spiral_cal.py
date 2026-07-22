@@ -177,11 +177,13 @@ def generate(
                 continue
             feed_segs += _feed_label_segs(str(feeds[i]), 0.0, b[i] - gap * 0.5, lab_h)
         _emit_engrave(lines, feed_segs, engrave_s, engrave_feed, "feed per ring")
-        # pass-count digit per sector, just inside the outer ring at sector mid
+        # pass-count digit per sector, just OUTSIDE the outer ring (on the frame
+        # that stays put) at the sector mid-angle, so it doesn't collide with the
+        # feed-label stack and stays readable in situ.
         pass_segs = []
         for k in range(N):
             th = join_ang + (k + 0.5) * sec
-            px, py = ellipse_pt(a[-1] * 0.9, b[-1] * 0.9, th)
+            px, py = ellipse_pt(a[-1] + 3.5, b[-1] + 3.5, th)
             pass_segs += _feed_label_segs(str(counts[k]), px, py, lab_h * 1.3)
         _emit_engrave(
             lines, pass_segs, engrave_s, engrave_feed, "pass count per sector"
