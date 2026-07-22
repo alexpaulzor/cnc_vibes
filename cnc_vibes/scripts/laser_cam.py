@@ -203,10 +203,14 @@ def laser_profile(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
+        # Ping-pong passes: forward, then reverse over the same points (no laser-on
+        # move back to the start).
         for p in range(passes):
             if passes > 1:
-                lines.append(f"; pass {p + 1}/{passes}")
-            for x, y in ring[1:]:
+                dirn = "forward" if p % 2 == 0 else "reverse"
+                lines.append(f"; pass {p + 1}/{passes} ({dirn})")
+            seq = ring[1:] if p % 2 == 0 else ring[-2::-1]
+            for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")
@@ -301,10 +305,14 @@ def laser_engrave(
         lines.append(f"G0 X{x_origin + x0:.3f} Y{y_origin + y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
+        # Ping-pong passes: forward, then reverse over the same points (no laser-on
+        # move back to the start).
         for p in range(passes):
             if passes > 1:
-                lines.append(f"; pass {p + 1}/{passes}")
-            for x, y in contour[1:]:
+                dirn = "forward" if p % 2 == 0 else "reverse"
+                lines.append(f"; pass {p + 1}/{passes} ({dirn})")
+            seq = contour[1:] if p % 2 == 0 else contour[-2::-1]
+            for x, y in seq:
                 lines.append(f"G1 X{x_origin + x:.3f} Y{y_origin + y:.3f}")
         lines.append("M5")
         lines.append("")

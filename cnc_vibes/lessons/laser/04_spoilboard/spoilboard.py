@@ -330,14 +330,15 @@ def emit_tile_gcode(tile: Tile, hole_dia: float, material: dict) -> str:
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"M4 S{power_s}")
         lines.append(f"F{feed}")
+        # Ping-pong passes: forward, then reverse over the same points. The head is
+        # already at the far end after each pass, so there is no move back to the
+        # start before re-tracing — the reverse pass just cuts back over the path.
         for pass_n in range(passes):
             if passes > 1:
-                lines.append(f"; pass {pass_n + 1} of {passes}")
-            if pass_n > 0:
-                # Multi-pass: return to start before re-tracing
-                lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-                lines.append(f"M4 S{power_s}")
-            for x, y in pts[1:]:
+                dirn = "forward" if pass_n % 2 == 0 else "reverse"
+                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
+            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
+            for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")

@@ -195,10 +195,14 @@ def emit_cut_gcode(
         lines.append(f"F{feed}")
         for wx, wy in _warmup_wiggle(pts, warmup_mm):
             lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
+        # Multi-pass ping-pong: forward, then reverse over the same points,
+        # alternating — never a laser-on move back to the start.
         for pass_n in range(passes):
             if passes > 1:
-                lines.append(f"; pass {pass_n + 1} of {passes}")
-            for x, y in pts[1:]:
+                dirn = "forward" if pass_n % 2 == 0 else "reverse"
+                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
+            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
+            for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")
@@ -252,10 +256,14 @@ def emit_disc_gcode(
         lines.append(f"F{feed}")
         for wx, wy in _warmup_wiggle(pts, warmup_mm):
             lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
+        # Multi-pass ping-pong: forward, then reverse over the same points,
+        # alternating — never a laser-on move back to the start.
         for pass_n in range(passes):
             if passes > 1:
-                lines.append(f"; pass {pass_n + 1} of {passes}")
-            for x, y in pts[1:]:
+                dirn = "forward" if pass_n % 2 == 0 else "reverse"
+                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
+            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
+            for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")
