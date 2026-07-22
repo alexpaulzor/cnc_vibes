@@ -112,3 +112,16 @@ def test_sector_dividers_present_for_passes():
     lines, *_ = sc.generate(6, 3, 24, 13.0, 100.0, passes=[1, 2, 3], aspect=1.35)
     g = "\n".join(lines)
     assert "sector dividers" in g
+
+
+def test_parse_passes_rejects_non_contiguous():
+    import argparse
+
+    import pytest
+
+    assert sc._parse_passes("1,2,3") == [1, 2, 3]
+    assert sc._parse_passes("3,1,2") == [1, 2, 3]
+    assert sc._parse_passes("") == [1]
+    for bad in ("2,3,4", "1,3", "5", "1,1,2"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            sc._parse_passes(bad)

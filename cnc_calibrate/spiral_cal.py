@@ -106,7 +106,7 @@ def _emit_engrave(lines, segs, engrave_s, engrave_feed, label=""):
     lines.append("M5")
 
 
-def _feed_label_segs(text, cx, cy, height):
+def _number_label_segs(text, cx, cy, height):
     """font_7seg strokes for `text`, centered horizontally on cx with its vertical
     center at cy."""
     import font_7seg
@@ -175,7 +175,7 @@ def generate(
         for i in range(n):
             if 2 * b[i] < 6:  # innermost rings too small for a legible label
                 continue
-            feed_segs += _feed_label_segs(str(feeds[i]), 0.0, b[i] - gap * 0.5, lab_h)
+            feed_segs += _number_label_segs(str(feeds[i]), 0.0, b[i] - gap * 0.5, lab_h)
         _emit_engrave(lines, feed_segs, engrave_s, engrave_feed, "feed per ring")
         # pass-count digit per sector, just OUTSIDE the outer ring (on the frame
         # that stays put) at the sector mid-angle, so it doesn't collide with the
@@ -184,7 +184,7 @@ def generate(
         for k in range(N):
             th = join_ang + (k + 0.5) * sec
             px, py = ellipse_pt(a[-1] + 3.5, b[-1] + 3.5, th)
-            pass_segs += _feed_label_segs(str(counts[k]), px, py, lab_h * 1.3)
+            pass_segs += _number_label_segs(str(counts[k]), px, py, lab_h * 1.3)
         _emit_engrave(
             lines, pass_segs, engrave_s, engrave_feed, "pass count per sector"
         )
@@ -501,8 +501,19 @@ def _render_key(b, feeds, T, meta):
 # CLI
 # ---------------------------------------------------------------------------
 def _parse_passes(s: str) -> list[int]:
+    """Parse '1,2,3' -> [1,2,3]. The plate tests pass counts 1..N as N sectors, so
+    the values must be exactly the contiguous run 1..N (any order); reject
+    anything else rather than silently testing 1..N regardless."""
     vals = [int(x) for x in str(s).replace(" ", "").split(",") if x != ""]
-    return vals or [1]
+    if not vals:
+        return [1]
+    if sorted(vals) != list(range(1, len(vals) + 1)):
+        raise argparse.ArgumentTypeError(
+            f"--passes must be the contiguous run 1..N (e.g. '1,2,3'); got {vals}. "
+            "Each ring is split into N sectors cut 1..N times; arbitrary values "
+            "aren't representable."
+        )
+    return sorted(vals)
 
 
 def main(argv=None) -> int:
@@ -526,8 +537,9 @@ def main(argv=None) -> int:
         "--passes",
         type=_parse_passes,
         default=[1],
-        help="pass counts to test as sectors, e.g. '1,2,3'. Default '1' = classic "
-        "single-pass feed test.",
+        help="pass counts to test, as N equal-ANGLE sectors, e.g. '1,2,3' (must be "
+        "the run 1..N). NOTE: sectors are equal parameter-angle, so on an ellipse "
+        "their arc-lengths differ slightly. Default '1' = classic single-pass test.",
     )
     p.add_argument(
         "--aspect",

@@ -28,6 +28,20 @@ nested pieces; the engraved digits + the KEY PNG decode which is which.
 Machine constants (weak ~10W diode): static **M3** at 100% (M4 dynamic
 under-fires), ~1s cold-start warmup handled by a spiral lead-in per ring.
 
+## Notes / limitations
+- Sectors are equal **parameter-angle** (`360/N`), not equal arc-length, so on an
+  ellipse the minor-axis sectors have slightly less perimeter than major-axis
+  ones. Fine for a qualitative cut/no-cut read; the pass-count digit is engraved
+  at each sector for reference.
+- `--min-r/--max-r` are the **semi-minor** axis (they equal the radius only when
+  `--aspect 1.0`). Feeds are derived (`perimeter / --time-s`); the default
+  `--time-s` targets ~100–1000 mm/min for the default ellipse, so adjust it if
+  you change the radii or aspect (the printed output and KEY show the real feeds).
+- On-part **feed** digits are stacked up the center and cross the ring cuts —
+  legible but the KEY png is the authoritative decoder. Pass-count digits sit
+  outside the rings.
+
+
 ## Deps
 `pillow` (PNG renders). Network discovery uses `zeroconf` (optional) + stdlib
 sockets. No numpy/opencv/shapely.
