@@ -97,25 +97,35 @@ def _slash_strokes(ox, oy, h):
     return [(ox, oy, ox + w, oy + h)]
 
 
-def _label_strokes(text, cx, cy, h, spacing_frac=0.3):
-    """Strokes for `text` (digits + '/'), centered horizontally on cx with vertical
-    center at cy. Returns [(x1,y1,x2,y2), ...]."""
+def _label_strokes(text, cx, cy, h, angle_deg=0.0, spacing_frac=0.3):
+    """Strokes for `text` (digits + '/'), centered at (cx, cy) and rotated by
+    angle_deg (CCW). Returns [(x1,y1,x2,y2), ...]."""
     import font_7seg
 
     w = h / 2
     spacing = spacing_frac * h
     pitch = w + spacing
     total_w = len(text) * w + (len(text) - 1) * spacing
-    x0 = cx - total_w / 2
-    y0 = cy - h / 2
-    out = []
+    x0 = -total_w / 2  # build centered on the origin, then rotate + translate
+    y0 = -h / 2
+    raw = []
     for i, ch in enumerate(text):
         ox = x0 + i * pitch
         if ch == "/":
-            out += _slash_strokes(ox, y0, h)
+            raw += _slash_strokes(ox, y0, h)
         elif ch.isdigit():
-            out += font_7seg.render_digit(ch, ox, y0, h)
+            raw += font_7seg.render_digit(ch, ox, y0, h)
         # any other char: leave its pitch as a gap
+    ca = math.cos(math.radians(angle_deg))
+    sa = math.sin(math.radians(angle_deg))
+
+    def tf(x, y):
+        return (cx + x * ca - y * sa, cy + x * sa + y * ca)
+
+    out = []
+    for x1, y1, x2, y2 in raw:
+        (X1, Y1), (X2, Y2) = tf(x1, y1), tf(x2, y2)
+        out.append((X1, Y1, X2, Y2))
     return out
 
 
@@ -142,11 +152,30 @@ def _order_strokes(strokes, start=(0.0, 0.0)):
     return ordered
 
 
-def _emit_engrave_boustrophedon(lines, strokes, engrave_s, engrave_feed, label=""):
-    """Engrave every stroke as ONE continuous laser-on path, then retrace it in
-    reverse. The beam never blanks (glyph-to-glyph connectors are drawn as faint
-    drag lines), so the diode warms up once; the cold first-second of the forward
-    pass is redrawn LAST in the reverse pass, when the beam is fully warm."""
+def _warmup_points(pts, warmup_mm):
+    """Out-and-back over the START of the path covering ~warmup_mm total, ending
+    back at pts[0] (the standard diode warmup wiggle)."""
+    if warmup_mm <= 0 or len(pts) < 2:
+        return []
+    half = warmup_mm / 2.0
+    fwd = [pts[0]]
+    acc = 0.0
+    for a, b in zip(pts, pts[1:]):
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        if acc + d >= half:
+            t = (half - acc) / d if d else 0.0
+            fwd.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+            break
+        acc += d
+        fwd.append(b)
+    return fwd[1:] + list(reversed(fwd))[1:]  # out to the half point, back to start
+
+
+def _emit_engrave(lines, strokes, engrave_s, engrave_feed, warmup_mm, label=""):
+    """Engrave every stroke as ONE continuous laser-on path (glyph-to-glyph
+    connectors drawn as faint drag lines, so the beam never blanks). Precede it
+    with the standard ~1s warmup wiggle over the start of the path, then a single
+    forward pass."""
     if not strokes:
         return
     ordered = _order_strokes(strokes)
@@ -156,14 +185,13 @@ def _emit_engrave_boustrophedon(lines, strokes, engrave_s, engrave_feed, label="
             pts.append((x1, y1))  # connector drag line into this stroke
         pts.append((x2, y2))
     if label:
-        lines.append(f"; engrave: {label} (continuous fwd+reverse; warms once)")
+        lines.append(f"; engrave: {label} (1s warmup wiggle, then one forward pass)")
     lines.append(f"G0 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
     lines.append(f"M3 S{engrave_s}")
     lines.append(f"F{engrave_feed}")
-    for x, y in pts[1:]:
+    for x, y in _warmup_points(pts, warmup_mm):
         lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-    lines.append("; reverse pass: redraw the cold first-second while warm")
-    for x, y in pts[-2::-1]:
+    for x, y in pts[1:]:
         lines.append(f"G1 X{x:.3f} Y{y:.3f}")
     lines.append("M5")
 
@@ -220,20 +248,44 @@ def generate(
 
     classic = N == 1 and abs(aspect - 1.0) < 1e-9
 
-    # ---- ENGRAVE a {feed}/{passes} label on EVERY sector of EVERY ring, as one
-    # continuous fwd+reverse low-power path (warms once; cold start redrawn last).
+    # ---- ENGRAVE a {feed}/{passes} label on EVERY sector of EVERY ring. One
+    # continuous low-power path with a 1s warmup wiggle over its start (no reverse
+    # pass). Labels are rotated tangent to the rings (so they sit in the band
+    # instead of crossing the ring cuts) and fanned across each sector's arc so
+    # they don't pile up at one angle.
     if not classic:
         lab_h = min(2.0, max(1.3, gap * 0.6))
+        engrave_warmup_mm = engrave_feed * (WARMUP_MS / 60000.0)
         strokes = []
         for i in range(n):
             r_b = b[i] + gap * 0.5  # band just OUTSIDE ring i (past its cut)
             r_a = aspect * r_b
             for k in range(N):
-                th = join_ang + (k + 0.5) * sec  # sector mid, clear of the warmup arc
+                # fan the n rings across the sector arc (inner near the sector
+                # start, outer near its end) so labels don't stack at one angle.
+                frac = 0.15 + 0.7 * (i + 0.5) / n
+                th = join_ang + k * sec + frac * sec
                 px, py = ellipse_pt(r_a, r_b, th)
-                strokes += _label_strokes(f"{feeds[i]}/{counts[k]}", px, py, lab_h)
-        _emit_engrave_boustrophedon(
-            lines, strokes, engrave_s, engrave_feed, "feed/passes on every sector"
+                # rotate to the ellipse tangent so the label lies along the band;
+                # keep it upright (flip if the up-vector would point down).
+                tang = math.degrees(
+                    math.atan2(
+                        r_b * math.cos(math.radians(th)),
+                        -r_a * math.sin(math.radians(th)),
+                    )
+                )
+                if math.cos(math.radians(tang)) < 0:
+                    tang += 180
+                strokes += _label_strokes(
+                    f"{feeds[i]}/{counts[k]}", px, py, lab_h, tang
+                )
+        _emit_engrave(
+            lines,
+            strokes,
+            engrave_s,
+            engrave_feed,
+            engrave_warmup_mm,
+            "feed/passes on every sector",
         )
         lines.append("")
 
