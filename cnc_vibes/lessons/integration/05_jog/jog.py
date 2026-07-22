@@ -551,16 +551,11 @@ def _resolve_transport(args) -> tuple[object, str]:
     _open_transport sees the discovered host.
     """
     if args.auto:
-        from find_cnc import discover  # type: ignore
-
-        print("auto: scanning mDNS / SSDP for Grbl_ESP32...", file=sys.stderr)
-        hits = discover(timeout=5.0, first_only=True, probe=True)
-        if not hits:
-            sys.exit("auto-discovery found no machines. Pass --telnet HOST or --port.")
-        args.telnet = hits[0].ip
-        print(
-            f"auto: using {hits[0].ip} ({hits[0].hostname or 'unnamed'})",
-            file=sys.stderr,
+        # Auto-discovery moved to ~/src/vibes/cnc_calibrate. Resolve the IP
+        # there and pass it back in via --telnet.
+        sys.exit(
+            "auto-discovery moved to ~/src/vibes/cnc_calibrate. "
+            "Run `calibrate.py ip` there and pass the result via --telnet HOST."
         )
     if not args.telnet and not args.port:
         args.port = os.environ.get("CNC_PORT")

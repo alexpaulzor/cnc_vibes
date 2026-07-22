@@ -413,89 +413,21 @@ def cmd_jigsaw(args: argparse.Namespace) -> None:
     )
 
 
+def _tombstone(cmd: str) -> None:
+    """The network-discovery + laser-cal tools were forklifted out of cnc_vibes."""
+    print(
+        f"cnc.py {cmd} moved to ~/src/vibes/cnc_calibrate (use calibrate.py {cmd})",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
 def cmd_find_machine(args: argparse.Namespace) -> None:
-    """Discover Grbl_ESP32 controllers on the LAN via mDNS + SSDP."""
-    rc = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "find_cnc.py"),
-            "--timeout",
-            str(args.timeout),
-            *(["--first"] if args.first else []),
-            *(["--no-probe"] if args.no_probe else []),
-            *(["--cache"] if args.cache else []),
-        ]
-    ).returncode
-    sys.exit(rc)
+    _tombstone("find-machine")
 
 
 def cmd_ip(args: argparse.Namespace) -> None:
-    """Print the controller's IP. Prefers cached state; falls back to mDNS scan."""
-    from cnc_state import (  # local import — keeps cnc.py import-light
-        DEFAULT_FRESHNESS_SEC,
-        format_age,
-        get_machine,
-        is_fresh,
-    )
-
-    max_age = (
-        args.max_age_sec if args.max_age_sec is not None else DEFAULT_FRESHNESS_SEC
-    )
-    record = get_machine()
-    if record and is_fresh(record, max_age_sec=max_age):
-        age = record.age_seconds() or 0
-        if args.verbose:
-            print(
-                f"{record.ip}  (cached, last seen {format_age(age)}"
-                + (f", MAC {record.mac}" if record.mac else "")
-                + ")",
-                file=sys.stderr,
-            )
-        print(record.ip)
-        return
-    if record and not args.no_cache_fallback:
-        # Stale cache. Try a discovery scan; if it works, use that.
-        # If discovery fails, we'll fall back to the stale cache with a
-        # warning so the user has SOMETHING to try.
-        pass
-    if not args.no_discover:
-        if args.verbose:
-            print(
-                f"no fresh cache; scanning network (timeout {args.discover_timeout}s)...",
-                file=sys.stderr,
-            )
-        rc = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "scripts" / "find_cnc.py"),
-                "--first",
-                "--cache",
-                "--timeout",
-                str(args.discover_timeout),
-            ]
-        ).returncode
-        if rc == 0:
-            # find_cnc.py just wrote to the cache; read it back
-            record = get_machine()
-            if record:
-                print(record.ip)
-                return
-    if record:
-        # Stale cache fallback
-        age = record.age_seconds() or 0
-        print(
-            f"warning: using stale cache (last seen {format_age(age)}); "
-            f"machine may have changed IP",
-            file=sys.stderr,
-        )
-        print(record.ip)
-        return
-    print(
-        "error: no machine in cache and discovery found none. "
-        "Try `cnc.py inspect` over USB to populate the cache.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    _tombstone("ip")
 
 
 def cmd_preview(args: argparse.Namespace) -> None:
@@ -552,12 +484,7 @@ def cmd_cam(args: argparse.Namespace) -> None:
 
 
 def cmd_cal_laser(args: argparse.Namespace) -> None:
-    """Dispatch to scripts/spiral_cal.py (concentric warmup + feed calibration)."""
-    import spiral_cal  # noqa: E402  (scripts/ is on sys.path)
-
-    rc = spiral_cal.main(args.rest or None)
-    if rc:
-        sys.exit(rc)
+    _tombstone("cal-laser")
 
 
 def cmd_jog(args: argparse.Namespace) -> None:
@@ -591,24 +518,20 @@ def cmd_help(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    # Pre-dispatch: subcommands that take their own argparse (cam, cal-laser, jog)
-    # bypass our top-level parser entirely, because argparse REMAINDER in
-    # 3.12+ doesn't pass through leading-dash args cleanly to subparsers.
-    if len(sys.argv) >= 2 and sys.argv[1] in ("cam", "cal-laser", "jog"):
+    # Pre-dispatch: subcommands that take their own argparse (cam, jog) bypass
+    # our top-level parser entirely, because argparse REMAINDER in 3.12+ doesn't
+    # pass through leading-dash args cleanly to subparsers. (cal-laser moved to
+    # ~/src/vibes/cnc_calibrate; it now falls through to the tombstone handler.)
+    if len(sys.argv) >= 2 and sys.argv[1] in ("cam", "jog"):
         sub_argv = sys.argv[2:]
         if sys.argv[1] == "cam":
             import cam_cli
 
             sys.exit(cam_cli.main(sub_argv) or 0)
-        if sys.argv[1] == "jog":
-            sys.path.insert(0, str(ROOT / "lessons" / "integration" / "05_jog"))
-            import jog  # noqa: E402
+        sys.path.insert(0, str(ROOT / "lessons" / "integration" / "05_jog"))
+        import jog  # noqa: E402
 
-            sys.exit(jog.main(sub_argv) or 0)
-        sys.path.insert(0, str(ROOT / "scripts"))
-        import spiral_cal  # noqa: E402
-
-        sys.exit(spiral_cal.main(sub_argv) or 0)
+        sys.exit(jog.main(sub_argv) or 0)
 
     p = argparse.ArgumentParser(prog="cnc", description=__doc__.splitlines()[0])
     subs = p.add_subparsers(dest="cmd", required=True)
@@ -661,60 +584,18 @@ def main() -> None:
 
     fm = subs.add_parser(
         "find-machine",
-        help="discover Grbl_ESP32 controllers on the LAN (mDNS + SSDP)",
+        help="[moved to ~/src/vibes/cnc_calibrate: calibrate.py find-machine]",
+        add_help=False,
     )
-    fm.add_argument(
-        "--timeout",
-        type=float,
-        default=5.0,
-        help="scan duration in seconds (default 5)",
-    )
-    fm.add_argument(
-        "--first",
-        action="store_true",
-        help="exit on first confirmed match (for scripting)",
-    )
-    fm.add_argument(
-        "--no-probe",
-        action="store_true",
-        help="skip description.xml fingerprint (faster, noisier)",
-    )
-    fm.add_argument(
-        "--cache",
-        action="store_true",
-        help="write first hit to ~/.cnc_state.json",
-    )
+    fm.add_argument("rest", nargs=argparse.REMAINDER)
     fm.set_defaults(func=cmd_find_machine)
 
     ip = subs.add_parser(
         "ip",
-        help="print the controller's IP (cached if fresh, else mDNS scan)",
+        help="[moved to ~/src/vibes/cnc_calibrate: calibrate.py ip]",
+        add_help=False,
     )
-    ip.add_argument(
-        "--max-age-sec",
-        type=float,
-        default=None,
-        help="cache freshness threshold in seconds (default 21600 = 6h)",
-    )
-    ip.add_argument(
-        "--discover-timeout",
-        type=float,
-        default=5.0,
-        help="mDNS scan timeout if cache is stale (seconds, default 5)",
-    )
-    ip.add_argument(
-        "--no-discover",
-        action="store_true",
-        help="never scan; only use the cache (exit 1 if cache is missing or stale)",
-    )
-    ip.add_argument(
-        "--no-cache-fallback",
-        action="store_true",
-        help="if a discovery scan fails, do NOT fall back to a stale cached IP",
-    )
-    ip.add_argument(
-        "-v", "--verbose", action="store_true", help="print cache + scan info to stderr"
-    )
+    ip.add_argument("rest", nargs=argparse.REMAINDER)
     ip.set_defaults(func=cmd_ip)
 
     pv = subs.add_parser(

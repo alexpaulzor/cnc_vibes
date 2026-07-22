@@ -829,7 +829,8 @@ Usage:
   cnc.py cal-laser [--circles N] [--min-r MM] [--max-r MM] \\
       [--time-s S] [--power-percent P]
 
-Backed by scripts/spiral_cal.py. One small disc replaces the whole
+Moved to ~/src/vibes/cnc_calibrate (run `calibrate.py cal-laser`). One small
+disc replaces the whole
 LaserGRBL/xTool material grid. Cuts concentric rings inner->outer, each
 ONE single pass, with the feed for ring K set so
 feed = circumference / time-s — every ring takes the same time and the

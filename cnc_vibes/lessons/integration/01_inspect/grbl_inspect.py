@@ -516,16 +516,8 @@ def main() -> int:
     if args.ip_only:
         if wifi.ip:
             print(wifi.ip)
-            # Best-effort persist: write to the state cache so later
-            # cache-only lookups (cnc.py ip) can find it without USB.
-            try:
-                from cnc_state import save_machine  # type: ignore
-
-                save_machine(wifi.ip, mac=wifi.mac, ssid=wifi.ssid)
-            except Exception:  # noqa: BLE001
-                # Don't fail --ip-only just because the cache is unwritable;
-                # the IP itself is the contract.
-                pass
+            # The IP cache (cnc_state) moved to ~/src/vibes/cnc_calibrate; this
+            # lesson no longer seeds it. Use `calibrate.py ip` there to resolve.
             return 0
         print(
             "error: machine did not report an IP in $I response.\n"
@@ -547,14 +539,7 @@ def main() -> int:
     )
     print(text)
 
-    # Best-effort: cache discovered IP for cnc.py ip lookups.
-    if wifi.ip:
-        try:
-            from cnc_state import save_machine  # type: ignore
-
-            save_machine(wifi.ip, mac=wifi.mac, ssid=wifi.ssid)
-        except Exception:  # noqa: BLE001
-            pass
+    # The IP cache moved to ~/src/vibes/cnc_calibrate; no longer written here.
 
     if args.write_json:
         payload = {
