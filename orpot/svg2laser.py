@@ -423,10 +423,16 @@ def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
         L.append(f"F{feed}")
         for wx, wy in warmup_wiggle(pts, warmup_mm):
             L.append(f"G1 X{wx:.3f} Y{wy:.3f}")
+        # Ping-pong the passes: cut forward, then reverse back over the SAME path,
+        # alternating, until `passes` is reached. The head is already at the far end
+        # after each pass, so we never do a laser-on move back to the start (which
+        # would slice a chord across the workpiece — worst on the open spiral).
         for p in range(passes):
             if passes > 1:
-                L.append(f"; pass {p + 1} of {passes}")
-            for x, y in pts[1:]:
+                direction = "forward" if p % 2 == 0 else "reverse"
+                L.append(f"; pass {p + 1} of {passes} ({direction})")
+            seq = pts[1:] if p % 2 == 0 else pts[-2::-1]
+            for x, y in seq:
                 L.append(f"G1 X{x:.3f} Y{y:.3f}")
         L.append("M5")
         L.append("")
