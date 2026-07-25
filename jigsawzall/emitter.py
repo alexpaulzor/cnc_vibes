@@ -406,6 +406,7 @@ def eulerian_order(
     start_pt: tuple[float, float] = (0.0, 0.0),
     tol: float = 0.5,
     close_circuits: bool = True,
+    max_dup_len: float | None = None,
 ) -> list[tuple[LineString, bool]]:
     """Order edges as continuous trails so the laser walks THROUGH grid
     junctions without lifting. Returns (edge, reversed) like greedy_order;
@@ -419,6 +420,15 @@ def eulerian_order(
     single closed circuit. The re-traced segments just pass back over
     already-cut lines (harmless on cardboard) but keep the laser on, so a
     whole region cuts with one laser-on event instead of one per junction.
+
+    max_dup_len (in the edges' own units — px here) BOUNDS that re-tracing:
+    an odd-node pair is only connected (re-traced) if the shortest connector
+    between them is <= max_dup_len. Longer connectors are left unpaired, so
+    Hierholzer splits the trail there and the laser restarts instead of
+    backtracking. This is the ">1s" rule: re-cutting D mm at the feed costs
+    D/feed of time, a restart costs the warmup lead-in; re-trace only when it
+    is the cheaper of the two. None = unbounded (original always-continuous
+    behavior); a wood grid without it re-cuts most edges twice.
     """
     if not edges:
         return []
@@ -509,6 +519,12 @@ def eulerian_order(
                         bestd = dd
                         best = b
                 if best is None:
+                    continue
+                # ">1s" rule: only re-trace (duplicate) the connector when it is
+                # cheaper than a laser restart's warmup. A connector longer than
+                # max_dup_len is left unpaired -> Hierholzer splits the trail here
+                # and the laser restarts, instead of backtracking the long way.
+                if max_dup_len is not None and bestd > max_dup_len:
                     continue
                 unmatched.discard(best)
                 pairs.append((a, best))
@@ -654,6 +670,25 @@ def _order_chains_min_travel(chains, start):
     return out
 
 
+def _fuse_touching_chains(chains, tol=0.1):
+    """After ordering, fuse consecutive chains whose join coincides (end of one
+    == start of the next, within tol). This is FREE continuity: the laser just
+    keeps cutting through the shared point instead of lifting, re-positioning to
+    the exact same spot, and re-firing (a 'needless re-fire'). Distinct from the
+    bounded backtrack in eulerian_order — no line is re-cut here, the two chains
+    already meet. Coords are in mm at this stage, so tol is mm."""
+    out: list[list[tuple[float, float]]] = []
+    for ch in chains:
+        if (
+            out
+            and math.hypot(ch[0][0] - out[-1][-1][0], ch[0][1] - out[-1][-1][1]) <= tol
+        ):
+            out[-1] = out[-1] + list(ch[1:])
+        else:
+            out.append(list(ch))
+    return out
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -664,6 +699,7 @@ def emit_cut_gcode_full(
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
     ramp_ms: float = WARMUP_MS,
+    max_backtrack_ms: float | None = None,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -685,6 +721,14 @@ def emit_cut_gcode_full(
     on = "M3" if mode == "static" else "M4"
     # Ramp distance from the ramp duration at this feed (mm/min -> mm/s).
     lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
+    # Backtrack budget: keep the laser continuous by re-tracing a connector only
+    # when re-cutting it is cheaper than a restart's warmup. Same units as the
+    # warmup (ms of travel at this feed); default = ramp_ms, i.e. re-trace up to
+    # "1s worth" of already-cut line to avoid a restart, no more. Converted to px
+    # for eulerian_order, which routes on image-px edges. None-safe: 0 disables
+    # all re-tracing (pure minimal-length cut).
+    bt_ms = ramp_ms if max_backtrack_ms is None else max_backtrack_ms
+    max_dup_px = max(0.0, bt_ms) / 1000.0 * (feed / 60.0) * cfg.px_per_mm
 
     edges = extract_unique_edges(pieces)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
@@ -720,9 +764,9 @@ def emit_cut_gcode_full(
     # end. Interior chains (letters + cells) are cut first. Nearest-neighbor
     # within each group trims pen-up travel.
     all_edges = (
-        eulerian_order(letters, start_pt)
-        + eulerian_order(interior, start_pt)
-        + eulerian_order(panel, start_pt)
+        eulerian_order(letters, start_pt, max_dup_len=max_dup_px)
+        + eulerian_order(interior, start_pt, max_dup_len=max_dup_px)
+        + eulerian_order(panel, start_pt, max_dup_len=max_dup_px)
     )
     all_chains = chain_contiguous_paths(_to_mm(all_edges), tol_px=0.1)
     pw = cfg.puzzle_w_px / cfg.px_per_mm
@@ -735,9 +779,18 @@ def emit_cut_gcode_full(
 
     border_chains = [c for c in all_chains if _perim_frac(c) > 0.15]
     inner_chains = [c for c in all_chains if _perim_frac(c) <= 0.15]
-    inner_chains = _order_chains_min_travel(inner_chains, start=(0.0, 0.0))
+    # Order to trim pen-up travel, then fuse any chains left touching end-to-end
+    # (the trail splits from the bounded backtrack can put two chains that share
+    # a junction next to each other — fuse them so the laser doesn't re-fire at
+    # the exact spot it just finished). Fuse WITHIN each group so the border
+    # still runs last (never fused into an interior chain).
+    inner_chains = _fuse_touching_chains(
+        _order_chains_min_travel(inner_chains, start=(0.0, 0.0))
+    )
     last = inner_chains[-1][-1] if inner_chains else (0.0, 0.0)
-    border_chains = _order_chains_min_travel(border_chains, start=last)
+    border_chains = _fuse_touching_chains(
+        _order_chains_min_travel(border_chains, start=last)
+    )
     chains = inner_chains + border_chains
     n_edges = len(all_edges)
 
@@ -754,6 +807,11 @@ def emit_cut_gcode_full(
             "runs fwd half / back to start first (laser at full power on return), "
             "then cuts the whole path at full power"
         )
+    extra.append(
+        f"backtrack budget: {bt_ms:.0f}ms = {max_dup_px / cfg.px_per_mm:.1f}mm — "
+        "re-trace already-cut line to stay continuous only when it's cheaper than "
+        "a restart's warmup; longer gaps restart instead (no wholesale double-cut)"
+    )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
 

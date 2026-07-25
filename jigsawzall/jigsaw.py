@@ -248,6 +248,46 @@ def _apply_origin(cfg, origin: str):
     raise SystemExit(f"unknown --origin {origin!r} (expected 'corner' or 'center')")
 
 
+def _cut_length_stats(gcode: str):
+    """(total, unique, recut) laser-on distance in mm from emitted GCode.
+    'recut' is length traced 2+ times (backtrack/overlap); a large recut share
+    means the router is double-cutting to stay continuous."""
+    import math as _m
+    import re as _re
+
+    x = y = None
+    laser = False
+    total = 0.0
+    seg_count: dict = {}
+    for ln in gcode.splitlines():
+        s = ln.strip()
+        if s.startswith(("M3", "M4")):
+            laser = True
+            continue
+        if s.startswith("M5"):
+            laser = False
+            continue
+        mt = _re.match(r"G([01]) .*?X([-\d.]+) Y([-\d.]+)", s)
+        if not mt:
+            continue
+        g, nx, ny = mt.group(1), float(mt.group(2)), float(mt.group(3))
+        if x is not None and g == "1" and laser:
+            d = _m.hypot(nx - x, ny - y)
+            total += d
+            key = tuple(
+                sorted(((round(x, 1), round(y, 1)), (round(nx, 1), round(ny, 1))))
+            )
+            seg_count[key] = seg_count.get(key, 0) + 1
+        x, y = nx, ny
+    uniq = sum(_m.hypot(a[0] - b[0], a[1] - b[1]) for a, b in seg_count)
+    recut = sum(
+        (c - 1) * _m.hypot(a[0] - b[0], a[1] - b[1])
+        for (a, b), c in seg_count.items()
+        if c > 1
+    )
+    return total, uniq, recut
+
+
 def _emit_cut_for(
     pieces,
     material,
@@ -259,6 +299,7 @@ def _emit_cut_for(
     min_segment_mm=0.0,
     power_percent=None,
     ramp_ms=WARMUP_MS,
+    max_backtrack_ms=None,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -281,6 +322,7 @@ def _emit_cut_for(
         min_segment_mm=min_segment_mm,
         power_percent=power_percent,
         ramp_ms=ramp_ms,
+        max_backtrack_ms=max_backtrack_ms,
     )
 
 
@@ -594,6 +636,7 @@ def cmd_cut(args):
         min_segment_mm=args.min_segment_mm,
         power_percent=args.power_percent,
         ramp_ms=args.ramp_ms,
+        max_backtrack_ms=args.max_backtrack_ms,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "_centered" if args.origin == "center" else ""
@@ -628,6 +671,14 @@ def cmd_cut(args):
     print(
         f"laser: {args.laser_mode}  power: {pwr_note}  "
         f"laser-on events: {laser_on}  ramp: {args.ramp_ms:.0f}ms"
+    )
+    cut_mm, uniq_mm, recut_mm = _cut_length_stats(gcode)
+    feed_mm = args.feed or material["laser"]["feed_mm_per_min"]
+    pct_recut = (recut_mm / uniq_mm * 100) if uniq_mm else 0.0
+    print(
+        f"cut length: {cut_mm:.0f}mm laser-on ({uniq_mm:.0f}mm unique, "
+        f"{recut_mm:.0f}mm re-cut = {pct_recut:.0f}%)  "
+        f"~{cut_mm / feed_mm * 60:.0f}s at F{feed_mm}"
     )
     print(f"feed: {feed_note}  min segment: {args.min_segment_mm}mm")
     print(f"-> {out}  ({len(gcode.splitlines())} lines)")
@@ -700,6 +751,17 @@ def main():
         default=None,
         help="override cut feedrate mm/min (default: use the material's "
         "feed_mm_per_min)",
+    )
+    cu.add_argument(
+        "--max-backtrack-ms",
+        dest="max_backtrack_ms",
+        type=float,
+        default=None,
+        help="continuous-cut backtrack budget (ms of travel at the feed): the "
+        "router re-traces already-cut line to keep the laser on through a junction "
+        "only when the re-trace is cheaper than a restart's warmup. Default = "
+        "--ramp-ms (~1s). Lower it to restart sooner (less double-cut/char); 0 "
+        "disables re-tracing entirely (pure shortest cut, most restarts)",
     )
     cu.add_argument(
         "--passes",
