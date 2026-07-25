@@ -2809,17 +2809,47 @@ def _letter_edge_point(solid, side, target, ppm):
     if side in ("top", "bottom"):
         ext = list(solid.exterior.coords)
         yext = min(p[1] for p in ext) if side == "top" else max(p[1] for p in ext)
-        band = 4 * ppm  # points within ~4mm of the true top/bottom count as corners
-        cands = [p for p in ext if abs(p[1] - yext) <= band] or ext
-        p = min(cands, key=lambda q: abs(q[0] - target))
-        return (p[0], p[1]), ((0.0, -1.0) if side == "top" else (0.0, 1.0))
+        nrm = (0.0, -1.0) if side == "top" else (0.0, 1.0)
+        # Only the TRUE extreme edge counts as an attach point (tight ~1mm band = the
+        # real feet / crown). A wider band would admit a shallow interior notch
+        # (A's leg gap is only ~4mm deep, N's/W's valley) and then "nearest x" could
+        # attach part-way UP an inner leg, leaving a thin sliver spike between the
+        # divider and the leg. Staying on the extreme edge means the divider always
+        # meets solid letter at a foot/crown, never mid-slope. Then snap to the
+        # nearest extreme point within 5mm of the target x (a convex corner when the
+        # target sits just off a foot); if none is that close (target is over a gap),
+        # fall back to the nearest extreme point overall. Not letter-specific.
+        edge = [p for p in ext if abs(p[1] - yext) <= 1.0 * ppm] or ext
+        near = [p for p in edge if abs(p[0] - target) <= 5 * ppm]
+        p = min(near or edge, key=lambda q: abs(q[0] - target))
+        return (p[0], p[1]), nrm
     y = min(max(target, miny + 0.5 * ppm), maxy - 0.5 * ppm)
     inter = LineString([(minx - 5 * ppm, y), (maxx + 5 * ppm, y)]).intersection(solid)
     xs = [c[0] for c in _coords_of(inter)]
     if not xs:
         return None
     x = min(xs) if side == "left" else max(xs)
-    return (x, y), ((-1.0, 0.0) if side == "left" else (1.0, 0.0))
+    nrm = (-1.0, 0.0) if side == "left" else (1.0, 0.0)
+    # Same convex-corner snap as top/bottom, along y instead of x: if the letter has
+    # an outward convex corner (a foot/leg tip, via the convex hull) within 5mm of the
+    # target height, attach THERE instead of part-way up a slanted edge, so a
+    # horizontal seam meeting a diagonal leg (A/V/R) doesn't leave a thin sliver
+    # between the seam and the corner. Snap only to a corner at least as outboard as
+    # the plain ray point, so it can never pull the seam inward. Not letter-specific.
+    cxg = solid.centroid.x
+    hull = [
+        c
+        for c in solid.convex_hull.exterior.coords
+        if (c[0] > cxg if side == "right" else c[0] < cxg)
+    ]
+    near = [c for c in hull if abs(c[1] - target) <= 5 * ppm]
+    if near:
+        c = min(near, key=lambda q: abs(q[1] - target))
+        if (side == "right" and c[0] >= x - 0.5 * ppm) or (
+            side == "left" and c[0] <= x + 0.5 * ppm
+        ):
+            return (c[0], c[1]), nrm
+    return (x, y), nrm
 
 
 def _letter_caps(solid, rng, ppm):
