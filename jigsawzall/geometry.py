@@ -3167,23 +3167,26 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
         return seams
 
     # Iterate-until-valid over seed variants (no density dimension: the structure
-    # is fixed at 2*(n+1); variants only move the crossing x's and row heights
-    # until every seam places cleanly). Wave-grid's whole point is a FIXED, small
-    # count of intentionally-LARGE pieces, so it does NOT use the oversized/blob
-    # rule (that would force splitting the very pieces we want). Instead validity
-    # is: hit the target count 2*(n+1) exactly, and no thin bridge / sliver / nub.
-    # A column that fails to split shows up as a short count, so the count term
-    # subsumes the "didn't divide" case. Continuity-aligned variants are tried
-    # FIRST; if none tile cleanly we fall through to the robust fallback layout.
+    # SEEDS at rows*(n+1), but variants move the crossing x's and row heights and
+    # MAY merge cells). Wave-grid's whole point is a small count of intentionally-
+    # LARGE pieces, and a few merged, varied-size pieces make a MORE interesting
+    # puzzle than a perfectly regular grid. So validity is: no thin bridge / sliver
+    # / nub / OVERSIZED piece — and deviation from the seed count is REWARDED (final
+    # tie-break), capped only by the oversized rule (a merge that eats a whole row
+    # is too big to place). Continuity-aligned variants are tried FIRST; if none
+    # tile cleanly we fall through to the robust fallback layout.
     target = rows * (n + 1)
 
     def wave_score(surround):
         thin = sum(1 for p in surround if _vg_thin_bridge(p, cfg))
         slv = sum(1 for p in surround if _vg_sliver(p, cfg))
         nub = sum(1 for p in surround if _vg_border_nub(p, panel, cfg))
-        count_err = abs(len(surround) - target)
-        # durability first, then the exact tiling, then no sliver, then no nub.
-        return (thin, count_err, slv, nub)
+        over = sum(1 for p in surround if _vg_oversized(p, cfg))
+        # durability first, then no oversized piece, then no sliver, then no nub;
+        # finally PREFER more deviation (-deviation sorts a more-varied clean
+        # layout ahead of a perfectly-regular one).
+        deviation = abs(len(surround) - target)
+        return (thin, over, slv, nub, -deviation)
 
     best = None
     half = max(1, variants // 2)
@@ -3195,12 +3198,20 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
         sc = wave_score(surround)
         if best is None or sc < best[0]:
             best = (sc, surround, counters, st, seams)
-        if sc == (0, 0, 0, 0):
-            break
+        # No early exit: defect-free layouts still compete on deviation, so scan
+        # every variant to keep the most-varied clean one.
     sc, surround, counters, stats, _seams = best
     stats["density"] = 0
-    stats["thin"], stats["count_err"], stats["sliver"], stats["nub"] = sc
-    stats["oversized"] = 0  # wave-grid tolerates large pieces by design
+    thin, over, slv, nub, negdev = sc
+    stats["thin"], stats["oversized"], stats["sliver"], stats["nub"] = (
+        thin,
+        over,
+        slv,
+        nub,
+    )
+    # Deviation is intentional variety, not an error: report it for info only (it
+    # no longer gates validity — a non-zero value is a richer tiling, not a defect).
+    stats["count_err"] = -negdev
     stats["score"] = sc
 
     pieces = {}

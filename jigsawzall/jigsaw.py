@@ -107,17 +107,28 @@ def _apply_size_overrides(cfg, args):
         over["fit_to_text"] = True  # it's a name-banner layout: size panel to text
         # Extra inter-letter tracking so there's real background between glyphs
         # to seam through: without it, tight words (e.g. ALEX's big caps) leave
-        # gaps so narrow that any split makes a sub-4mm thin bridge. Vertex-grid
-        # searches spacing (10mm then 20mm) per density and keeps the sparsest;
-        # wave-grid uses a fixed 10mm. 10mm is the seed value shown in cfg.
+        # gaps so narrow that any split makes a sub-4mm thin bridge. But the gap
+        # is a fixed absolute width, so a big value (was 10mm) forces long words
+        # to shrink their caps to fit the width bound — e.g. PARKER's 5 gaps ate
+        # ~half the 215mm text width and collapsed caps 46->17mm. The tab-fit
+        # floor (tab_height + 2*tab_circle_r = ~11mm) is already "just enough for
+        # a comfortable tab"; the extra is pure breathing room. 3mm keeps letters
+        # large (PARKER 22mm, LEVI 46mm) while staying clean (PARKER 7/9 seeds).
+        # Vertex-grid searches spacing (10mm then 20mm) per density and keeps the
+        # sparsest, so it keeps its 10mm seed; wave-grid uses a fixed 3mm.
         if getattr(args, "letter_gap_extra_mm", None) is None:
-            over["letter_gap_extra_mm"] = 10.0
+            over["letter_gap_extra_mm"] = 10.0 if want_vertex else 3.0
             if want_vertex:
                 over["vg_spacing_search"] = True
-        # Size the panel to the letters' bbox + a uniform margin (>=30mm all
-        # around) — not crammed, not forced to fill the whole stock.
+        # Size the panel to the letters' bbox + a top/bottom margin. This margin
+        # is also the height of the background row above/below the letters, so a
+        # big value (was 30mm) left the letters floating in dead space (PARKER
+        # filled only ~27% of panel height). 17mm lets the letters fill the height
+        # with just a tab-plus-border margin; the thin rows merge some cells, which
+        # the wave scorer now WELCOMES (varied piece sizes) as long as no piece
+        # goes oversized. Bigger values look regular/boring; smaller pinch too hard.
         if getattr(args, "banner_h_mm", None) is None:
-            over["banner_margin_mm"] = 30.0
+            over["banner_margin_mm"] = 17.0
         # Keep letters a consistent, readable size across names: fix the cap
         # height and let the panel WIDTH flex to the word (up to 300mm stock),
         # instead of shrinking 6-letter words short to fit a 150mm width.

@@ -28,15 +28,16 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 600
+    feed_mm_per_min: 500
     passes: 1
     notes: |
       Reliable workhorse. Air assist strongly recommended.
-      600mm/min SINGLE pass, calibrated with the concentric warmup ring test:
-      581mm/min severed cleanly with only a faint edge char, so 600 is the
-      always-clean-plus-margin single-pass speed. Static M3 at 100% with the 1s
-      out-and-back warmup lead-in handles the cold-start zone. Drop feed or add a
-      pass only for stubborn/thicker stock.
+      500mm/min SINGLE pass. 600 was calibrated as always-clean on the concentric
+      warmup ring test (581mm/min severed with faint edge char), but in practice
+      600 runs too hot/fast for clean single-pass severing on real cuts, so the
+      default is 500 for margin. Static M3 at 100% with the 1s out-and-back warmup
+      lead-in handles the cold-start zone. Drop feed or add a pass only for
+      stubborn/thicker stock.
 
 - id: plywood_baltic_birch_6mm
   family: wood
