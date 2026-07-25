@@ -2878,15 +2878,15 @@ def _letter_caps(solid, rng, ppm):
             full = [c for c in cols if c[3] >= 0.9 * smax]
             c = full[rng.randrange(len(full))]
             return (c[0], c[1]), (c[0], c[2])
-    # fallback: true top & bottom corners independently, each nearest centre
-    ext = list(solid.exterior.coords)
-    b = 4 * ppm
-    top = min(
-        [p for p in ext if abs(p[1] - miny) <= b] or ext, key=lambda q: abs(q[0] - cx)
-    )
-    bot = min(
-        [p for p in ext if abs(p[1] - maxy) <= b] or ext, key=lambda q: abs(q[0] - cx)
-    )
+    # fallback: true top & bottom corners independently, each nearest centre.
+    # Reuse _letter_edge_point (tight extreme-edge band + convex snap) rather than a
+    # wide band here: a 4mm band around maxy admits the A's inner-leg vertices (its
+    # foot gap rises ~4mm), and "nearest centre" then grabs one of those rising
+    # points -> the divider lands part-way UP an inner leg, leaving a sharp sliver
+    # spike. _letter_edge_point stays on the true foot/crown and snaps to the
+    # nearest real corner (e.g. the inner-bottom corner of a leg), never mid-slope.
+    top, _ = _letter_edge_point(solid, "top", cx, ppm)
+    bot, _ = _letter_edge_point(solid, "bottom", cx, ppm)
     return (top[0], top[1]), (bot[0], bot[1])
 
 
