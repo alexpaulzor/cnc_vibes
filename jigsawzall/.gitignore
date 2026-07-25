@@ -3,3 +3,13 @@ __pycache__/
 build/
 .DS_Store
 .pytest_cache/
+
+# Generated puzzle previews and machine code — kept out of source control.
+# We'll commit ONE example png + gcode with -f once a design is dialed in.
+figs/
+*.png
+*.nc
+*.gcode
+*.ngc
+*.gc
+*.tap
