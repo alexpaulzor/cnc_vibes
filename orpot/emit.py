@@ -46,8 +46,8 @@ _PREAMBLE = (
 
 
 def load_material(material_id: str) -> dict:
-    """Look up a material by id in profiles/laser_materials.yaml."""
-    path = REPO_ROOT / "profiles" / "laser_materials.yaml"
+    """Look up a material by id in the shared material_profiles/laser_materials.yaml."""
+    path = REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml"
     with path.open() as f:
         materials = yaml.safe_load(f)
     for m in materials:

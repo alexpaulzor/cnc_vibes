@@ -459,7 +459,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
         help="default: spindle",
     )
     p.add_argument(
-        "--material", help="id from profiles/materials.yaml or laser_materials.yaml"
+        "--material",
+        help="id from profiles/materials.yaml (spindle) or material_profiles/laser_materials.yaml (laser)",
     )
     p.add_argument(
         "--out",
@@ -695,7 +696,10 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
         materials = _list_yaml_ids(PROFILES_DIR / "materials.yaml")
         tools = _list_yaml_ids(PROFILES_DIR / "tools.yaml")
     else:
-        materials = _list_yaml_ids(PROFILES_DIR / "laser_materials.yaml")
+        # laser_materials.yaml lives in the shared repo-root material_profiles/ dir.
+        materials = _list_yaml_ids(
+            REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml"
+        )
         tools = []
 
     args.material = _pick("Material", [(m, m) for m in materials])

@@ -1,19 +1,25 @@
-# Laser materials profile.
+# Laser materials profile — SHARED across the vibes monorepo.
 #
-# Per-material starting parameters for a 10W optical-power diode laser
-# (e.g. LaserTree 10W) running through a GRBL controller in laser mode
-# ($32=1). All cuts use STATIC M3 constant power (this weak diode under-fires
-# on M4 dynamic mode) at 100% power, with a 1s out-and-back warmup lead-in to
-# cover the cold-start ramp. Feeds calibrated with the concentric warmup ring
-# test (cnc.py cal-laser).
+# Single source of truth for per-material diode-laser cut parameters, read by
+# every sub-project via a relative path to this file:
+#   jigsawzall/emitter.py, orpot/emit.py, orpot/svg2laser.py,
+#   cnc_vibes/scripts/{cam_cli,laser_cam}.py, cnc_vibes/lessons/laser/*.
+# Edit here once and all of them pick it up.
+#
+# Machine assumptions: a ~10W optical-power diode laser (e.g. LaserTree 10W)
+# through a GRBL controller in laser mode ($32=1). All cuts use STATIC M3
+# constant power (this weak diode under-fires on M4 dynamic mode) at 100%
+# power, with a 1s out-and-back warmup lead-in to cover the cold-start ramp.
+# Feeds were calibrated with the concentric warmup ring test
+# (jigsaw.py warmup-test / cnc.py cal-laser).
 #
 # Values are PUBLISHED STARTING POINTS. They are not calibrated for your
 # specific machine, lens condition, bed height, or current air-assist
-# pressure. The concentric spiral cal (cnc.py cal-laser) refines these values
-# empirically. Always cut a small test before committing to a real part.
+# pressure. Refine them empirically (jigsaw.py warmup-test / cnc.py cal-laser)
+# and always cut a small test before committing to a real part.
 #
 # Schema per entry:
-#   id                 stable string id (referenced from job specs)
+#   id                 stable string id (referenced from job specs / --material)
 #   family             "wood" | "acrylic" | "paper" | ...
 #   thickness_mm       material thickness in mm
 #   laser:
@@ -28,15 +34,16 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 600
+    feed_mm_per_min: 500
     passes: 1
     notes: |
       Reliable workhorse. Air assist strongly recommended.
-      600mm/min SINGLE pass, calibrated with the concentric warmup ring test:
-      581mm/min severed cleanly with only a faint edge char, so 600 is the
-      always-clean-plus-margin single-pass speed. Static M3 at 100% with the 1s
-      out-and-back warmup lead-in handles the cold-start zone. Drop feed or add a
-      pass only for stubborn/thicker stock.
+      500mm/min SINGLE pass. 600 was calibrated as always-clean on the concentric
+      warmup ring test (581mm/min severed with faint edge char), but in practice
+      600 runs too hot/fast for clean single-pass severing on real cuts, so the
+      default is 500 for margin. Static M3 at 100% with the 1s out-and-back warmup
+      lead-in handles the cold-start zone. Springier than MDF — may flex/curl more
+      readily. Drop feed or add a pass only for stubborn/thicker stock.
 
 - id: plywood_baltic_birch_6mm
   family: wood
@@ -65,11 +72,14 @@
   thickness_mm: 3.0
   laser:
     power_percent: 100
-    feed_mm_per_min: 350
+    feed_mm_per_min: 500
     passes: 2
     notes: |
-      Denser than plywood. Smoke is heavy — air assist mandatory.
-      Edges char darker than plywood; sand/wipe before finishing.
+      Primary orpot stock. Denser than plywood. Smoke is heavy — air assist
+      mandatory. Edges char darker than plywood; sand/wipe before finishing.
+      500mm/min x2 passes severs 3mm cleanly (validated on orpot parts). For a
+      long thin part (e.g. the orpot spiral ribbon) keep it tabbed to the sheet
+      or support it so it doesn't shift on the second pass.
 
 - id: balsa_3mm
   family: wood
@@ -141,9 +151,9 @@
       air gap inside the flutes means a single fast pass usually
       cuts through; if the bottom liner survives, prefer a second
       pass over raising power (high power chars + flares the
-      kerf). Good cheap stock for puzzle-fit tolerance tests.
-      Verify dwell/min-power with cnc.py cal-laser before a
-      real cut on this stock.
+      kerf). Good cheap stock for puzzle-fit tolerance tests and
+      first spiral flex-test / fit mockups. Verify dwell/min-power
+      with cnc.py cal-laser before a real cut on this stock.
 
 - id: cardstock_0.3mm
   family: paper

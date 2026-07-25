@@ -409,7 +409,7 @@ See also: pipeline, build, validate, preflight
         "",  # rendered dynamically from LASER_PREFLIGHT_CHECKLIST
     ),
     "laser-materials": (
-        "profiles/laser_materials.yaml — per-material laser params",
+        "material_profiles/laser_materials.yaml — per-material laser params",
         """
 Per-material laser settings for diode-laser cutting/engraving. Read by
 the lesson scripts (e.g. lessons/laser/01_spacer/spacer.py) to translate
@@ -477,7 +477,7 @@ Location: lessons/laser/02_calibration/
 Generates a labeled matrix of small cut-through test squares at varying
 (power, passes, feed) combinations. After burning, you inspect which
 cells cut through cleanly and write the calibrated numbers back into
-profiles/laser_materials.yaml.
+material_profiles/laser_materials.yaml.
 
 Usage:
   python lessons/laser/02_calibration/calibration.py \\
@@ -743,7 +743,7 @@ Flags:
   --hole-dia                    nominal hole diameter
   --margin-x / --margin-y       custom edge-to-first-hole; default auto-center
   --stock-w / --stock-h         available stock; binds tile size
-  --material                    profile id from profiles/laser_materials.yaml
+  --material                    profile id from material_profiles/laser_materials.yaml
   --no-gcode                    render layout image only
 
 See also: laser-materials, lesson-calibration, lesson-laser-cal
@@ -779,7 +779,7 @@ Hole patterns (for drill):
 
 Common flags:
   --head spindle|laser     default: spindle
-  --material <id>          from profiles/materials.yaml or laser_materials.yaml
+  --material <id>          spindle: profiles/materials.yaml; laser: material_profiles/laser_materials.yaml
   --tool <id>              from profiles/tools.yaml (spindle only)
   --out path.gcode         default: build/cam_cli/<head>_<op>_<shape>_<ts>.gcode
   --strict                 op-tool warnings become fatal

@@ -16,7 +16,7 @@ Layout per panel (one panel per requested feed):
 
 Multiple --speeds produce multiple panels stacked vertically in the
 same file. Read off which slugs fell out cleanly to determine cut
-settings; write back into profiles/laser_materials.yaml.
+settings; write back into material_profiles/laser_materials.yaml.
 
 Usage:
   python calibration.py --material plywood_baltic_birch_3mm \\
@@ -39,7 +39,6 @@ import yaml
 
 LESSON_DIR = Path(__file__).resolve().parent
 REPO_ROOT = LESSON_DIR.parent.parent.parent
-PROFILES = REPO_ROOT / "profiles"
 
 sys.path.insert(0, str(LESSON_DIR))
 from font_7seg import render_text, text_width  # noqa: E402
@@ -63,7 +62,7 @@ LABEL_DIGIT_SPACING = 1.0
 
 
 def load_material(material_id: str) -> dict:
-    with (PROFILES / "laser_materials.yaml").open() as f:
+    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
         materials = yaml.safe_load(f)
     for m in materials:
         if m.get("id") == material_id:

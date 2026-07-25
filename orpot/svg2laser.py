@@ -26,9 +26,9 @@ Examples:
   svg2laser.py cut.svg --feed 350 --power 100 --passes 2 --warmup-ms 1000
   svg2laser.py cut.svg --material mdf_3mm --origin center
 
-Material profiles are read from profiles/laser_materials.yaml next to this file
-(same format as the jigsawzall/orpot tools). --feed/--power/--passes override the
-profile, or let you skip it entirely.
+Material profiles are read from the shared ../material_profiles/laser_materials.yaml
+at the repo root (same format as the jigsawzall/orpot tools). --feed/--power/--passes
+override the profile, or let you skip it entirely.
 """
 
 from __future__ import annotations
@@ -453,7 +453,9 @@ def main() -> int:
     )
     ap.add_argument("--material", help="material id in the profile yaml")
     ap.add_argument(
-        "--profile", type=Path, default=SCRIPT_DIR / "profiles" / "laser_materials.yaml"
+        "--profile",
+        type=Path,
+        default=SCRIPT_DIR.parent / "material_profiles" / "laser_materials.yaml",
     )
     ap.add_argument("--feed", type=int, help="feed mm/min (overrides profile)")
     ap.add_argument(

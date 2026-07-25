@@ -274,7 +274,7 @@ def render_layout(
 
 
 def load_material(material_id: str) -> dict:
-    with (REPO_ROOT / "profiles" / "laser_materials.yaml").open() as f:
+    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
         materials = yaml.safe_load(f)
     for m in materials:
         if m.get("id") == material_id:

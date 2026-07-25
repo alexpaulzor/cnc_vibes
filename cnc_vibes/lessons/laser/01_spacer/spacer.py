@@ -27,19 +27,18 @@ import yaml
 
 LESSON_DIR = Path(__file__).resolve().parent
 REPO_ROOT = LESSON_DIR.parent.parent.parent
-PROFILES = REPO_ROOT / "profiles"
 
 
 def load_material(material_id: str) -> dict:
-    """Load a material from profiles/laser_materials.yaml or exit."""
-    with (PROFILES / "laser_materials.yaml").open() as f:
+    """Load a material from the shared material_profiles/laser_materials.yaml or exit."""
+    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
         materials = yaml.safe_load(f)
     for m in materials:
         if m.get("id") == material_id:
             if "laser" not in m:
                 sys.exit(
                     f"error: material '{material_id}' has no laser params "
-                    f"in profiles/laser_materials.yaml"
+                    f"in material_profiles/laser_materials.yaml"
                 )
             return m
     available = ", ".join(sorted(m.get("id", "?") for m in materials))
@@ -128,7 +127,7 @@ def main() -> None:
     p.add_argument(
         "--material",
         default="plywood_baltic_birch_3mm",
-        help="material id from profiles/laser_materials.yaml",
+        help="material id from material_profiles/laser_materials.yaml",
     )
     p.add_argument(
         "--out",

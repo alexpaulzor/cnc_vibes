@@ -71,7 +71,9 @@ class LaserMaterial:
 
 
 def load_laser_material(material_id: str) -> LaserMaterial:
-    with (PROFILES_DIR / "laser_materials.yaml").open() as f:
+    # laser_materials.yaml lives in the shared repo-root material_profiles/ dir.
+    shared = SCRIPT_DIR.parent.parent / "material_profiles" / "laser_materials.yaml"
+    with shared.open() as f:
         materials = yaml.safe_load(f)
     for m in materials:
         if m.get("id") == material_id:
