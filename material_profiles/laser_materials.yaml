@@ -142,18 +142,18 @@
   family: paper
   thickness_mm: 3.0
   laser:
-    power_percent: 70
-    feed_mm_per_min: 1400
+    power_percent: 100
+    feed_mm_per_min: 1200
     passes: 1
     notes: |
       Single-wall corrugated, ~3mm. FIRE RISK — air assist
       non-negotiable; never dwell over a stationary spot. The
-      air gap inside the flutes means a single fast pass usually
-      cuts through; if the bottom liner survives, prefer a second
-      pass over raising power (high power chars + flares the
-      kerf). Good cheap stock for puzzle-fit tolerance tests and
-      first spiral flex-test / fit mockups. Verify dwell/min-power
-      with cnc.py cal-laser before a real cut on this stock.
+      air gap inside the flutes means a single fast pass at 100%
+      usually cuts through; if the bottom liner survives, add a
+      second pass rather than slowing the feed (dwelling chars +
+      flares the kerf). Good cheap stock for puzzle-fit tolerance
+      tests and first spiral flex-test / fit mockups. Verify
+      dwell/min-power with cnc.py cal-laser before a real cut.
 
 - id: cardstock_0.3mm
   family: paper
