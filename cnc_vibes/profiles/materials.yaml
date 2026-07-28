@@ -47,3 +47,36 @@
     Conservative starting numbers. On a 500W spindle, aluminum is doable
     but unforgiving — use sharp tools, climb mill, and consider trochoidal
     clearing once you've graduated past the basics.
+
+- id: acrylic_3mm
+  family: acrylic
+  thickness_mm: 3.0
+  chipload:
+    flat_3.175mm_2flute: 0.06
+    flat_2mm_2flute: 0.04
+  doc_fraction: 0.4
+  doc_fraction_finish: 0.2
+  notes: |
+    Cast acrylic (PMMA), 3mm. The enemy is MELTING, not force: keep RPM as
+    low as the spindle allows (Anolex floor ~8000) and feed fast enough to
+    make real chips, not dust. Single-flute ("O-flute") bits are ideal (less
+    recutting); a 2-flute works at low RPM + high feed. Climb mill; clear
+    chips before they re-weld. If the edge gums: lower RPM (floor 8000), then
+    raise feed / lower DOC. Peck plunges help holes.
+
+- id: petg_3mm
+  family: petg
+  thickness_mm: 3.0
+  chipload:
+    flat_3.175mm_2flute: 0.06
+    flat_2mm_2flute: 0.04
+  doc_fraction: 0.35
+  doc_fraction_finish: 0.2
+  notes: |
+    PET / PETG sheet ("PET plexiglass"), 3mm. Tougher than acrylic (cracks
+    less) but GUMMIER — more prone to melting, stringing, and re-welding
+    chips. Same melt-avoidance recipe as acrylic but harder: run RPM at the
+    floor (~8000), feed fast, keep DOC shallow, climb mill, and clear chips
+    aggressively (air blast / dust shoe). A single-flute bit helps a lot.
+    These numbers are a STARTING point — test on scrap first. NOTE: measure
+    your sheet's real thickness; "3mm" plastic is often 2.0–2.8mm.
