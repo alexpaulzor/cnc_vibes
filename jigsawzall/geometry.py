@@ -2172,14 +2172,19 @@ def _vg_curve(a, na, b, nb, obstacles, ppm, min_r_mm=5.0, clear_mm=4.0):
         k = max(3, int(0.18 * len(pts)))
         ok = True
         for poly, end in obstacles:
-            seg = (
-                LineString(pts[k:])
-                if end == "a"
-                else LineString(pts[: len(pts) - k])
-                if end == "b"
-                else ls
-            )
-            if seg.distance(poly) < clear_mm * ppm:
+            if end == "a":
+                sub = pts[k:]
+            elif end == "b":
+                sub = pts[: len(pts) - k]
+            elif end == "ab":  # both endpoints attach here (same-letter bridge)
+                sub = pts[k : len(pts) - k]
+            else:
+                sub = pts
+            if (
+                len(sub) < 2
+            ):  # whole curve is attachment neighbourhood -> no gap to check
+                continue
+            if LineString(sub).distance(poly) < clear_mm * ppm:
                 ok = False
                 break
         if not ok:
@@ -2853,17 +2858,23 @@ def _letter_edge_point(solid, side, target, ppm):
 
 
 def _letter_caps(solid, rng, ppm):
-    """Pick the top and bottom attach points for a letter's vertical column
-    divider. Soft-prefers a single x where the letter spans (near) its full
-    height (a vertical stroke) so the top and bottom caps line up and the divider
-    reads as ONE continuous line through the letter. Letters with no full-height
-    stroke (A, V, ...) fall back to their true top/bottom corners near centre —
-    correctness over continuity. Returns (top_pt, bottom_pt)."""
+    """Attach points for a letter's vertical column divider(s), returned as
+    (top_pts, bot_pts, bridges).
+
+    A CLOSED letter gets one cap per side, soft-preferring a single x where the
+    letter spans (near) its full height (a vertical stroke) so the top and
+    bottom caps line up and the divider reads as ONE continuous line through the
+    letter. An OPEN-side letter (the U's open top, an H's open top/bottom) gets
+    one cap PER PRONG on that side, each at the prong's outer top/bottom corner:
+    a single cap would only seal one prong, so the background leaks around the
+    uncapped prong and merges the columns either side of the letter into one
+    oversized piece. Letters with no full-height stroke (A, V, ...) fall back to
+    their true top/bottom corners near centre."""
     minx, miny, maxx, maxy = solid.bounds
     H = maxy - miny
     cx = (minx + maxx) / 2
+    K = 25
     cols = []
-    K = 13
     for t in range(K):
         x = minx + (maxx - minx) * (t + 0.5) / K
         inter = LineString([(x, miny - 5 * ppm), (x, maxy + 5 * ppm)]).intersection(
@@ -2872,22 +2883,104 @@ def _letter_caps(solid, rng, ppm):
         ys = [c[1] for c in _coords_of(inter)]
         if ys:
             cols.append((x, min(ys), max(ys), max(ys) - min(ys)))
-    if cols:
+
+    def prong_caps(side):
+        """Attach points for this extreme edge, as (outer_caps, bridges).
+
+        One OUTER cap per tall stroke that REACHES this edge — contiguous
+        reaching bins cluster into prongs (a gap = the open mouth), each capped
+        at its OUTER corner. Falls back to a single centre cap when nothing tall
+        reaches the edge (e.g. A/V pointing away).
+
+        For every gap BETWEEN prongs (the open mouth of a U/H/...), a BRIDGE:
+        the inner corners on either side of the gap, so a seam can span the
+        mouth. Without it the two outer caps enclose the whole open footprint
+        (over-mouth strip + mouth interior) into one oversized blob; the bridge
+        splits that into a short over-mouth cell and the narrow mouth cell."""
+        tol = 3.0 * ppm
+        reach = miny if side == "top" else maxy
+        idx = 1 if side == "top" else 2
+        sel = [c for c in cols if abs(c[idx] - reach) <= tol and c[3] >= 0.55 * H]
+        if not sel:
+            p, _ = _letter_edge_point(solid, side, cx, ppm)
+            return [(p[0], p[1])], []
+        binw = (maxx - minx) / K
+        clusters = [[sel[0]]]
+        for c in sel[1:]:
+            if c[0] - clusters[-1][-1][0] <= 1.5 * binw:
+                clusters[-1].append(c)
+            else:
+                clusters.append([c])
+        pts = []
+        for i, cl in enumerate(clusters):
+            if len(clusters) > 1 and i == 0:
+                tx = cl[0][0]  # leftmost prong -> its outer (left) corner
+            elif len(clusters) > 1 and i == len(clusters) - 1:
+                tx = cl[-1][0]  # rightmost prong -> its outer (right) corner
+            else:
+                tx = sum(c[0] for c in cl) / len(cl)  # only/interior prong -> centre
+            p, _ = _letter_edge_point(solid, side, tx, ppm)
+            pts.append((p[0], p[1]))
+        uniq = []
+        for p in pts:
+            if not any(
+                abs(p[0] - q[0]) < 4 * ppm and abs(p[1] - q[1]) < 4 * ppm for q in uniq
+            ):
+                uniq.append(p)
+        bridges = []
+        for i in range(len(clusters) - 1):
+            gx0, gx1 = clusters[i][-1][0], clusters[i + 1][0][0]
+            # Only a genuine OPEN mouth gets a bridge: between the prongs the
+            # letter must NOT reach this extreme edge. A U's BOTTOM looks like a
+            # two-prong gap too, but the bowl fills it (reaches maxy) — that gap
+            # is solid, not a mouth, so skip it.
+            gap_cols = [c for c in cols if gx0 < c[0] < gx1]
+            if gap_cols and any(abs(c[idx] - reach) <= tol for c in gap_cols):
+                continue
+            # True inner-corner x's: a horizontal ray just inside the extreme edge
+            # finds the actual prong walls bounding the mouth. (Column-snapping via
+            # _letter_edge_point lands a mm or so INSIDE a prong, so a straight
+            # bridge would clip solid material and get rejected.) The bridge then
+            # spans crown-to-crown across the open mouth.
+            gy = reach + (2.0 * ppm if side == "top" else -2.0 * ppm)
+            ray = LineString([(minx - 5 * ppm, gy), (maxx + 5 * ppm, gy)])
+            inter = solid.intersection(ray)
+            segs = (
+                list(inter.geoms) if inter.geom_type == "MultiLineString" else [inter]
+            )
+            xs = sorted(
+                (min(c[0] for c in s.coords), max(c[0] for c in s.coords))
+                for s in segs
+                if s.geom_type == "LineString" and not s.is_empty
+            )
+            gmid = (gx0 + gx1) / 2
+            span = next(
+                (
+                    (hi, lo2)
+                    for (lo, hi), (lo2, _h) in zip(xs, xs[1:])
+                    if hi < gmid < lo2
+                ),
+                None,
+            )
+            if span is None:
+                continue
+            axv, bxv = span
+            if bxv - axv >= 6 * ppm:  # a real mouth, not a hairline notch
+                bridges.append(((axv, reach), (bxv, reach), side))
+        return uniq, bridges
+
+    (top_pts, top_br), (bot_pts, bot_br) = prong_caps("top"), prong_caps("bottom")
+    bridges = top_br + bot_br
+    # Closed on both sides -> keep the single continuous-stroke divider (a random
+    # full-height x shared by top & bottom) so it reads as one line. Unchanged for
+    # I, F, B, G, ... Only open-side letters (U) fan out into per-prong caps.
+    if len(top_pts) == 1 and len(bot_pts) == 1 and cols:
         smax = max(c[3] for c in cols)
-        if smax >= 0.85 * H:  # a near-full-height stroke exists -> continuous
+        if smax >= 0.85 * H:
             full = [c for c in cols if c[3] >= 0.9 * smax]
             c = full[rng.randrange(len(full))]
-            return (c[0], c[1]), (c[0], c[2])
-    # fallback: true top & bottom corners independently, each nearest centre.
-    # Reuse _letter_edge_point (tight extreme-edge band + convex snap) rather than a
-    # wide band here: a 4mm band around maxy admits the A's inner-leg vertices (its
-    # foot gap rises ~4mm), and "nearest centre" then grabs one of those rising
-    # points -> the divider lands part-way UP an inner leg, leaving a sharp sliver
-    # spike. _letter_edge_point stays on the true foot/crown and snaps to the
-    # nearest real corner (e.g. the inner-bottom corner of a leg), never mid-slope.
-    top, _ = _letter_edge_point(solid, "top", cx, ppm)
-    bot, _ = _letter_edge_point(solid, "bottom", cx, ppm)
-    return (top[0], top[1]), (bot[0], bot[1])
+            return [(c[0], c[1])], [(c[0], c[2])], bridges
+    return top_pts, bot_pts, bridges
 
 
 def _vg_deflection(pts):
@@ -3046,9 +3139,22 @@ def build_pieces_wave_grid(seed, letter_union, cfg, origins, variants=32):
             # the row edges still curve in the gaps.
             caps = [_letter_caps(solids[gi], rng, ppm) for gi in range(n)]
             for gi in range(n):
-                top_pt, bot_pt = caps[gi]
-                seams.append(cap_seam(top_pt, (0.0, -1.0), bv_top, gi, py - 20))
-                seams.append(cap_seam(bot_pt, (0.0, 1.0), bv_bot, gi, py + ph + 20))
+                top_pts, bot_pts, bridges = caps[gi]
+                for tp in top_pts:
+                    seams.append(cap_seam(tp, (0.0, -1.0), bv_top, gi, py - 20))
+                for bp in bot_pts:
+                    seams.append(cap_seam(bp, (0.0, 1.0), bv_bot, gi, py + ph + 20))
+                # Span each open mouth (U/H prong gap) so the two outer caps don't
+                # enclose the whole open footprint into one oversized blob.
+                for a, b, side in bridges:
+                    na = (1.0, 0.0) if b[0] >= a[0] else (-1.0, 0.0)
+                    nb = (-na[0], 0.0)
+                    seams.append(
+                        curved(
+                            _vg_curve(a, na, b, nb, obstacles({gi: "ab"}), ppm)
+                            or [(a[0], a[1]), (b[0], b[1])]
+                        )
+                    )
             # Hs[gi] = list of per-level through-heights for letter gi.
             Hs = []
             for gi in range(n):
