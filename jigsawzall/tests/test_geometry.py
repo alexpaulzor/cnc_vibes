@@ -657,10 +657,17 @@ def test_fat_capsule_tab_is_banner_default():
     assert cfg.tab_bulb_elong_px == 25
     L, H = cfg.tab_len_px, cfg.tab_height_px
     pts = tab_outline(direction=+1, cfg=cfg)
-    # neck walls are the two interior points sitting on the edge (v == 0)
-    on_edge = [u for u, v in pts if abs(v) < 1e-9 and 0.0 < u < 1.0]
-    neck_px = (max(on_edge) - min(on_edge)) * L
+    # The neck-base corners are filleted (concave quarter-circle), so the neck is
+    # measured at the straight vertical wall (v == R/H, the bulb-bottom level),
+    # not at the flared edge.
+    Rn = cfg.tab_circle_r_px
+    wall = [u for u, v in pts if abs(v - Rn / H) < 1e-6]
+    neck_px = (max(wall) - min(wall)) * L
     assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 25px == 5mm
+    # the base fillet flares the root: the edge (v == 0) is wider than the neck
+    on_edge = [u for u, v in pts if abs(v) < 1e-9 and 0.0 < u < 1.0]
+    base_px = (max(on_edge) - min(on_edge)) * L
+    assert base_px > neck_px  # concave fillet, not a sharp 90 deg corner
     # bulb width = elong + 2R, measured across the raised (v > 0) points
     bulb_us = [u for u, v in pts if v > 1e-6]
     bulb_px = (max(bulb_us) - min(bulb_us)) * L

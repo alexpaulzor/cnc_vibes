@@ -121,14 +121,16 @@ def _apply_size_overrides(cfg, args):
             if want_vertex:
                 over["vg_spacing_search"] = True
         # Size the panel to the letters' bbox + a top/bottom margin. This margin
-        # is also the height of the background row above/below the letters, so a
-        # big value (was 30mm) left the letters floating in dead space (PARKER
-        # filled only ~27% of panel height). 17mm lets the letters fill the height
-        # with just a tab-plus-border margin; the thin rows merge some cells, which
-        # the wave scorer now WELCOMES (varied piece sizes) as long as no piece
-        # goes oversized. Bigger values look regular/boring; smaller pinch too hard.
+        # is also the height of the background row above/below the letters, so it
+        # sets how much room the top/bottom-row tabs get. 30mm left the letters
+        # floating in dead space (PARKER filled only ~27% of panel height); 17mm
+        # packed them but pinched the rows so tight that half the tabs had to
+        # shrink to fit (only ~45% placed at full size). 24mm is the sweet spot:
+        # ~98% of tabs place at full size (sturdy, undercut-locking bulbs) while
+        # the panel stays compact (~87mm tall for NORA). The wave scorer WELCOMES
+        # the merged/varied rows this leaves as long as no piece goes oversized.
         if getattr(args, "banner_h_mm", None) is None:
-            over["banner_margin_mm"] = 17.0
+            over["banner_margin_mm"] = 24.0
         # Keep letters a consistent, readable size across names: fix the cap
         # height and let the panel WIDTH flex to the word (up to 300mm stock),
         # instead of shrinking 6-letter words short to fit a 150mm width.

@@ -439,10 +439,31 @@ def _capsule_tab_outline(cfg, L, R, H, direction, n) -> list[tuple[float, float]
             for i in range(1, n + 1)
         ]
 
-    px = [(0.0, 0.0), (nl, 0.0), (nl, R)]  # lead-in, up left neck to bulb bottom
+    # Concave quarter-circle fillet at each neck-base corner (where the vertical
+    # neck wall meets the flat edge). A sharp 90 deg re-entrant corner is a stress
+    # riser that snaps in thin stock; rounding it flares the neck root so the tab
+    # is sturdier after cutting. rf stays within the bulb overhang (<= R) so the
+    # fillet never widens the tab's footprint beyond what the bulb already claims.
+    rf = max(1.0, min(0.5 * R, 0.5 * W, 0.4 * nl))
+    m = max(4, n // 3)
+
+    def fillet(cx, cy, a0, a1):  # quarter arc, radius rf, both endpoints included
+        return [
+            (
+                cx + rf * math.cos(a0 + (a1 - a0) * (i / m)),
+                cy + rf * math.sin(a0 + (a1 - a0) * (i / m)),
+            )
+            for i in range(m + 1)
+        ]
+
+    px = [(0.0, 0.0), (nl - rf, 0.0)]  # lead-in to the left fillet start
+    px += fillet(nl - rf, rf, -math.pi / 2, 0.0)  # edge -> up into left neck wall
+    px += [(nl, R)]  # up left neck to bulb bottom
     px += semi(nl, -math.pi / 2, -3 * math.pi / 2)  # left cap: bottom -> left -> top
     px += semi(nr, math.pi / 2, -math.pi / 2)  # top flat + right cap down to bottom
-    px += [(nr, 0.0), (L, 0.0)]  # down right neck, lead-out
+    px += [(nr, rf)]  # down right neck to the right fillet start
+    px += fillet(nr + rf, rf, math.pi, 3 * math.pi / 2)  # right neck -> down to edge
+    px += [(L, 0.0)]  # lead-out
     return [(x / L, (y / H) * direction) for x, y in px]
 
 
@@ -2254,21 +2275,38 @@ def _vg_splice(pts, i, s, cfg):
     curve runs up to the tab base, up one stem side, around the bulb, down the
     other stem side, then continues — so the cut goes AROUND the tab, connected
     to either side of its base (never across the stem). Returns (spliced_pts,
-    bulb_polygon) or None."""
+    bulb_polygon) or None.
+
+    The tab is centered ON pts[i] along the local tangent and spans its full
+    tab_len_px — the SAME placement _vg_tab_at validated — so what gets scored
+    for clearance is exactly what gets cut. (The old code replaced a chord
+    between i-k and i+k and scaled the tab to that chord's straight-line length,
+    which squished tabs on curved seams and drifted the bulb off the seam point.)"""
     L = cfg.tab_len_px
-    seg = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) or 1.0
-    k = max(2, int(round((L / seg) / 2)))
-    iL, iR = i - k, i + k
-    if iL < 1 or iR > len(pts) - 2:
+    tx = pts[i + 1][0] - pts[i - 1][0]
+    ty = pts[i + 1][1] - pts[i - 1][1]
+    tn = math.hypot(tx, ty) or 1.0
+    tx, ty = tx / tn, ty / tn
+    p = pts[i]
+    pL = (p[0] - tx * L / 2, p[1] - ty * L / 2)  # tab base start (centered on p)
+    # Cut the seam at the last sample behind the tab base and the first ahead of
+    # it (projection onto the tangent outside +/- L/2), so the rigid tab replaces
+    # only the span it covers and connects with short straight lead-in/out.
+    iL = i
+    while iL > 1 and (pts[iL][0] - p[0]) * tx + (pts[iL][1] - p[1]) * ty > -L / 2:
+        iL -= 1
+    iR = i
+    while (
+        iR < len(pts) - 2
+        and (pts[iR][0] - p[0]) * tx + (pts[iR][1] - p[1]) * ty < L / 2
+    ):
+        iR += 1
+    if iL < 1 or iR > len(pts) - 2 or iR <= iL:
         return None
-    pL, pR = pts[iL], pts[iR]
-    d = math.hypot(pR[0] - pL[0], pR[1] - pL[1])
-    if d < 2 * cfg.tab_circle_r_px:
-        return None
-    edir = ((pR[0] - pL[0]) / d, (pR[1] - pL[1]) / d)
-    detour = place_tab_at_offset(pL, edir, d, s, 0.0, cfg, tab_len=d)
-    spliced = pts[:iL] + detour + pts[iR + 1 :]
-    bulb = _tab_bulb_polygon(pL, edir, d, s, 0.0, cfg, tab_len=d)
+    edir = (tx, ty)
+    detour = place_tab_at_offset(pL, edir, L, s, 0.0, cfg, tab_len=L)
+    spliced = pts[: iL + 1] + detour + pts[iR:]
+    bulb = _tab_bulb_polygon(pL, edir, L, s, 0.0, cfg, tab_len=L)
     return spliced, bulb
 
 
@@ -2396,6 +2434,7 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
     allowed. A dropped seam just means its two faces stay merged."""
     ppm = cfg.px_per_mm
     st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
+    st["scale_hist"] = {}
     placed_bulbs = []
     tabbed = []
     accepted = []  # LineString of each accepted spliced seam (curve + tab)
@@ -2427,7 +2466,7 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
         ]
         st["total"] += 1
         chosen = None
-        for scale in (1.0, 0.72, 0.5):
+        for scale in (1.0, 0.85, 0.7):
             c2 = (
                 cfg
                 if scale >= 0.999
@@ -2455,6 +2494,7 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
                 chosen = (spliced, bulb, cand)
                 break
             if chosen is not None:
+                st["scale_hist"][scale] = st["scale_hist"].get(scale, 0) + 1
                 break
         if chosen is not None:
             tabbed.append(chosen[0])
