@@ -143,15 +143,17 @@ def _apply_size_overrides(cfg, args):
         # round the outer panel corners (name-plate look) regardless of --size,
         # so the default (e.g. --size full) matches the banner preset.
         over["corner_radius_mm"] = 5.0
-        # Fat capsule tabs (5mm neck into a ~9.4mm stadium bulb) regardless of
-        # --size, so the name layout keeps the wide interlocks it's tuned for
-        # instead of the plain round knobs some size presets use. Only when the
-        # user hasn't pinned tab dims via --tab-stem-mm / --tab-bulb-elong-mm.
+        # Fat capsule tabs, sized UP for durability in 3mm stock: the first NORA
+        # cut snapped at thin knobs, so the bulb radius went 11->15px (2.2->3.0mm,
+        # protrusion 3R=9mm, undercut lip 3mm/side) and the neck 25->30px (5->6mm).
+        # Bulb width = neck + 2R = 12mm. Set regardless of --size so the name
+        # layout keeps the wide interlocks it's tuned for. tab_bulb_elong is
+        # vestigial (the capsule forces elong==neck); kept only for config compat.
         if getattr(args, "tab_stem_mm", None) is None:
-            over["tab_stem_w_px"] = 25.0
+            over["tab_stem_w_px"] = 30.0
         if getattr(args, "tab_bulb_elong_mm", None) is None:
-            over["tab_bulb_elong_px"] = 25.0
-        over["tab_circle_r_px"] = 11
+            over["tab_bulb_elong_px"] = 30.0
+        over["tab_circle_r_px"] = 15
     return replace(cfg, **over) if over else cfg
 
 

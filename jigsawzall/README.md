@@ -113,7 +113,31 @@ jigsawzall/
 
 The algorithm geometry is parametric over a `PuzzleConfig` dataclass — multiple puzzle sizes coexist in one process. An earlier phase-by-phase prototype had `phase6_small` mutating `phase2`'s module-level constants which made phase6 + phase8 mutually-exclusive imports; that's gone now.
 
+## Wave-grid name-plate parameters
 
+The **wave-grid banner** mode (`--wave-grid`, invoked for every recent name-plate cut)
+is the tuned, production style. Every layout knob that shapes the puzzle *up to the
+SVG* — font, letter size, spacing, tabs — is below with its current value, a short
+history of what other values did, and its effect. Material/machine settings (power,
+feed, warmup, etc.) are deliberately excluded. Effective values are the
+`_apply_size_overrides` banner block in `jigsaw.py` (which overrides
+`banner_puzzle_config` in `geometry.py`) at `px_per_mm=5` (0.2 mm/px).
+
+| Parameter (config field / CLI) | Current value | History & impact | Purpose / effect when adjusted |
+|---|---|---|---|
+| `font_path` (`--font`) | `"bold"` (PIL bold sans) | — | Typeface the letters are rasterized from; drives glyph outlines the whole layout hangs off. |
+| `banner_letter_h_mm` | 46 mm cap height | Collapsed to 17 mm when `letter_gap_extra_mm` was 10 mm (gaps ate the width budget). Fixed cap height added to keep names readable & consistent across words. | Sets letter size; panel width flexes to the word instead of shrinking letters to fit. |
+| `panel_mm` × `panel_h_mm` (`--panel-mm`/`--panel-h-mm`) | 290 × 145 mm (fit-to-text flexes width to the word, ≤ ~300 mm stock) | — | Outer stock size; width bound caps how big/long a word can be before letters shrink. |
+| `banner_margin_mm` | 17 mm | Was 30 mm → letters floated in dead space (PARKER filled only ~27% of height). | Top/bottom background-row height above & below the letters; smaller = tighter/more merged rows, bigger = regular/boring. |
+| `letter_gap_extra_mm` (`--letter-gap-extra-mm`) | 3 mm | Was 10 mm → long words shrank caps to fit (PARKER 46→17 mm). Floor is tab-fit (`tab_height + 2·R ≈ 11 mm`). | Extra inter-letter tracking beyond the tab-fit minimum; pure breathing room for background seams between glyphs. |
+| `letter_clearance_mm` (`--letter-clearance-mm`) | 4 mm | Was 2.2 mm (= 1·R) → thin material bridges beside tabs. | Minimum material bridge kept clear beside every tab; the main lever against brittle/thin bridges. |
+| `wave_rows` (`--wave-rows`) | 3 | Base config default is 2. | Number of background rows; grid is `rows × (n_letters+1)` cells, letters are the column dividers. |
+| `tab_circle_r_px` | 15 px = 3.0 mm | Was 11 px = 2.2 mm → first NORA cut snapped at thin knobs. | Tab bulb radius. Derives protrusion `tab_height = 3·R = 9 mm` and undercut lip `R = 3 mm`/side. Bigger = stronger grip but needs more room. |
+| `tab_stem_w_px` (`--tab-stem-mm`) | 30 px = 6 mm | Was 25 px = 5 mm. | Tab neck width; bulb width = `neck + 2·R = 12 mm`. Wider neck = less likely to snap at the stem. |
+| `tab_bulb_elong_px` (`--tab-bulb-elong-mm`) | 30 px | **Vestigial** — `_capsule_tab_outline` forces elong == neck; ignored. Kept only for config compat. | (no effect) |
+| `tab_height_px` | 45 px = 9 mm (derived `3·tab_circle_r_px`) | — | Tab protrusion depth into the neighbor; not set directly. |
+| `corner_radius_mm` | 5 mm | — | Rounded outer panel corners (name-plate look). |
+| `seed` (`--seed`, `NGRID_SEEDS`) | per-run | — | Chooses the RNG layout variant. The scorer scans 32 variants and keeps the best; `count_err`/tiling deviation is *rewarded* (varied piece sizes), so only thin/oversized/sliver/nub count as defects. |
 
 ## Algorithm summary
 
