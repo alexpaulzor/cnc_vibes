@@ -118,6 +118,12 @@ def _apply_size_overrides(cfg, args):
             over["letter_gap_extra_mm"] = 10.0 if want_vertex else 3.0
             if want_vertex:
                 over["vg_spacing_search"] = True
+        # Wave-grid name-plates default to 3 rows (above / between / below the
+        # letters) — the tuned production look the seed surveys use. The bare
+        # PuzzleConfig default is 2 (a plain top/bottom split); override it here
+        # unless the user asked for a specific --wave-rows.
+        if want_wave and not want_vertex and getattr(args, "wave_rows", None) is None:
+            over["wave_rows"] = 3
         # Size the panel to the letters' bbox + a top/bottom margin. This margin
         # is also the height of the background row above/below the letters, so it
         # sets how much room the top/bottom-row tabs get. 30mm left the letters
