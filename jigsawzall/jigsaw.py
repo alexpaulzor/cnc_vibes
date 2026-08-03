@@ -144,13 +144,14 @@ def _apply_size_overrides(cfg, args):
         # so the default (e.g. --size full) matches the banner preset.
         over["corner_radius_mm"] = 5.0
         # Fat capsule tabs, sized UP for durability in 3mm stock: the first NORA
-        # cut snapped at thin knobs, so the bulb radius went 11->15px (2.2->3.0mm,
-        # protrusion 3R=9mm, undercut lip 3mm/side) and the neck 25->30px (5->6mm).
-        # Bulb width = neck + 2R = 12mm. Set regardless of --size so the name
-        # layout keeps the wide interlocks it's tuned for.
+        # cut snapped at thin knobs. banner_puzzle_config is the single source of
+        # truth for the tuned name-plate tab size (15px bulb / 30px neck = 3.0mm /
+        # 6.0mm at 5px/mm); mirror it onto EVERY --size preset so a name cuts the
+        # same wide interlocks whether --size is banner, full, micro, etc.
+        _banner_tabs = banner_puzzle_config()
         if getattr(args, "tab_stem_mm", None) is None:
-            over["tab_stem_w_px"] = 30.0
-        over["tab_circle_r_px"] = 15
+            over["tab_stem_w_px"] = _banner_tabs.tab_stem_w_px
+        over["tab_circle_r_px"] = _banner_tabs.tab_circle_r_px
     return replace(cfg, **over) if over else cfg
 
 

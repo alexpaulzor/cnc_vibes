@@ -120,9 +120,11 @@ The **wave-grid banner** mode (`--wave-grid`, invoked for every recent name-plat
 is the tuned, production style. Every layout knob that shapes the puzzle *up to the
 SVG* — font, letter size, spacing, tabs — is below with its current value, a short
 history of what other values did, and its effect. Material/machine settings (power,
-feed, warmup, etc.) are deliberately excluded. Effective values are the
-`_apply_size_overrides` banner block in `jigsaw.py` (which overrides
-`banner_puzzle_config` in `geometry.py`) at `px_per_mm=5` (0.2 mm/px).
+feed, warmup, etc.) are deliberately excluded. `banner_puzzle_config` in
+`geometry.py` is the single source of truth for these at `px_per_mm=5` (0.2 mm/px);
+`_apply_size_overrides` in `jigsaw.py` mirrors its tab size onto every `--size`
+preset (and layers on the fit-to-text panel sizing) so a name cuts the same tabs
+regardless of preset.
 
 | Parameter (config field / CLI) | Current value | History & impact | Purpose / effect when adjusted |
 |---|---|---|---|
@@ -136,6 +138,8 @@ feed, warmup, etc.) are deliberately excluded. Effective values are the
 | `tab_circle_r_px` | 15 px = 3.0 mm | Was 11 px = 2.2 mm → first NORA cut snapped at thin knobs. | Tab bulb radius. Derives protrusion `tab_height = 3·R = 9 mm` and undercut lip `R = 3 mm`/side. Bigger = stronger grip but needs more room. |
 | `tab_stem_w_px` (`--tab-stem-mm`) | 30 px = 6 mm | Was 25 px = 5 mm. | Tab neck width; bulb width = `neck + 2·R = 12 mm`. Wider neck = less likely to snap at the stem. |
 | `tab_height_px` | 45 px = 9 mm (derived `3·tab_circle_r_px`) | — | Tab protrusion depth into the neighbor; not set directly. |
+| `tab_border_floor_v_mm` | 7 mm | Was a single 3 mm floor for all edges. Full-height column dividers centred their above/below-letter tabs into the thin top/bottom margin, landing them ~3 mm from the edge where they snapped. | Min clear distance a tab must keep from the **top/bottom** panel edge. Larger on the short banner dimension so divider tabs pull inward. |
+| `tab_border_floor_h_mm` | 3 mm | (was the shared 3 mm floor) | Min clear distance from the **left/right** panel edge; the long dimension has room to spare, so it stays tight. |
 | `corner_radius_mm` | 5 mm | — | Rounded outer panel corners (name-plate look). |
 | `seed` (`--seed`, `NGRID_SEEDS`) | per-run | — | Chooses the RNG layout variant. The scorer scans 32 variants and keeps the best; `count_err`/tiling deviation is *rewarded* (varied piece sizes), so only thin/oversized/sliver/nub count as defects. |
 
@@ -143,8 +147,14 @@ feed, warmup, etc.) are deliberately excluded. Effective values are the
 edge* as the rules allow (`_vg_tab_candidates` ranks by centrality first, bucketed
 into ~4mm bands; the bridge to a letter is a floor + tie-breaker). Tabs crammed
 near a seam's ends sit in thin material and snapped after cutting, so centre-of-edge
-is the strong default. If the centre collides with a neighbour or a letter bridge,
-placement falls back outward (and, failing that, shrinks the tab 1.0 → 0.85 → 0.7).
+is the strong default. Every candidate must also clear the panel border by
+`tab_border_floor_v_mm` (top/bottom) and `tab_border_floor_h_mm` (left/right) —
+the vertical floor is larger because the full-height column dividers otherwise
+centre their above/below-letter tabs into the thin top/bottom margin, right at the
+edge. If the centre collides with a neighbour or a letter bridge, placement falls
+back outward (and, failing that, shrinks the tab 1.0 → 0.85 → 0.7); if nothing
+fits, the tab is dropped and that edge cuts straight (the piece still interlocks
+via its other edges).
 
 To survey seeds for a word before cutting:
 

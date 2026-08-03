@@ -81,6 +81,13 @@ class PuzzleConfig:
     # even with a thick neck, so pieces don't snap at the stem. None (default) =>
     # the original thin lollipop, byte-identical.
     tab_stem_w_px: float | None = None  # neck width px; None => R (old behavior)
+    # Minimum clear distance a tab (bulb + neck) must keep from the panel border,
+    # split by direction so the short banner dimension can demand more room: the
+    # full-height vertical dividers otherwise centre their above/below-letter tabs
+    # into the thin top/bottom margin, landing them near the edge where they snap.
+    # Vertical (top/bottom) is the larger default; horizontal (left/right) stays tight.
+    tab_border_floor_v_mm: float = 7.0  # top/bottom clearance
+    tab_border_floor_h_mm: float = 3.0  # left/right clearance
     margin_px: int = 120  # canvas inset around the panel for rendering
     legend_h_px: int = (
         0  # extra canvas height below the panel; unused (no legend is drawn)
@@ -311,14 +318,16 @@ def banner_puzzle_config() -> PuzzleConfig:
         panel_h_mm=75,
         piece_mm=25,
         piece_h_mm=37.5,
-        tab_circle_r_px=11,
-        # Fat capsule tabs by default: 5mm neck (~1.7x a 3mm stock, so pieces
-        # don't snap at the stem) rising into a ~9.4mm-wide stadium bulb (neck +
-        # 2*R) that keeps ~2.2mm of undercut lock each side. Needs a real-size
-        # banner (see cut cmd panel overrides); the 150mm calibration default is
-        # too short for them and will drop tabs. (The wave-grid name path bumps
-        # these to 15px/30px via _apply_size_overrides for 3mm-stock durability.)
-        tab_stem_w_px=25,
+        tab_circle_r_px=15,
+        # Fat capsule tabs, sized for 3mm-stock durability (the first NORA cut
+        # snapped at thin 11px knobs): 6mm neck (~2x a 3mm stock, so pieces don't
+        # snap at the stem) rising into a 12mm-wide stadium bulb (neck + 2*R)
+        # that keeps 3mm of undercut lock each side. This is the SINGLE SOURCE OF
+        # TRUTH for name-plate tab size; _apply_size_overrides mirrors these onto
+        # every --size preset so a name cuts the same tabs regardless of preset.
+        # Needs a real-size banner (see cut cmd panel overrides); the 150mm
+        # calibration default is too short for them and will drop tabs.
+        tab_stem_w_px=30,
         wave_amplitude_px=0,
         corner_radius_mm=5.0,
         letter_aligned_grid=True,
@@ -2248,7 +2257,9 @@ def _vg_tab_candidates(
     candidates best-first so the caller can fall back to another side or spot
     when its first choice collides with a neighbouring seam."""
     ppm = cfg.px_per_mm
-    border_floor = 3.0 * ppm
+    vfloor = cfg.tab_border_floor_v_mm * ppm  # top/bottom clearance
+    hfloor = cfg.tab_border_floor_h_mm * ppm  # left/right clearance
+    minx, miny, maxx, maxy = panel.bounds
     mid = len(pts) // 2
     # Sample spacing on a resampled seam is ~2mm, so a 2-sample band ~= 4mm:
     # positions within one band of each other count as equally central and the
@@ -2262,7 +2273,16 @@ def _vg_tab_candidates(
                 continue
             if tp.difference(panel).area > 1.0:  # runs off the panel
                 continue
-            if panel.exterior.distance(tp) < border_floor:  # too close to edge
+            if panel.exterior.distance(tp) < min(vfloor, hfloor):  # generic edge floor
+                continue
+            # Directional border clearance: the short banner dimension (top/bottom)
+            # demands more room than left/right so vertical-divider tabs don't crowd
+            # the panel edge. Measured against the panel bbox (rounded corners only
+            # inset near the corners, which both floors already exclude).
+            b = tp.bounds
+            if (b[1] - miny) < vfloor or (maxy - b[3]) < vfloor:  # too near top/bottom
+                continue
+            if (b[0] - minx) < hfloor or (maxx - b[2]) < hfloor:  # too near left/right
                 continue
             if any(tp.intersects(pk) for pk in placed):  # tabs must not touch
                 continue

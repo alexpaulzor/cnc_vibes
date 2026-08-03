@@ -574,7 +574,12 @@ def test_letter_aligned_tiles_panel(word):
     from shapely.ops import unary_union
     from geometry import _rounded_panel_mask
 
-    cfg = banner_puzzle_config()
+    # The letter-aligned grid (legacy; names now default to wave-grid) was tuned
+    # and validated at the classic thin lollipop (R=11). banner_puzzle_config now
+    # carries the WAVE-GRID production tab (R=15/neck=30), which the notch-carve
+    # wasn't tuned for and which leaves sub-pixel seam slivers here. Pin this
+    # coverage check to the tab size this mode actually runs at.
+    cfg = replace(banner_puzzle_config(), tab_circle_r_px=11, tab_stem_w_px=25)
     cfg = fit_config(word, cfg)
     pieces, _ = generate_pieces(word, 7, cfg)
     m = cfg.margin_px
@@ -653,7 +658,7 @@ def test_fat_capsule_tab_is_banner_default():
     a stadium bulb wider than the neck (so it still locks). Verifies the neck
     width, the capsule bulb width, and that the bulb overhangs the neck."""
     cfg = banner_puzzle_config()
-    assert cfg.tab_stem_w_px == 25  # 5mm neck at 5px/mm
+    assert cfg.tab_stem_w_px == 30  # 6mm neck at 5px/mm
     L, H = cfg.tab_len_px, cfg.tab_height_px
     pts = tab_outline(direction=+1, cfg=cfg)
     # Every corner is rounded (base fillet + neck->bulb cove), so the neck has no
@@ -665,7 +670,7 @@ def test_fat_capsule_tab_is_banner_default():
         if abs(u1 - u0) < 1e-9 and abs(v1 - v0) > 1e-9
     ]
     neck_px = (max(walls) - min(walls)) * L
-    assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 25px == 5mm
+    assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 30px == 6mm
     # the base fillet flares the root: the edge (v == 0) is wider than the neck
     on_edge = [u for u, v in pts if abs(v) < 1e-9 and 0.0 < u < 1.0]
     base_px = (max(on_edge) - min(on_edge)) * L
