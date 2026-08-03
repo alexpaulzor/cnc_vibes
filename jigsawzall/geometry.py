@@ -2241,13 +2241,20 @@ def _vg_tab_candidates(
     pts, letters_solid, cfg, panel, placed=(), cap_mm=15.0, min_span_mm=4.0, top=12
 ):
     """Ranked tab positions for a seam: each valid (i, s) that stays inside the
-    panel, off the border, and clear of already-placed tabs, sorted by thinnest
-    bridge to a letter (capped at cap_mm; ties -> most central). Returns up to
-    `top` candidates best-first so the caller can fall back to another side or
-    spot when its first choice collides with a neighbouring seam."""
+    panel, off the border, and clear of already-placed tabs, sorted by *how
+    central* it sits on the seam (centre of the edge is strongest; tabs crammed
+    near a seam's ends sit in thin material and snap). Bridge thickness to a
+    letter is a floor (>= min_span_mm) and only a tie-breaker among positions
+    that are equally central (within a ~4mm band). Returns up to `top`
+    candidates best-first so the caller can fall back to another side or spot
+    when its first choice collides with a neighbouring seam."""
     ppm = cfg.px_per_mm
     border_floor = 3.0 * ppm
     mid = len(pts) // 2
+    # Sample spacing on a resampled seam is ~2mm, so a 2-sample band ~= 4mm:
+    # positions within one band of each other count as equally central and the
+    # thicker bridge wins between them.
+    cbin = 2
     cands = []
     for s in (1, -1):
         for i in range(2, len(pts) - 2):
@@ -2263,9 +2270,13 @@ def _vg_tab_candidates(
             span = letters_solid.distance(tp) / ppm
             if span < min_span_mm:
                 continue
-            key = (round(min(span, cap_mm), 2), -abs(i - mid))
+            # Primary: distance from the seam centre, bucketed into ~4mm bands
+            # (ascending -> most central first). Secondary within a band: the
+            # thicker bridge to a letter (capped) wins.
+            centrality = abs(i - mid) // cbin
+            key = (centrality, -round(min(span, cap_mm), 2))
             cands.append((key, i, s))
-    cands.sort(key=lambda c: c[0], reverse=True)
+    cands.sort(key=lambda c: c[0])
     return [(i, s) for _k, i, s in cands[:top]]
 
 
