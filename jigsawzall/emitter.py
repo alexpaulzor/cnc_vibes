@@ -10,8 +10,10 @@ Unifies what previously lived in three scratch scripts:
 
 Plus the three combined-output forms (raster only / cut only / combined)
 from phase7. All emitters produce validator-clean GCode (HEAD/MATERIAL
-headers, $32=1, M4 not M3, S in [0, 1000], coords within panel
-envelope).
+headers, $32=1, S in [0, 1000], coords within panel envelope). Cuts
+default to STATIC M3 (constant power): a weak ~10W diode wants constant
+power, because M4 scales power with feedrate and such a diode never
+reaches the cutting threshold that way. Raster engraving uses M4 dynamic.
 
 Coordinate convention: piece polygons come in image-pixel coords
 (Y-down, panel inset by margin_px); emitter flips to machine mm (Y-up,
@@ -21,6 +23,7 @@ panel at 0,0). Conversion is centralized in img_to_machine_mm.
 from __future__ import annotations
 
 import math
+import sys
 from itertools import groupby
 from pathlib import Path
 
@@ -34,6 +37,9 @@ from shapely.geometry import (
     Polygon,
 )
 from shapely.ops import linemerge, unary_union
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
+from motion import decimate, warmup_wiggle  # noqa: E402
 
 from geometry import PuzzleConfig
 
@@ -160,77 +166,6 @@ def order_inside_out(pieces: list[dict]) -> list[dict]:
     return letters + cells
 
 
-def decimate_min_segment(
-    pts: list[tuple[float, float]], min_seg_mm: float
-) -> list[tuple[float, float]]:
-    """Drop intermediate points that would create a segment shorter than
-    min_seg_mm. Endpoints are always preserved (so closed rings stay
-    closed). Guarantees every emitted segment is >= min_seg_mm, except a
-    degenerate path that collapses to its two endpoints."""
-    if min_seg_mm <= 0 or len(pts) < 3:
-        return pts
-    out = [pts[0]]
-    for p in pts[1:]:
-        lx, ly = out[-1]
-        if math.hypot(p[0] - lx, p[1] - ly) >= min_seg_mm:
-            out.append(p)
-    # Force-preserve the final endpoint. If it was skipped because it sat
-    # within min_seg of the last kept point, drop that kept point so the
-    # closing segment is still >= min_seg.
-    if out[-1] != pts[-1]:
-        if len(out) >= 2:
-            out.pop()
-        out.append(pts[-1])
-    return out
-
-
-def _points_up_to(coords, dist):
-    """Polyline from coords[0] forward along coords until arclength `dist`,
-    ending at the interpolated point exactly at `dist` (or the last point if the
-    path is shorter)."""
-    out = [coords[0]]
-    acc = 0.0
-    for a, b in zip(coords, coords[1:]):
-        seg = math.hypot(b[0] - a[0], b[1] - a[1])
-        if acc + seg >= dist and seg > 1e-9:
-            t = (dist - acc) / seg
-            out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
-            return out
-        out.append(b)
-        acc += seg
-    return out
-
-
-def _warmup_wiggle(coords, warmup_mm):
-    """Front-loaded diode warmup: motion points (starting AND ending at
-    coords[0]) that trace back and forth over the START of the path so the laser
-    reaches full power by the time it returns to coords[0] — then the real cut
-    runs full-power over every mm, including this start zone.
-
-    50/50 split: run forward warmup_mm/2, then back to the start (warmup_mm/2),
-    so full power is hit exactly on the return. On a path too short for that,
-    oscillate the whole path end-to-end until warmup_mm is covered, always
-    landing back at coords[0]. Returns [] (no wiggle) if warmup_mm<=0.
-    """
-    if warmup_mm <= 0 or len(coords) < 2:
-        return []
-    total = 0.0
-    for a, b in zip(coords, coords[1:]):
-        total += math.hypot(b[0] - a[0], b[1] - a[1])
-    if total <= 1e-9:
-        return []
-    half = warmup_mm / 2.0
-    if total >= half:  # long enough: forward half, back to start
-        fwd = _points_up_to(coords, half)
-        return fwd[1:] + list(reversed(fwd))[1:]
-    # short path: oscillate end-to-end (round trips return to start) until covered
-    trips = max(1, math.ceil(warmup_mm / (2.0 * total)))
-    seq = []
-    for _ in range(trips):
-        seq += list(coords[1:]) + list(reversed(coords))[1:]
-    return seq
-
-
 def emit_cut_gcode_simple(
     pieces: list[dict],
     material: dict,
@@ -246,8 +181,10 @@ def emit_cut_gcode_simple(
     Shared cell-to-cell edges get cut twice; acceptable for ~5-piece
     tests.
 
-    mode="dynamic" (default) emits M4 (power scales with feed); "static"
-    emits M3 + a ;LASER_MODE: static header (constant power). feed_override
+    mode="static" (default) emits M3 (constant power); "dynamic" emits M4
+    (power scales with feedrate). Static is the default because a weak ~10W
+    diode wants constant power — under M4 the power drops with feed and the
+    diode never reaches the cutting threshold. feed_override
     replaces the material feedrate. min_segment_mm decimates points so no
     emitted segment is shorter than that distance. power_percent overrides
     the material power (S = percent*10). Diode cold-start fade is handled by
@@ -281,7 +218,7 @@ def emit_cut_gcode_simple(
         paths = _polygon_to_paths_mm(piece["polygon"], cfg)
         kind = piece.get("kind", "cell")
         for path_idx, pts in enumerate(paths):
-            pts = decimate_min_segment(pts, min_segment_mm)
+            pts = decimate(pts, min_segment_mm)
             if len(pts) < 3:
                 continue
             label = f"{kind} {i}"
@@ -825,10 +762,10 @@ def emit_cut_gcode_full(
     )
 
     for idx, path_mm in enumerate(chains, start=1):
-        coords_mm = decimate_min_segment(path_mm, min_segment_mm)
+        coords_mm = decimate(path_mm, min_segment_mm)
         if len(coords_mm) < 2:
             continue
-        warm = _warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
+        warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
         x0, y0 = coords_mm[0]
         lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")

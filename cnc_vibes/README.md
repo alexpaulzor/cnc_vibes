@@ -228,7 +228,7 @@ The validator + preflight then work against your machine without any other code 
 | `cnc.py params` says "no chipload entry" | Material has no chipload for the chosen tool | Add the pair to `profiles/materials.yaml` |
 | `cnc.py validate` flags `bounds` | GCode would drive outside the envelope | Check WCS origin in the Job — usually stock-placement issue |
 | `cnc.py validate` flags `safe_z_rapid` | A G0 traverses XY below safe Z | Raise Safe Height in the Profile op, or `default_safe_z_mm` in machine YAML |
-| `cnc.py validate` flags `laser_m4_required` | Job uses M3 instead of M4 dynamic | Switch to laser-mode emitter that uses M4 (lessons all do this correctly) |
+| `cnc.py validate` flags `laser_dynamic_power` | Job uses M4 dynamic power; a weak diode under-fires on M4 (power scales with feed) | Use a static-M3 emitter (`quickcut/svg2gcode.py`), or declare `;LASER_MODE: dynamic` if you genuinely want M4 |
 | `cnc.py preview` says CAMotics not found | CAMotics not installed at expected location | `brew install --cask camotics` or download from https://camotics.org |
 | Preflight refuses to start | Safety check failed before checklist | Fix the params issue first, re-run preflight |
 | Int-04 says `ALARM:8 Homing fail` | `$27` pull-off too small | `$27=5` in your sender, then `$X` to unlock |

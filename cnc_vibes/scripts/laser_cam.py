@@ -1,8 +1,8 @@
 """Laser-mode counterparts to a subset of scripts/cam.py.
 
 cam.py is built around spindle semantics (Z plunge, M3, peck cycles, depth
-passes). A laser is fundamentally different: no Z motion, M3/M4 power,
-constant-depth centerline cuts, multi-pass for through-cut depth.
+passes). A laser is fundamentally different: no Z motion, constant-depth
+centerline cuts, multi-pass for through-cut depth.
 
 Rather than bolt a `head` discriminator into every cam.py op, we mirror
 only the two ops that make sense for a diode laser:
@@ -14,16 +14,23 @@ Refusals for pocket / drill / chamfer / face / slot are handled at the
 CLI shim layer (scripts/cam_cli.py); this module just provides the two
 emitters.
 
-Power mode:
-  mode="dynamic" (default): M4 dynamic, S scales with actual feed.
-      Safer for cuts because dwell at corners is auto-attenuated, BUT
-      starves on very short segments (the laser never reaches programmed
-      feed → effective S near zero). Combine with simplify_tolerance_mm
-      to keep segments long enough.
-  mode="static":  M3 static power. Use when M4 starves (over-sampled
-      glyphs, dense contours) and the dwell-burn-through risk is
-      acceptable (light-touch engraving on cardboard, etc.). Emits a
-      ;LASER_MODE: static header so gcode_validate.py allows M3.
+Power mode (this repo cuts with a weak ~10W diode):
+  mode="static" (default): M3 constant power. A weak diode wants static
+      power — it never reaches cutting threshold otherwise, so this is the
+      diode-correct default and needs no special validator header.
+  mode="dynamic": M4 dynamic power, S scaled with actual feed. This is the
+      opt-in that UNDER-FIRES a weak diode (power drops with feed, so short
+      segments and corners barely fire). Only use it if you know your diode
+      can drive M4. It emits a ";LASER_MODE: dynamic" header so
+      gcode_validate.py allows M4 (M4 is a violation without it).
+
+Closed-loop technique (shared with quickcut/svg2gcode.py):
+  Every ring/contour here is a CLOSED loop, which already returns to its own
+  start — so there is NO laser-on return chord to avoid and ping-pong is
+  wrong. We trace N SAME-DIRECTION laps, then FOLLOW THROUGH past the start
+  so the cold-started first millimetres get re-cut hot and the part releases
+  with no snag. The motion primitives (decimate, follow_through) come from
+  the shared quickcut/motion.py so the diode know-how lives in one place.
 
 Emission style is the standard validator-clean laser header used across the
 repo's laser emitters:
@@ -52,6 +59,10 @@ from cam import (  # noqa: E402  (reuse glyph rasterizer + font helper)
     _warn_or_fail,
 )
 
+# Shared weak-diode motion primitives (one source of truth across vibes tools).
+sys.path.insert(0, str(SCRIPT_DIR.parent.parent / "quickcut"))
+from motion import decimate, follow_through  # noqa: E402
+
 PROFILES_DIR = SCRIPT_DIR.parent / "profiles"
 
 _ENGRAVE_PX_PER_MM = 30
@@ -72,6 +83,11 @@ class LaserMaterial:
 
 def load_laser_material(material_id: str) -> LaserMaterial:
     # laser_materials.yaml lives in the shared repo-root material_profiles/ dir.
+    #
+    # Not delegated to quickcut.materials.load_material: that returns only the
+    # `laser` recipe block, but LaserMaterial also carries the entry's top-level
+    # thickness_mm/family. Delegating would mean either a second file read or a
+    # widened quickcut API, so the small self-contained read stays here.
     shared = SCRIPT_DIR.parent.parent / "material_profiles" / "laser_materials.yaml"
     with shared.open() as f:
         materials = yaml.safe_load(f)
@@ -108,9 +124,11 @@ def _laser_header(op: str, material: LaserMaterial, mode: LaserMode) -> list[str
         f";MATERIAL: {material.id}",
         ";TOOL: laser",
     ]
-    if mode == "static":
+    if mode == "dynamic":
+        # The validator rejects M4 unless this header opts in. M4 scales power
+        # with feed and under-fires a weak diode; static M3 is the default.
         lines.append(
-            ";LASER_MODE: static  (M3 — dwell-burn-through risk if motion stalls)"
+            ";LASER_MODE: dynamic  (M4 — power scales with feed; under-fires a weak diode)"
         )
     lines += [
         "",
@@ -126,8 +144,34 @@ def _laser_footer() -> list[str]:
     return ["M5  ; laser off", "G0 X0 Y0  ; park"]
 
 
-def _power_s(power_percent: float) -> int:
-    return int(round(power_percent * 10))  # percent -> S0..1000
+def _power_s(power_percent: float, s_full_power: int) -> int:
+    """Scale percent to an S word against the controller's full-power ceiling.
+
+    Mirrors quickcut's CutJob.power_s: s_full_power must match GRBL $30 (the S
+    value that means 100% PWM), so a 24000-step controller passes 50% -> S12000.
+    """
+    return round(power_percent / 100.0 * s_full_power)
+
+
+def _closed_loop_motion(
+    ring: list[tuple[float, float]], passes: int, warmup_mm: float
+) -> list[str]:
+    """Motion for one CLOSED loop (points already in absolute machine coords).
+
+    A closed ring returns to its own start, so we trace it `passes` times in
+    ONE direction (no ping-pong), then follow through past the start so the
+    cold-cut start region is re-cut hot and the part releases with no snag.
+    """
+    lines: list[str] = []
+    for p in range(1, passes + 1):
+        if passes > 1:
+            lines.append(f"; pass {p}/{passes}")
+        lines += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in ring[1:]]
+    lead = follow_through(ring, warmup_mm)
+    if lead:
+        lines.append(f"; follow-through {warmup_mm:.1f}mm past start (clean release)")
+        lines += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in lead]
+    return lines
 
 
 def _polygon_rings(geom: BaseGeometry) -> list[list[tuple[float, float]]]:
@@ -152,8 +196,11 @@ def _polygon_rings(geom: BaseGeometry) -> list[list[tuple[float, float]]]:
 def laser_profile(
     polygon: BaseGeometry,
     material: LaserMaterial,
-    mode: LaserMode = "dynamic",
+    mode: LaserMode = "static",
     simplify_tolerance_mm: float = 0.05,
+    min_segment_mm: float = 0.3,
+    warmup_ms: float = 1000.0,
+    s_full_power: int = 1000,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Centerline cut around every ring of a polygon (exterior + holes).
@@ -165,14 +212,20 @@ def laser_profile(
     material, power, feed, and focus.
 
     Material.passes drives how many times each ring is re-traced (full
-    through-cut depth control). mode="dynamic" (M4) scales delivered
-    power with actual feed (corner-safe); mode="static" (M3) holds S
-    constant (avoids the short-segment starvation gotcha).
+    through-cut depth control). Every ring is CLOSED, so each is traced N
+    same-direction laps then followed through past its start (see
+    _closed_loop_motion) — no ping-pong.
 
-    simplify_tolerance_mm > 0 runs shapely.simplify() to drop near-
-    collinear vertices. Default 0.05mm keeps geometry visually identical
-    but makes M4 dynamic mode practical even on circles/arcs that would
-    otherwise emit hundreds of micro-segments.
+    mode="static" (M3, default) holds S constant, which is what a weak diode
+    needs to reach cutting threshold. mode="dynamic" (M4) scales power with
+    feed and under-fires a weak diode; it emits a ";LASER_MODE: dynamic"
+    header so the validator accepts M4.
+
+    Geometry is thinned two ways before emission: simplify_tolerance_mm > 0
+    runs shapely.simplify() to drop near-collinear vertices, then quickcut's
+    decimate drops any points closer than min_segment_mm. s_full_power is the
+    S value meaning 100% power (GRBL $30). warmup_ms sets the follow-through
+    distance (warmup_ms/60000 * feed).
     """
     cfg = cfg or CamConfig()
     warnings: list[str] = []
@@ -185,10 +238,11 @@ def laser_profile(
         _warn_or_fail("laser_profile: polygon has no rings to trace", cfg, warnings)
         return GcodeOutput(lines=[], warnings=warnings)
 
-    s = _power_s(material.power_percent)
+    s = _power_s(material.power_percent, s_full_power)
     feed = material.feed_mm_per_min
     passes = max(1, material.passes)
     on = _power_code(mode)
+    warmup_mm = warmup_ms / 60_000.0 * feed
 
     lines = _laser_header("laser_profile", material, mode)
     lines.append(
@@ -197,6 +251,7 @@ def laser_profile(
     lines.append("")
 
     for ri, ring in enumerate(rings, start=1):
+        ring = decimate(ring, min_segment_mm)
         if len(ring) < 3:
             continue
         x0, y0 = ring[0]
@@ -205,15 +260,7 @@ def laser_profile(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
-        # Ping-pong passes: forward, then reverse over the same points (no laser-on
-        # move back to the start).
-        for p in range(passes):
-            if passes > 1:
-                dirn = "forward" if p % 2 == 0 else "reverse"
-                lines.append(f"; pass {p + 1}/{passes} ({dirn})")
-            seq = ring[1:] if p % 2 == 0 else ring[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        lines += _closed_loop_motion(ring, passes, warmup_mm)
         lines.append("M5")
         lines.append("")
 
@@ -227,20 +274,23 @@ def laser_engrave(
     height_mm: float,
     material: LaserMaterial,
     font_path: str | None = None,
-    mode: LaserMode = "dynamic",
+    mode: LaserMode = "static",
     simplify_tolerance_mm: float = 0.05,
+    min_segment_mm: float = 0.3,
+    warmup_ms: float = 1000.0,
+    s_full_power: int = 1000,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Outline-trace a text label at constant power.
 
     Reuses cam._text_to_contours so glyph geometry is identical to the
     spindle engrave_text op. Each closed contour becomes one M3/M4 ... M5
-    cycle. material.passes is respected.
+    cycle traced with the closed-loop technique (same-direction laps +
+    follow-through). material.passes is respected.
 
-    See laser_profile for mode and simplify_tolerance_mm semantics. The
-    defaults (mode="dynamic", simplify=0.05mm) keep M4 working on glyph
-    contours that would otherwise have ~1000 over-sampled points per letter
-    — at 0.05mm tolerance, ~50 points per letter is plenty.
+    See laser_profile for mode, simplify_tolerance_mm, min_segment_mm,
+    warmup_ms, and s_full_power semantics. The default mode="static" (M3) is
+    the diode-correct choice; mode="dynamic" (M4) under-fires a weak diode.
     """
     cfg = cfg or CamConfig()
     warnings: list[str] = []
@@ -285,11 +335,12 @@ def laser_engrave(
         )
         return GcodeOutput(lines=[], warnings=warnings)
 
-    s = _power_s(material.power_percent)
+    s = _power_s(material.power_percent, s_full_power)
     feed = material.feed_mm_per_min
     passes = max(1, material.passes)
     on = _power_code(mode)
     x_origin, y_origin = position
+    warmup_mm = warmup_ms / 60_000.0 * feed
 
     lines = _laser_header("laser_engrave", material, mode)
     lines.append(f"; text={text!r}  height={height_mm}mm  font={Path(font_path).name}")
@@ -299,23 +350,18 @@ def laser_engrave(
     lines.append("")
 
     for ci, contour in enumerate(contours, start=1):
-        if len(contour) < 3:
+        # Move glyph into place, then treat as a closed loop.
+        placed = [(x_origin + x, y_origin + y) for x, y in contour]
+        placed = decimate(placed, min_segment_mm)
+        if len(placed) < 3:
             continue
-        x0, y0 = contour[0]
-        lines.append(f"; --- contour {ci}/{len(contours)} ({len(contour)} pts) ---")
+        x0, y0 = placed[0]
+        lines.append(f"; --- contour {ci}/{len(contours)} ({len(placed)} pts) ---")
         lines.append("M5")
-        lines.append(f"G0 X{x_origin + x0:.3f} Y{y_origin + y0:.3f}")
+        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{s}")
         lines.append(f"F{feed}")
-        # Ping-pong passes: forward, then reverse over the same points (no laser-on
-        # move back to the start).
-        for p in range(passes):
-            if passes > 1:
-                dirn = "forward" if p % 2 == 0 else "reverse"
-                lines.append(f"; pass {p + 1}/{passes} ({dirn})")
-            seq = contour[1:] if p % 2 == 0 else contour[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x_origin + x:.3f} Y{y_origin + y:.3f}")
+        lines += _closed_loop_motion(placed, passes, warmup_mm)
         lines.append("M5")
         lines.append("")
 
@@ -329,8 +375,11 @@ def text_profile(
     height_mm: float,
     material: LaserMaterial,
     font_path: str | None = None,
-    mode: LaserMode = "dynamic",
+    mode: LaserMode = "static",
     simplify_tolerance_mm: float = 0.05,
+    min_segment_mm: float = 0.3,
+    warmup_ms: float = 1000.0,
+    s_full_power: int = 1000,
     cfg: CamConfig | None = None,
 ) -> GcodeOutput:
     """Cut each glyph's silhouette out of stock.
@@ -342,7 +391,8 @@ def text_profile(
 
     Laser kerf width = the beam itself, so the toolpath is centerline
     (no offset). Pre-shrink/grow the text height if you need kerf-
-    accurate finished dimensions.
+    accurate finished dimensions. mode="static" (M3) is the diode-correct
+    default; mode="dynamic" (M4) under-fires a weak diode.
     """
     cfg = cfg or CamConfig()
     warnings: list[str] = []
@@ -395,12 +445,15 @@ def text_profile(
     geom = moved[0] if len(moved) == 1 else MultiPolygon(moved)
 
     # Hand off to laser_profile (which already handles MultiPolygon +
-    # holes); we've already simplified, so skip the second pass.
+    # holes); we've already simplified, so skip the second simplify pass.
     out = laser_profile(
         geom,
         material,
         mode=mode,
         simplify_tolerance_mm=0,
+        min_segment_mm=min_segment_mm,
+        warmup_ms=warmup_ms,
+        s_full_power=s_full_power,
         cfg=cfg,
     )
     # Tweak the header comment so the file is self-describing.

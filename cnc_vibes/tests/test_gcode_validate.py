@@ -125,59 +125,64 @@ def test_comments_and_parens_are_ignored():
 LASER_HEADER = ";HEAD: laser\n$32=1\nG21\nG90\nM5\n"
 
 
-def test_laser_job_with_m4_and_in_range_s_is_clean():
-    gcode = LASER_HEADER + (
-        "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\nG0 X0 Y0\n"
-    )
+def test_laser_job_with_m3_static_is_clean():
+    # A weak diode wants static M3 constant power — the default, no declaration.
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\nG0 X0 Y0\n"
     assert validate(gcode, PROFILE, TOOLS) == []
 
 
 def test_laser_job_missing_dollar_32_flagged():
-    gcode = ";HEAD: laser\nG21\nG90\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+    gcode = ";HEAD: laser\nG21\nG90\nM3 S1000\nF400\nG1 X20 Y10\nM5\n"
     assert "laser_mode" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
-def test_laser_job_using_m3_flagged():
-    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
-    assert "laser_m4_required" in _rules(validate(gcode, PROFILE, TOOLS))
+def test_laser_job_using_m4_flagged():
+    # M4 dynamic under-fires a weak diode; flagged unless dynamic is declared.
+    gcode = LASER_HEADER + "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+    assert "laser_dynamic_power" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
-def test_laser_m3_allowed_when_laser_mode_static_declared():
+def test_laser_m4_allowed_when_laser_mode_dynamic_declared():
     gcode = (
-        ";HEAD: laser\n;LASER_MODE: static\n$32=1\nG21\nG90\nM5\n"
-        "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\n"
+        ";HEAD: laser\n;LASER_MODE: dynamic\n$32=1\nG21\nG90\nM5\n"
+        "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
     )
-    assert "laser_m4_required" not in _rules(validate(gcode, PROFILE, TOOLS))
+    assert "laser_dynamic_power" not in _rules(validate(gcode, PROFILE, TOOLS))
 
 
-def test_laser_s_value_above_1000_flagged():
-    gcode = LASER_HEADER + "G0 X10 Y10\nM4 S2000\nF400\nG3 X10 Y10 I-3 J0\nM5\n"
+def test_laser_s_value_above_ceiling_flagged():
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S2000\nF400\nG1 X20 Y10\nM5\n"
     assert "laser_power_range" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
+def test_laser_s_ceiling_is_dollar_30_aware():
+    # A controller with $30=24000 accepts S up to 24000.
+    profile = {**PROFILE, "controller": {"s_max": 24000}}
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S2000\nF400\nG1 X20 Y10\nM5\n"
+    assert "laser_power_range" not in _rules(validate(gcode, profile, TOOLS))
+
+
 def test_laser_job_skips_spindle_on_rule():
-    # No M3 ever — but the spindle_on rule must NOT fire for laser jobs.
-    gcode = LASER_HEADER + ("G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\n")
+    # No spindle_on rule for laser jobs even with M3 static power.
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\n"
     assert "spindle_on" not in _rules(validate(gcode, PROFILE, TOOLS))
 
 
 def test_laser_job_skips_safe_z_rapid_rule():
     # Laser jobs keep Z at 0 throughout. State.z=0 < safe_z=5, but the
     # safe_z_rapid rule should not fire for laser-tagged GCode.
-    gcode = LASER_HEADER + (
-        "G0 X10 Y10\nM4 S1000\nF400\nG3 X10 Y10 I-3 J0\nM5\nG0 X20 Y20\n"
-    )
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\nG0 X20 Y20\n"
     assert "safe_z_rapid" not in _rules(validate(gcode, PROFILE, TOOLS))
 
 
 def test_laser_job_still_enforces_bounds():
     # X=500 exceeds envelope.x=400 even for laser jobs.
-    gcode = LASER_HEADER + "G0 X500 Y10\nM4 S1000\nF400\nG3 X500 Y10 I-3 J0\nM5\n"
+    gcode = LASER_HEADER + "G0 X500 Y10\nM3 S1000\nF400\nG1 X500 Y10\nM5\n"
     assert "bounds" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
 def test_laser_job_still_enforces_max_feed():
-    gcode = LASER_HEADER + "G0 X10 Y10\nM4 S1000\nF9000\nG3 X10 Y10 I-3 J0\nM5\n"
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF9000\nG1 X20 Y10\nM5\n"
     assert "max_feed" in _rules(validate(gcode, PROFILE, TOOLS))
 
 
@@ -188,4 +193,4 @@ def test_spindle_default_when_no_head_marker():
     assert "spindle_on" in rules
     # And no laser rules should fire.
     assert "laser_mode" not in rules
-    assert "laser_m4_required" not in rules
+    assert "laser_dynamic_power" not in rules

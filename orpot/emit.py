@@ -1,7 +1,9 @@
 """GCode emission + preview rendering for orpot.
 
-Self-contained, but the GRBL/laser conventions are ported verbatim from the
-sibling jigsawzall/emitter.py so the machine behavior is identical:
+The GRBL/laser conventions match the other vibes emitters so the machine
+behavior is identical, and the generic point-list motion helpers (decimation +
+diode warmup wiggle) are imported from the shared quickcut package rather than
+re-implemented here:
 
   - $32=1 laser mode, G21 mm, G90 absolute
   - STATIC M3 constant power at 100% (this weak diode under-fires on M4 dynamic)
@@ -16,6 +18,7 @@ there is no image-pixel flip here (unlike jigsaw).
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +27,10 @@ from PIL import Image, ImageDraw, ImageFont
 from shapely.geometry import Polygon
 
 REPO_ROOT = Path(__file__).resolve().parent
+
+# Shared point-list motion helpers live in the sibling quickcut package.
+sys.path.insert(0, str(REPO_ROOT.parent / "quickcut"))
+from motion import decimate, warmup_wiggle  # noqa: E402
 
 # Diode cold-start ramp: time to reach full optical power after the beam fires.
 # Fixed for this machine regardless of material. Front-loaded as an out-and-back
@@ -78,66 +85,12 @@ def _header(title: str, material_id: str, extra: list[str] | None = None) -> lis
 
 
 # ---------------------------------------------------------------------------
-# Path helpers (ported verbatim from jigsawzall/emitter.py)
+# Path helpers
 # ---------------------------------------------------------------------------
-
-
-def decimate_min_segment(
-    pts: list[tuple[float, float]], min_seg_mm: float
-) -> list[tuple[float, float]]:
-    """Drop intermediate points that would create a segment shorter than
-    min_seg_mm. Endpoints are always preserved (so closed rings stay closed)."""
-    if min_seg_mm <= 0 or len(pts) < 3:
-        return pts
-    out = [pts[0]]
-    for p in pts[1:]:
-        lx, ly = out[-1]
-        if math.hypot(p[0] - lx, p[1] - ly) >= min_seg_mm:
-            out.append(p)
-    if out[-1] != pts[-1]:
-        if len(out) >= 2:
-            out.pop()
-        out.append(pts[-1])
-    return out
-
-
-def _points_up_to(coords, dist):
-    """Polyline from coords[0] forward along coords until arclength `dist`."""
-    out = [coords[0]]
-    acc = 0.0
-    for a, b in zip(coords, coords[1:]):
-        seg = math.hypot(b[0] - a[0], b[1] - a[1])
-        if acc + seg >= dist and seg > 1e-9:
-            t = (dist - acc) / seg
-            out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
-            return out
-        out.append(b)
-        acc += seg
-    return out
-
-
-def _warmup_wiggle(coords, warmup_mm):
-    """Front-loaded diode warmup: motion points (starting AND ending at
-    coords[0]) that trace back and forth over the START of the path so the laser
-    reaches full power by the time it returns to coords[0]. Returns [] if
-    warmup_mm <= 0."""
-    if warmup_mm <= 0 or len(coords) < 2:
-        return []
-    total = 0.0
-    for a, b in zip(coords, coords[1:]):
-        total += math.hypot(b[0] - a[0], b[1] - a[1])
-    if total <= 1e-9:
-        return []
-    half = warmup_mm / 2.0
-    if total >= half:  # long enough: forward half, back to start
-        fwd = _points_up_to(coords, half)
-        return fwd[1:] + list(reversed(fwd))[1:]
-    # short path: oscillate end-to-end (round trips return to start) until covered
-    trips = max(1, math.ceil(warmup_mm / (2.0 * total)))
-    seq = []
-    for _ in range(trips):
-        seq += list(coords[1:]) + list(reversed(coords))[1:]
-    return seq
+# decimate and warmup_wiggle are imported from quickcut/motion.py. (Note:
+# quickcut also exposes load_material, but this module's load_material returns
+# the FULL material entry — callers need material["id"] and material["laser"] —
+# whereas quickcut's returns only the laser recipe block, so it stays local.)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +138,7 @@ def emit_cut_gcode(
     lines = _header(title=title, material_id=material["id"], extra=extra)
 
     def cut_ring(pts, label):
-        pts = decimate_min_segment(pts, cfg.min_segment_mm)
+        pts = decimate(pts, cfg.min_segment_mm)
         if len(pts) < 3:
             return
         x0, y0 = pts[0]
@@ -193,7 +146,7 @@ def emit_cut_gcode(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"M3 S{power_s}")
         lines.append(f"F{feed}")
-        for wx, wy in _warmup_wiggle(pts, warmup_mm):
+        for wx, wy in warmup_wiggle(pts, warmup_mm):
             lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
         # Multi-pass ping-pong: forward, then reverse over the same points,
         # alternating — never a laser-on move back to the start.
@@ -246,7 +199,7 @@ def emit_disc_gcode(
     lines = _header(title=title, material_id=material["id"], extra=extra)
 
     def cut_path(pts, label, closed):
-        pts = decimate_min_segment(pts, cfg.min_segment_mm)
+        pts = decimate(pts, cfg.min_segment_mm)
         if len(pts) < (3 if closed else 2):
             return
         x0, y0 = pts[0]
@@ -254,7 +207,7 @@ def emit_disc_gcode(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"M3 S{power_s}")
         lines.append(f"F{feed}")
-        for wx, wy in _warmup_wiggle(pts, warmup_mm):
+        for wx, wy in warmup_wiggle(pts, warmup_mm):
             lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
         # Multi-pass ping-pong: forward, then reverse over the same points,
         # alternating — never a laser-on move back to the start.

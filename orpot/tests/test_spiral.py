@@ -17,7 +17,7 @@ PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
 
 from emit import (  # noqa: E402
-    decimate_min_segment,
+    decimate,
     emit_cut_gcode,
     emit_disc_gcode,
     load_material,
@@ -182,7 +182,7 @@ def test_decimate_respects_min_segment():
     cfg = SpiralConfig(min_segment_mm=0.4)
     profile, _ = build_disc(cfg)
     ring = list(profile.exterior.coords)
-    dec = decimate_min_segment(ring, cfg.min_segment_mm)
+    dec = decimate(ring, cfg.min_segment_mm)
     seglens = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(dec, dec[1:])]
     short = [s for s in seglens[:-1] if s < cfg.min_segment_mm - 1e-6]
     assert not short, f"sub-floor segments after decimation: {short}"

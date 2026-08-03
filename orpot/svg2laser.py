@@ -44,28 +44,16 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 # Diode cold-start ramp (ms) to reach full optical power after the beam fires.
 DEFAULT_WARMUP_MS = 1000.0
 
-# ---------------------------------------------------------------------------
-# Material profiles (optional)
-# ---------------------------------------------------------------------------
-
-
-def load_material(material_id: str, profile_path: Path) -> dict:
-    try:
-        import yaml
-    except ImportError:
-        raise SystemExit(
-            "--material needs pyyaml (pip install pyyaml), or pass "
-            "--feed/--power/--passes instead."
-        )
-    if not profile_path.exists():
-        raise SystemExit(f"profile file not found: {profile_path}")
-    materials = yaml.safe_load(profile_path.read_text())
-    for m in materials:
-        if m.get("id") == material_id:
-            return m
-    ids = ", ".join(sorted(str(m.get("id", "?")) for m in materials))
-    raise SystemExit(f"unknown material: {material_id}. Available: {ids}")
-
+# Shared motion + material helpers live in the sibling quickcut package.
+sys.path.insert(0, str(SCRIPT_DIR.parent / "quickcut"))
+from materials import load_material  # noqa: E402
+from motion import (  # noqa: E402
+    decimate,
+    follow_through,
+    path_length,
+    signed_area,
+    warmup_wiggle,
+)
 
 # ---------------------------------------------------------------------------
 # SVG parsing  ->  list of (points, closed) polylines in SVG user units
@@ -327,64 +315,11 @@ def svg_subpaths(svg: str) -> tuple[list, float]:
 
 
 # ---------------------------------------------------------------------------
-# Geometry helpers (warmup + decimation ported from the jigsawzall emitter)
+# Geometry + motion helpers
 # ---------------------------------------------------------------------------
-
-
-def _signed_area(pts) -> float:
-    a = 0.0
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
-        a += x0 * y1 - x1 * y0
-    return a / 2
-
-
-def decimate(pts, min_seg):
-    if min_seg <= 0 or len(pts) < 3:
-        return pts
-    out = [pts[0]]
-    for p in pts[1:]:
-        if math.hypot(p[0] - out[-1][0], p[1] - out[-1][1]) >= min_seg:
-            out.append(p)
-    if out[-1] != pts[-1]:
-        if len(out) >= 2:
-            out.pop()
-        out.append(pts[-1])
-    return out
-
-
-def _points_up_to(coords, dist):
-    out = [coords[0]]
-    acc = 0.0
-    for a, b in zip(coords, coords[1:]):
-        seg = math.hypot(b[0] - a[0], b[1] - a[1])
-        if acc + seg >= dist and seg > 1e-9:
-            t = (dist - acc) / seg
-            out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
-            return out
-        out.append(b)
-        acc += seg
-    return out
-
-
-def warmup_wiggle(coords, warmup_mm):
-    """Motion points (start and end at coords[0]) tracing back and forth over the
-    start so the beam reaches full power by the time it returns to coords[0]."""
-    if warmup_mm <= 0 or len(coords) < 2:
-        return []
-    total = sum(
-        math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(coords, coords[1:])
-    )
-    if total <= 1e-9:
-        return []
-    half = warmup_mm / 2
-    if total >= half:
-        fwd = _points_up_to(coords, half)
-        return fwd[1:] + list(reversed(fwd))[1:]
-    trips = max(1, math.ceil(warmup_mm / (2 * total)))
-    seq = []
-    for _ in range(trips):
-        seq += list(coords[1:]) + list(reversed(coords))[1:]
-    return seq
+# signed_area, decimate, warmup_wiggle and follow_through are imported from
+# quickcut/motion.py (the diode warmup/follow-through know-how lives there so it
+# is shared with every vibes emitter).
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +334,10 @@ def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
         "; svg2laser: GRBL diode-laser cut (static M3 + warmup lead-in)",
         f"; feed={feed}mm/min power={power_pct}% passes={passes} "
         f"warmup={warmup_ms:.0f}ms ({warmup_mm:.1f}mm at F{feed})",
+        "; closed loops: cut the loop then follow through {:.1f}mm past the start".format(
+            warmup_mm
+        ),
+        "; open paths: out-and-back warmup wiggle over the start",
         "; order: interior loops first, outer boundary last",
         ";",
         ";HEAD: laser",
@@ -412,7 +351,7 @@ def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
         "G0 X0 Y0",
         "",
     ]
-    for name, pts in loops:
+    for name, closed, pts in loops:
         pts = decimate(pts, min_seg)
         if len(pts) < 2:
             continue
@@ -421,19 +360,41 @@ def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
         L.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         L.append(f"M3 S{power_s}")
         L.append(f"F{feed}")
-        for wx, wy in warmup_wiggle(pts, warmup_mm):
-            L.append(f"G1 X{wx:.3f} Y{wy:.3f}")
-        # Ping-pong the passes: cut forward, then reverse back over the SAME path,
-        # alternating, until `passes` is reached. The head is already at the far end
-        # after each pass, so we never do a laser-on move back to the start (which
-        # would slice a chord across the workpiece — worst on the open spiral).
-        for p in range(passes):
-            if passes > 1:
-                direction = "forward" if p % 2 == 0 else "reverse"
-                L.append(f"; pass {p + 1} of {passes} ({direction})")
-            seq = pts[1:] if p % 2 == 0 else pts[-2::-1]
-            for x, y in seq:
-                L.append(f"G1 X{x:.3f} Y{y:.3f}")
+        if closed:
+            # Closed loop: trace it `passes` times in ONE direction — no ping-pong.
+            # A loop ends where the next pass begins (its own start), so there's no
+            # laser-on return chord to avoid; the head just keeps circling. After
+            # the final pass returns to the start, follow through past it for
+            # warmup_mm so the start region (cut cold on lap 1) is re-cut at full
+            # power and the beam turns off in already-severed material — no snag.
+            for p in range(passes):
+                if passes > 1:
+                    L.append(f"; pass {p + 1} of {passes}")
+                for x, y in pts[1:]:
+                    L.append(f"G1 X{x:.3f} Y{y:.3f}")
+            if warmup_mm > 0:
+                lead = follow_through(pts, warmup_mm)
+                if lead:
+                    L.append(
+                        f"; follow-through {warmup_mm:.1f}mm past start (clean separation)"
+                    )
+                    for x, y in lead:
+                        L.append(f"G1 X{x:.3f} Y{y:.3f}")
+        else:
+            # Open path: can't loop back through its own start, so (1) warm up with
+            # an out-and-back wiggle over the start, then (2) ping-pong the passes —
+            # cut forward, reverse back over the SAME path, alternating. The head is
+            # already at the far end after each pass, so we never do a laser-on move
+            # back to the start (which would slice a chord across the workpiece).
+            for wx, wy in warmup_wiggle(pts, warmup_mm):
+                L.append(f"G1 X{wx:.3f} Y{wy:.3f}")
+            for p in range(passes):
+                if passes > 1:
+                    direction = "forward" if p % 2 == 0 else "reverse"
+                    L.append(f"; pass {p + 1} of {passes} ({direction})")
+                seq = pts[1:] if p % 2 == 0 else pts[-2::-1]
+                for x, y in seq:
+                    L.append(f"G1 X{x:.3f} Y{y:.3f}")
         L.append("M5")
         L.append("")
     L += ["G0 X0 Y0", ""]
@@ -493,7 +454,7 @@ def main() -> int:
     passes = args.passes
     mat_id = args.material or "custom"
     if args.material:
-        mat = load_material(args.material, args.profile)["laser"]
+        mat = load_material(args.material, args.profile)
         feed = feed if feed is not None else mat["feed_mm_per_min"]
         power = power if power is not None else mat["power_percent"]
         passes = passes if passes is not None else mat["passes"]
@@ -531,15 +492,14 @@ def main() -> int:
         # without repeating the first point -> otherwise the last side is skipped)
         if closed and len(mpts) >= 3 and mpts[0] != mpts[-1]:
             mpts = mpts + [mpts[0]]
-        area = abs(_signed_area(mpts)) if closed and len(mpts) >= 3 else 0.0
+        area = abs(signed_area(mpts)) if closed and len(mpts) >= 3 else 0.0
         loops.append((area, closed, mpts, idx))
     # interior/small loops first, outer boundary (largest area) last; open paths first
     loops.sort(key=lambda t: (t[0], t[3]))
     named = [
         (
-            f"{'loop' if c else 'open'} {i + 1} (area {a:.0f}mm^2)"
-            if c
-            else f"open path {i + 1}",
+            f"loop {i + 1} (area {a:.0f}mm^2)" if c else f"open path {i + 1}",
+            c,
             p,
         )
         for i, (a, c, p, _) in enumerate(loops)
@@ -548,10 +508,7 @@ def main() -> int:
     gcode = emit(named, feed, power, passes, args.warmup_ms, args.min_seg, mat_id)
     out = args.out or args.svg.with_suffix(".gcode")
     out.write_text(gcode)
-    total = sum(
-        sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(p, p[1:]))
-        for _, p in named
-    )
+    total = sum(path_length(p) for _, _, p in named)
     print(f"-> {out}")
     print(
         f"   {len(named)} paths, {len(gcode.splitlines())} lines, "

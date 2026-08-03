@@ -555,7 +555,7 @@ All commands work identically on Windows 11 and macOS — `cnc.py` uses `pathlib
 - Worked example: `examples/hole_in_sheet/`.
 
 **Deferred (designed-for, not built):**
-- Laser branch. Pipeline shape in §3 anticipates it; will add a laser post-processor target and a `head: laser` flag in per-job config so the validator can swap rules (require `$32=1`, require M4 dynamic-power mode, no plunge-rate check, etc).
+- Laser branch. Pipeline shape in §3 anticipates it; will add a laser post-processor target and a `head: laser` flag in per-job config so the validator can swap rules (require `$32=1`, prefer M3 static power since a weak diode under-fires on M4 dynamic, no plunge-rate check, etc).
 - FDM branch. Trivially additive to the diagram (STL → slicer → GCode), kept out of code scope to avoid distraction.
 - Templated CAM setup (replacing step 3 of §6 with a script that generates a `.FCStd` from a YAML job spec) — possible via FreeCAD's Python API, but not worth building until you've done a few jobs by hand and know which knobs you actually reuse.
 - Real-world tuning: filling in the `# TODO` values in the machine profile from your actual machine; building out the tools and materials catalogs as you accumulate experience.

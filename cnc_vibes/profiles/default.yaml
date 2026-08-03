@@ -18,6 +18,11 @@ controller:
   # GRBL setting index that toggles laser mode ($32). 1 = laser, 0 = spindle.
   # The validator uses this to enforce per-job head-mode correctness.
   laser_mode_setting: 32
+  # GRBL $30 = the S value that maps to 100% PWM (full power). Set your firmware
+  # $30 to this and match your CAM's S ceiling to it (don't write $30= into the
+  # job itself — it's a persistent EEPROM setting). The validator rejects any S
+  # above it. 1000 is the usual GRBL laser setting.
+  s_max: 1000
 
 envelope_mm:
   x: 400

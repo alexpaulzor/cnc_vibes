@@ -20,11 +20,11 @@ from shapely.geometry import LineString, Polygon
 
 PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
+sys.path.insert(0, str(PKG_DIR.parent / "quickcut"))
 
 from emitter import (  # noqa: E402
     chain_contiguous_paths,
     classify_edge,
-    decimate_min_segment,
     emit_cut_gcode_full,
     emit_cut_gcode_simple,
     extract_unique_edges,
@@ -32,6 +32,7 @@ from emitter import (  # noqa: E402
     img_to_machine_mm,
     order_inside_out,
 )
+from motion import decimate  # noqa: E402
 from geometry import (  # noqa: E402
     full_puzzle_config,
     generate_pieces,
@@ -171,7 +172,7 @@ def test_full_cut_static_mode_uses_m3_no_dwell():
 
 def test_decimate_drops_short_segments_keeps_endpoints():
     pts = [(0.0, 0.0), (0.01, 0.0), (0.02, 0.0), (1.0, 0.0)]
-    out = decimate_min_segment(pts, 0.05)
+    out = decimate(pts, 0.05)
     # the two 0.01 hops collapse; endpoints preserved
     assert out[0] == (0.0, 0.0)
     assert out[-1] == (1.0, 0.0)
@@ -182,13 +183,13 @@ def test_decimate_drops_short_segments_keeps_endpoints():
 
 def test_decimate_noop_when_zero():
     pts = [(0.0, 0.0), (0.01, 0.0), (1.0, 0.0)]
-    assert decimate_min_segment(pts, 0.0) == pts
+    assert decimate(pts, 0.0) == pts
 
 
 def test_decimate_preserves_closed_ring_endpoint():
     # closed ring with a tiny final hop back to start
     pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.001, 0.0), (0.0, 0.0)]
-    out = decimate_min_segment(pts, 0.05)
+    out = decimate(pts, 0.05)
     assert out[0] == out[-1] == (0.0, 0.0)
 
 

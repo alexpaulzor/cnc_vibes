@@ -24,8 +24,11 @@ Laser rules:
   * bounds         — same as spindle
   * max_feed       — same as spindle (XY cap; laser jobs have no Z motion)
   * laser_mode     — $32=1 must appear somewhere in the file
-  * laser_m4_required — M3 (static) is rejected; laser jobs use M4 (dynamic)
-  * laser_power_range — every S value is in [0, 1000] (GRBL convention)
+  * laser_dynamic_power — M4 (dynamic power) is flagged: a weak diode under-fires
+                     on M4 (power scales with feed), so laser jobs default to M3
+                     static. Declare ;LASER_MODE: dynamic to opt into M4.
+  * laser_power_range — every S value is in [0, $30], read from
+                     controller.s_max in the profile (default 1000)
 
 A GCode file can declare the tool it uses by including a comment like
     ;TOOL: flat_3.175mm_2flute
@@ -98,14 +101,14 @@ def detect_head(gcode_text: str, scan_lines: int = 20) -> str:
 
 
 def detect_laser_mode(gcode_text: str, scan_lines: int = 20) -> str:
-    """Return 'static' if ;LASER_MODE: static is declared near the top
-    of the file, else 'dynamic'. Static mode opts the file into M3
-    emission (the dwell-burn-through risk is acknowledged)."""
+    """Return 'dynamic' if ;LASER_MODE: dynamic is declared near the top of the
+    file, else 'static'. A weak diode wants static (M3) constant power by
+    default; declaring dynamic opts the job into M4 (power scales with feed)."""
     for line in gcode_text.splitlines()[:scan_lines]:
         m = re.search(r";\s*LASER_MODE:\s*(\w+)", line)
-        if m and m.group(1).lower() == "static":
-            return "static"
-    return "dynamic"
+        if m and m.group(1).lower() == "dynamic":
+            return "dynamic"
+    return "static"
 
 
 def _load_yaml(path: Path):
@@ -119,18 +122,20 @@ def _tool_by_id(tools: list[dict], tool_id: str) -> dict | None:
 
 def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violation]:
     head = detect_head(gcode_text)
-    laser_mode = detect_laser_mode(gcode_text) if head == "laser" else "dynamic"
+    laser_mode = detect_laser_mode(gcode_text) if head == "laser" else "static"
     envelope = profile["envelope_mm"]
     max_feed_xy = profile["max_feed_mm_per_min"]["xy"]
     max_feed_z = profile["max_feed_mm_per_min"]["z"]
     safe_z = profile.get("default_safe_z_mm", 5.0)
+    # GRBL $30: the S value that maps to 100% PWM. S above it is out of range.
+    laser_s_max = profile.get("controller", {}).get("s_max", 1000)
 
     state = State()
     violations: list[Violation] = []
 
     # Laser-mode file-level precondition: $32=1 (GRBL laser-mode setting)
-    # must appear somewhere in the GCode so the controller switches into
-    # dynamic-power mode before any cuts.
+    # must appear somewhere in the GCode so the controller is in laser mode
+    # before any cuts. ($32 governs S/PWM behavior; it is not M3-vs-M4.)
     if head == "laser" and not re.search(
         r"^\s*\$32\s*=\s*1\b", gcode_text, re.MULTILINE
     ):
@@ -213,21 +218,22 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
         # ---- Laser-specific per-line checks (run only for laser jobs) ----
         if head == "laser":
             for letter, value in words:
-                if letter == "M" and value == 3 and laser_mode != "static":
+                if letter == "M" and value == 4 and laser_mode != "dynamic":
                     violations.append(
                         Violation(
                             line_no,
-                            "laser_m4_required",
-                            "M3 (static power) used; laser jobs must use M4 "
-                            "(dynamic) unless ;LASER_MODE: static is declared",
+                            "laser_dynamic_power",
+                            "M4 (dynamic power) used; a weak diode under-fires on "
+                            "M4, so laser jobs use M3 static unless "
+                            ";LASER_MODE: dynamic is declared",
                         )
                     )
-                elif letter == "S" and not (0 <= value <= 1000):
+                elif letter == "S" and not (0 <= value <= laser_s_max):
                     violations.append(
                         Violation(
                             line_no,
                             "laser_power_range",
-                            f"S={value} outside GRBL range 0..1000",
+                            f"S={value} outside GRBL range 0..{laser_s_max} ($30)",
                         )
                     )
 

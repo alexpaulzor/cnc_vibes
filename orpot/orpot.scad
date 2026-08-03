@@ -26,7 +26,7 @@ fit        = 0.15;  // slip-fit clearance on tabs/slots
 hub_dia    = 3*IN;    // solid center hub diameter (76.2)
 ring_id    = 6*IN;    // rim ring INNER diameter (152.4) = opening
 ring_w     = 0.75*IN; // rim ring width (19.05) — 3/4" so a 1/2" tab has margin
-ramp_w     = 0.5*IN;  // spiral arm width (12.7)
+ramp_w     = 7; //10; // 0.5*IN;  // spiral arm width (12.7)
 n_spirals  = 1;       // 1 = single spiral (gentler bend: same width, 2x turns, half
                       // the stretch per length); 2 = double helix
 spiral_offset = 40;   // rotate the spiral cut(s) well off the rib slots so the
@@ -44,11 +44,11 @@ foot_drop  = thickness;  // hub disc floats one thickness off the table; each ri
                          // down-tab pokes through the disc hole and stands proud one
                          // thickness below it (tab tip = centre foot, rib outer corner
                          // = outer foot).
-rib_w      = 0.5*IN;  // rib strut/body thickness reference
-tab_w      = 0.5*IN;  // tab length along its slot (12.7), hub + ring
+rib_w      = 10; //0.5*IN;  // rib strut/body thickness reference
+tab_w      = 10; //0.5*IN;  // tab length along its slot (12.7), hub + ring
 tab_thru   = thickness;      // (unused legacy)
 top_tab_up = 2*thickness;    // ring tab: through the ring (thickness) + proud by one thickness
-shoulder   = 3;              // min material each side of a slot / step width
+shoulder   = 10;              // min material each side of a slot / step width
 base_engage = 20;    // rib<->hub cross-lap length (hub slot reaches this far in
                      // from the first spiral; rib base slot matches)
 outer_fillet = 1.5*IN; // round the rib's outer-bottom corner
@@ -195,10 +195,32 @@ module rib2d(a) {
                     [ [r_in, 0], [r_in, base_h] ], inner,
                     [ [r_rim - sw, z_rim] ], round_outer(z_rim)));
                 translate([ring_c - tab_w/2, z_rim]) square([tab_w, top_tab_up]);   // ring top tab
+                for (c = cr) {
+                    if (c[1] - vh < shoulder + foot_drop + thickness) {
+                        // step over the first spiral instead of under.
+                        echo(inner[0], inner[2], r_in, base_h);
+                        // # translate([r_in, 0, 0])
+                        //     square([inner[0][0] - r_in, c[1]]);
+                        polygon([
+                            [r_in, base_h],
+                            inner[2],
+                            inner[1],
+                            [inner[1][0], base_h]
+                        ]);
+                    }
+                }
             }
             // spiral slots (open on the inner edge; spiral threads through)
-            for (c = cr)
+            for (c = cr) {
+                // echo(c=c, shoulder=shoulder, foot_drop=foot_drop);
                 translate([c[0] - sw, c[1] - vh]) square([ramp_w + fit, 2*vh]);
+                if (c[1] - vh < shoulder + foot_drop + thickness) {
+                    // echo("c[1]-vh", c[1] - vh,
+                    //     "shoulder + foot_drop + thickness", shoulder + foot_drop + thickness);
+                    translate([c[0] - sw, 0]) // c[1] - vh])
+                        square([ramp_w + fit, c[1]]);
+                }
+            }
             // base cutout: the disc floats at z = foot_drop..foot_drop+thickness, so
             // clear the rib for r < r_hub up to the disc top; the rib rests on the disc
             // there and only the down tab drops through. (r > r_hub goes to the table.)
@@ -214,6 +236,10 @@ module rib2d(a) {
         translate([r_tab - tab_w/2, 0]) square([tab_w, foot_drop + thickness]);
     }
 }
+
+// ! rib2d(35);
+// ! rib2d(155);
+// ! rib2d(275);
 
 // Outer profile from the rim corner down to the foot, with an outer_fillet-radius
 // rounded outer-bottom corner (point list for the rib polygon).

@@ -357,10 +357,14 @@ def _emit_laser(args: argparse.Namespace) -> str:
     op = args.op
     if op in _LASER_REFUSALS:
         raise SystemExit(f"refusing: {_LASER_REFUSALS[op]}")
-    mode = getattr(args, "laser_mode", None) or "dynamic"
+    mode = getattr(args, "laser_mode", None) or "static"
     simplify = getattr(args, "simplify_mm", None)
     if simplify is None:
         simplify = 0.05
+    s_full_power = getattr(args, "s_full_power", None) or 1000
+    warmup_ms = getattr(args, "warmup_ms", None)
+    if warmup_ms is None:
+        warmup_ms = 1000.0
     if op == "slot":
         # Build the stadium polygon ourselves and laser_profile it.
         from shapely.geometry import LineString
@@ -375,6 +379,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
             material,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
+            s_full_power=s_full_power,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -385,6 +391,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
             material,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
+            s_full_power=s_full_power,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -398,6 +406,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
             font_path=args.font,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
+            s_full_power=s_full_power,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -411,6 +421,8 @@ def _emit_laser(args: argparse.Namespace) -> str:
             font_path=args.font,
             mode=mode,
             simplify_tolerance_mm=simplify,
+            warmup_ms=warmup_ms,
+            s_full_power=s_full_power,
             cfg=cam.CamConfig(strict=args.strict),
         )
         return out.text
@@ -473,18 +485,33 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--laser-mode",
         choices=("dynamic", "static"),
-        default="dynamic",
-        help="laser ops only: dynamic=M4 (default, corner-safe but starves "
-        "on very short segments); static=M3 (constant power; emits "
-        ";LASER_MODE: static so the validator accepts M3)",
+        default="static",
+        help="laser ops only: static=M3 (default, diode-correct — a weak diode "
+        "needs constant power to reach cutting threshold); dynamic=M4 (opt-in "
+        "that under-fires a weak diode since power scales with feed; emits "
+        ";LASER_MODE: dynamic so the validator accepts M4)",
     )
     p.add_argument(
         "--simplify-mm",
         type=float,
         default=None,
         help="laser ops only: Douglas-Peucker tolerance for shape/glyph "
-        "simplification (default 0.05mm; 0 disables). Drop sub-pixel "
-        "vertices so M4 dynamic-power doesn't starve on micro-segments.",
+        "simplification (default 0.05mm; 0 disables). Drops sub-pixel "
+        "vertices before decimation.",
+    )
+    p.add_argument(
+        "--s-full-power",
+        type=int,
+        default=1000,
+        help="laser ops only: S value that means 100%% power; must match "
+        "GRBL $30 (default 1000)",
+    )
+    p.add_argument(
+        "--warmup-ms",
+        type=float,
+        default=1000.0,
+        help="laser ops only: cold-start warmup lead-in in ms, emitted as a "
+        "follow-through past each closed loop's start (default 1000)",
     )
 
 
@@ -747,17 +774,24 @@ def interactive(argv_out: list[str] | None = None) -> argparse.Namespace:
     args.strict = False
     args.no_validate = False
     args.out = None
-    args.laser_mode = "dynamic"
+    args.laser_mode = "static"
     args.simplify_mm = None
+    args.s_full_power = 1000
+    args.warmup_ms = 1000.0
 
     if args.head == "laser":
         args.laser_mode = _pick(
             "Laser power mode",
             [
-                ("dynamic", "dynamic — M4 (default, corner-safe)"),
                 (
                     "static",
-                    "static — M3 (constant S; use if M4 starves on short segments)",
+                    "static — M3 (recommended default; a weak diode needs "
+                    "constant power to cut)",
+                ),
+                (
+                    "dynamic",
+                    "dynamic — M4 (opt-in; under-fires a weak diode as power "
+                    "scales with feed)",
                 ),
             ],
         )

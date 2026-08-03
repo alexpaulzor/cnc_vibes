@@ -124,7 +124,7 @@ def main() -> int:
 
         disc_area = float(m.group(1))
         areas = [
-            abs(_s._signed_area(p))
+            abs(_s.signed_area(p))
             for p, c in _s.svg_subpaths(combined.read_text())[0]
             if c
         ]
