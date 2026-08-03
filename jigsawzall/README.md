@@ -101,7 +101,8 @@ jigsawzall/
 ├── font_eval.py     ← offline font scoring helper (see FONTS.md)
 ├── examples/        ← sample job.yaml files (small_n, nora_mini_100, nora_300, nora_with_photo)
 ├── profiles/        ← laser_materials.yaml (material power/feed presets)
-├── scripts/         ← job_params.py (preflight-checklist helper used by the job.yaml tests)
+├── scripts/         ← job_params.py (preflight-checklist helper used by the job.yaml tests);
+│                       name_grid.py (render a word across a grid of seeds to pick a layout)
 ├── tests/
 │   ├── test_geometry.py          ← regression locks vs the original phase scripts
 │   ├── test_emitter.py           ← validator-contract + dedup + classification
@@ -134,10 +135,26 @@ feed, warmup, etc.) are deliberately excluded. Effective values are the
 | `wave_rows` (`--wave-rows`) | 3 | Base config default is 2. | Number of background rows; grid is `rows × (n_letters+1)` cells, letters are the column dividers. |
 | `tab_circle_r_px` | 15 px = 3.0 mm | Was 11 px = 2.2 mm → first NORA cut snapped at thin knobs. | Tab bulb radius. Derives protrusion `tab_height = 3·R = 9 mm` and undercut lip `R = 3 mm`/side. Bigger = stronger grip but needs more room. |
 | `tab_stem_w_px` (`--tab-stem-mm`) | 30 px = 6 mm | Was 25 px = 5 mm. | Tab neck width; bulb width = `neck + 2·R = 12 mm`. Wider neck = less likely to snap at the stem. |
-| `tab_bulb_elong_px` (`--tab-bulb-elong-mm`) | 30 px | **Vestigial** — `_capsule_tab_outline` forces elong == neck; ignored. Kept only for config compat. | (no effect) |
 | `tab_height_px` | 45 px = 9 mm (derived `3·tab_circle_r_px`) | — | Tab protrusion depth into the neighbor; not set directly. |
 | `corner_radius_mm` | 5 mm | — | Rounded outer panel corners (name-plate look). |
 | `seed` (`--seed`, `NGRID_SEEDS`) | per-run | — | Chooses the RNG layout variant. The scorer scans 32 variants and keeps the best; `count_err`/tiling deviation is *rewarded* (varied piece sizes), so only thin/oversized/sliver/nub count as defects. |
+
+**Tab placement.** On each seam the tab is placed as close to the *centre of the
+edge* as the rules allow (`_vg_tab_candidates` ranks by centrality first, bucketed
+into ~4mm bands; the bridge to a letter is a floor + tie-breaker). Tabs crammed
+near a seam's ends sit in thin material and snapped after cutting, so centre-of-edge
+is the strong default. If the centre collides with a neighbour or a letter bridge,
+placement falls back outward (and, failing that, shrinks the tab 1.0 → 0.85 → 0.7).
+
+To survey seeds for a word before cutting:
+
+```bash
+# 9 seeds (1..9) in a 3x3 grid -> figs/nora_seed_grid.png
+PYTHONPATH=. python3 scripts/name_grid.py NORA
+# pick the seeds (grid rows derive from the count)
+NGRID_SEEDS=11,12,13,14,15,16,17,18,19 PYTHONPATH=. python3 scripts/name_grid.py NORA
+```
+
 
 ## Algorithm summary
 

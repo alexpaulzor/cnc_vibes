@@ -74,14 +74,13 @@ class PuzzleConfig:
     piece_h_mm: float | None = None  # nominal cell HEIGHT; None = square (= piece_mm)
     px_per_mm: int = 5  # render scale (5 px/mm = 0.2mm per pixel)
     tab_circle_r_px: int = 22  # lollipop bulb radius in pixels
-    # Fat-tab (capsule) opt-in. When either is set the tab neck widens to
-    # tab_stem_w_px and the round bulb becomes a stadium/capsule: two circles of
-    # radius tab_circle_r_px whose centers are tab_bulb_elong_px apart, joined by
-    # a rectangle (bulb width = elong + 2*R). This keeps the bulb wider than the
-    # neck (undercut/lock) even with a thick neck, so pieces don't snap at the
-    # stem. Both None/0 (default) => the original thin lollipop, byte-identical.
+    # Fat-tab (capsule) opt-in. When tab_stem_w_px is set the tab neck widens to
+    # it and the round bulb becomes a stadium/capsule: two circles of radius
+    # tab_circle_r_px sitting exactly on the neck walls (bulb width = neck + 2*R),
+    # joined by the neck. This keeps the bulb wider than the neck (undercut/lock)
+    # even with a thick neck, so pieces don't snap at the stem. None (default) =>
+    # the original thin lollipop, byte-identical.
     tab_stem_w_px: float | None = None  # neck width px; None => R (old behavior)
-    tab_bulb_elong_px: float = 0.0  # capsule center-to-center px; 0 => plain circle
     margin_px: int = 120  # canvas inset around the panel for rendering
     legend_h_px: int = (
         0  # extra canvas height below the panel; unused (no legend is drawn)
@@ -314,12 +313,12 @@ def banner_puzzle_config() -> PuzzleConfig:
         piece_h_mm=37.5,
         tab_circle_r_px=11,
         # Fat capsule tabs by default: 5mm neck (~1.7x a 3mm stock, so pieces
-        # don't snap at the stem) rising into a ~9.4mm-wide stadium bulb (elong
-        # 25px + 2*R) that keeps ~2.2mm of undercut lock each side. Needs a
-        # real-size banner (see cut cmd panel overrides); the 150mm calibration
-        # default is too short for them and will drop tabs.
+        # don't snap at the stem) rising into a ~9.4mm-wide stadium bulb (neck +
+        # 2*R) that keeps ~2.2mm of undercut lock each side. Needs a real-size
+        # banner (see cut cmd panel overrides); the 150mm calibration default is
+        # too short for them and will drop tabs. (The wave-grid name path bumps
+        # these to 15px/30px via _apply_size_overrides for 3mm-stock durability.)
         tab_stem_w_px=25,
-        tab_bulb_elong_px=25,
         wave_amplitude_px=0,
         corner_radius_mm=5.0,
         letter_aligned_grid=True,
@@ -389,7 +388,7 @@ def tab_outline(
     H = cfg.tab_height_px  # 3 * R
     L = cfg.tab_len_px if tab_len is None else tab_len
     # Fat capsule tab (opt-in): wide neck + stadium bulb (two R-circles E apart).
-    if cfg.tab_stem_w_px is not None or cfg.tab_bulb_elong_px > 0:
+    if cfg.tab_stem_w_px is not None:
         return _capsule_tab_outline(cfg, L, R, H, direction, n)
     v_tangent_px = 2 * R - R * math.sqrt(3) / 2
     v_tangent = v_tangent_px / H
@@ -1744,7 +1743,7 @@ def _straight_edge_with_tab(
         for w in widths:
             if w < w_min - 1e-6:
                 continue
-            vcfg = replace(cfg, tab_stem_w_px=w, tab_bulb_elong_px=w)  # E == W
+            vcfg = replace(cfg, tab_stem_w_px=w)  # capsule bulb width = w + 2*R
             bulb_w = w + 2 * R  # tab length must contain the bulb
             for tl in (full, 0.7 * full):
                 if bulb_w <= tl < length:
@@ -2454,7 +2453,6 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
     allowed. A dropped seam just means its two faces stay merged."""
     ppm = cfg.px_per_mm
     st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
-    st["scale_hist"] = {}
     placed_bulbs = []
     tabbed = []
     accepted = []  # LineString of each accepted spliced seam (curve + tab)
@@ -2496,7 +2494,6 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
                     tab_stem_w_px=(
                         cfg.tab_stem_w_px * scale if cfg.tab_stem_w_px else None
                     ),
-                    tab_bulb_elong_px=cfg.tab_bulb_elong_px * scale,
                 )
             )
             for pi, ps in _vg_tab_candidates(
@@ -2514,7 +2511,6 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
                 chosen = (spliced, bulb, cand)
                 break
             if chosen is not None:
-                st["scale_hist"][scale] = st["scale_hist"].get(scale, 0) + 1
                 break
         if chosen is not None:
             tabbed.append(chosen[0])

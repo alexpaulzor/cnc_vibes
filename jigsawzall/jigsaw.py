@@ -81,8 +81,6 @@ def _apply_size_overrides(cfg, args):
     # Fat capsule tabs: mm -> px (px_per_mm is fixed per config, default 5).
     if getattr(args, "tab_stem_mm", None) is not None:
         over["tab_stem_w_px"] = args.tab_stem_mm * cfg.px_per_mm
-    if getattr(args, "tab_bulb_elong_mm", None) is not None:
-        over["tab_bulb_elong_px"] = args.tab_bulb_elong_mm * cfg.px_per_mm
     if getattr(args, "letter_clearance_mm", None) is not None:
         over["letter_clearance_mm"] = args.letter_clearance_mm
     if getattr(args, "letter_gap_extra_mm", None) is not None:
@@ -149,12 +147,9 @@ def _apply_size_overrides(cfg, args):
         # cut snapped at thin knobs, so the bulb radius went 11->15px (2.2->3.0mm,
         # protrusion 3R=9mm, undercut lip 3mm/side) and the neck 25->30px (5->6mm).
         # Bulb width = neck + 2R = 12mm. Set regardless of --size so the name
-        # layout keeps the wide interlocks it's tuned for. tab_bulb_elong is
-        # vestigial (the capsule forces elong==neck); kept only for config compat.
+        # layout keeps the wide interlocks it's tuned for.
         if getattr(args, "tab_stem_mm", None) is None:
             over["tab_stem_w_px"] = 30.0
-        if getattr(args, "tab_bulb_elong_mm", None) is None:
-            over["tab_bulb_elong_px"] = 30.0
         over["tab_circle_r_px"] = 15
     return replace(cfg, **over) if over else cfg
 
@@ -190,13 +185,6 @@ def _add_size_override_flags(sub):
         type=float,
         default=None,
         help="fat capsule tabs: neck width (mm), e.g. 5 (~1.5-2x stock thickness)",
-    )
-    sub.add_argument(
-        "--tab-bulb-elong-mm",
-        type=float,
-        default=None,
-        help="fat capsule tabs: bulb center-to-center elongation (mm); bulb width "
-        "= this + 2*bulb radius. Pair with --tab-stem-mm so the bulb still locks",
     )
     sub.add_argument(
         "--letter-clearance-mm",
