@@ -430,39 +430,48 @@ def _capsule_tab_outline(cfg, L, R, H, direction, n) -> list[tuple[float, float]
     vc = 2.0 * R  # bulb center; semicircles span v in [R, 3R] -> protrusion 3R
     nl, nr = uc - W / 2.0, uc + W / 2.0  # neck walls == circle centers
 
-    def semi(cx, a0, a1):  # sample a semicircle (skip first pt; caller is there)
-        return [
-            (
-                cx + R * math.cos(a0 + (a1 - a0) * (i / n)),
-                vc + R * math.sin(a0 + (a1 - a0) * (i / n)),
-            )
-            for i in range(1, n + 1)
-        ]
-
-    # Concave quarter-circle fillet at each neck-base corner (where the vertical
-    # neck wall meets the flat edge). A sharp 90 deg re-entrant corner is a stress
-    # riser that snaps in thin stock; rounding it flares the neck root so the tab
-    # is sturdier after cutting. rf stays within the bulb overhang (<= R) so the
-    # fillet never widens the tab's footprint beyond what the bulb already claims.
+    # Every corner of the cut path is rounded so no sharp vertex remains (each is
+    # a stress riser that snaps in thin stock):
+    #  - rf: concave quarter-circle at each neck BASE (vertical wall meets the flat
+    #    edge), flaring the neck root. Stays within the bulb overhang (<= R).
+    #  - rf2: a cove where each neck wall meets the BULB. The wall is vertical and
+    #    the circle's tangent there is horizontal, i.e. a sharp 90 deg corner; the
+    #    cove is tangent to both (wall + bulb), blending the neck smoothly into the
+    #    bulb. It only rounds the underside of the bulb near y=R, so the full
+    #    overhang (undercut lock) at y=2R is untouched.
     rf = max(1.0, min(0.5 * R, 0.5 * W, 0.4 * nl))
+    rf2 = max(1.0, min(0.4 * R, 0.4 * W))
     m = max(4, n // 3)
 
-    def fillet(cx, cy, a0, a1):  # quarter arc, radius rf, both endpoints included
+    def arc(cx, cyy, r, a0, a1, steps):  # sample an arc, both endpoints included
         return [
             (
-                cx + rf * math.cos(a0 + (a1 - a0) * (i / m)),
-                cy + rf * math.sin(a0 + (a1 - a0) * (i / m)),
+                cx + r * math.cos(a0 + (a1 - a0) * (i / steps)),
+                cyy + r * math.sin(a0 + (a1 - a0) * (i / steps)),
             )
-            for i in range(m + 1)
+            for i in range(steps + 1)
         ]
 
-    px = [(0.0, 0.0), (nl - rf, 0.0)]  # lead-in to the left fillet start
-    px += fillet(nl - rf, rf, -math.pi / 2, 0.0)  # edge -> up into left neck wall
-    px += [(nl, R)]  # up left neck to bulb bottom
-    px += semi(nl, -math.pi / 2, -3 * math.pi / 2)  # left cap: bottom -> left -> top
-    px += semi(nr, math.pi / 2, -math.pi / 2)  # top flat + right cap down to bottom
-    px += [(nr, rf)]  # down right neck to the right fillet start
-    px += fillet(nr + rf, rf, math.pi, 3 * math.pi / 2)  # right neck -> down to edge
+    # Cove geometry: fillet radius rf2 externally tangent to a bulb circle (dist
+    # between centers = R + rf2) and tangent to the vertical neck wall (center
+    # rf2 off the wall). cy is the shared fillet-center height for both sides.
+    cy = vc - math.sqrt(R * R + 2.0 * R * rf2)
+    thl = math.atan2(cy - vc, -rf2)  # left bulb-circle tangent angle (lower-left)
+    ptl = (nl + R * math.cos(thl), vc + R * math.sin(thl))
+    a1l = math.atan2(ptl[1] - cy, ptl[0] - (nl - rf2))  # left cove: end angle
+    thr = math.atan2(cy - vc, rf2)  # right bulb-circle tangent angle (lower-right)
+    ptr = (nr + R * math.cos(thr), vc + R * math.sin(thr))
+    a1r = math.atan2(ptr[1] - cy, ptr[0] - (nr + rf2))  # right cove: start angle
+
+    px = [(0.0, 0.0), (nl - rf, 0.0)]  # lead-in to the left base fillet
+    px += arc(nl - rf, rf, rf, -math.pi / 2, 0.0, m)  # base fillet: edge -> wall
+    px += [(nl, cy)]  # up the left neck wall to the cove
+    px += arc(nl - rf2, cy, rf2, 0.0, a1l, m)  # cove: wall -> bulb
+    px += arc(nl, vc, R, thl, -3 * math.pi / 2, n)  # left bulb: tangent -> top
+    px += arc(nr, vc, R, math.pi / 2, thr, n)  # top flat + right bulb -> tangent
+    px += arc(nr + rf2, cy, rf2, a1r, math.pi, m)  # cove: bulb -> wall
+    px += [(nr, rf)]  # down the right neck wall to the base fillet
+    px += arc(nr + rf, rf, rf, math.pi, 3 * math.pi / 2, m)  # base fillet: wall -> edge
     px += [(L, 0.0)]  # lead-out
     return [(x / L, (y / H) * direction) for x, y in px]
 
