@@ -66,7 +66,17 @@ class RingParams:
     tab_r_px: int = 15
     tab_stem_px: float = 30.0
     border_floor_mm: float = 7.0
-    letter_clearance_mm: float = 4.0  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
+    letter_clearance_mm: float = 4.0
+    # Solid outer frame: a continuous annulus this wide (mm) around the puzzle,
+    # never cut radially. Rim seams stop on its inner circle (T-junctions) and the
+    # circle itself is split into a few tabbed arcs so the pieces lock into it.
+    # 0 = no frame (rim pieces run to the panel edge).
+    frame_mm: float = 0.0
+    frame_arcs: int = 4
+    # Keep letter caps/bridges as plain (untabbed) cuts when no tab fits,
+    # instead of dropping them and merging their pieces. Needed with a frame:
+    # letter-top -> frame caps are too short for any tab.
+    plain_caps: bool = False  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
 
 
 # --------------------------------------------------------------------------
@@ -170,7 +180,7 @@ def fit_ring(word, rp: RingParams, ppm):
     converging side) and leaves a hub ring + hub disc. Returns a layout dict."""
     chars = [c for c in word.upper() if not c.isspace()]
     Rp = rp.diameter_mm / 2 * ppm
-    Ro = Rp - rp.rim_mm * ppm
+    Ro = Rp - (rp.frame_mm + rp.rim_mm) * ppm
     h_mm = rp.cap_h_max_mm
     ref = G.find_font(1000, rp.font)
     cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
@@ -320,6 +330,10 @@ def build_ring(word, seed, rp: RingParams, cfg):
     # the square fences off the 4 deep corners; radial rim seams stop on it (T)
     # where it's nearer than the square edge. Disc: Rc = inf (never hit).
     Rc = Rp + rp.corner_ring_mm * ppm if rp.shape == "square" else float("inf")
+    if rp.frame_mm > 0:
+        # The frame's inner circle plays the corner arc's role everywhere: every
+        # radial rim seam lands on it (T) instead of on the panel edge.
+        Rc = Rp - rp.frame_mm * ppm
 
     def rim_target(phi):
         b = boundary_hit(panel, C, phi, far)
@@ -361,7 +375,7 @@ def build_ring(word, seed, rp: RingParams, cfg):
                 phi = ang_of(a, C) + math.radians(rng.uniform(-4, 4))
                 b, nb, eb = rim_target(phi)
                 pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
-                seams.append(dict(pts=curved(pts), kind="topcap", ends=("L", eb)))
+                seams.append(dict(pts=curved(pts), kind="topcap", plain_ok=rp.plain_caps, ends=("L", eb)))
                 top_caps.setdefault(i, []).append(ang_of(b, C))
             for p in bp:
                 a = xf_pt(p, th, Rin, C)
@@ -370,14 +384,14 @@ def build_ring(word, seed, rp: RingParams, cfg):
                 b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
                 nb = out_vec(phi)
                 pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
-                seams.append(dict(pts=curved(pts), kind="botcap", ends=("L", "T")))
+                seams.append(dict(pts=curved(pts), kind="botcap", plain_ok=rp.plain_caps, ends=("L", "T")))
                 hub_ends.append(phi % (2 * math.pi))
             for a, b, _side in bridges:
                 aw, bw = xf_pt(a, th, Rin, C), xf_pt(b, th, Rin, C)
                 na = xf_vec((1.0, 0.0) if b[0] >= a[0] else (-1.0, 0.0), th)
                 nb = (-na[0], -na[1])
                 pts = G._vg_curve(aw, na, bw, nb, obstacles({i: "ab"}), ppm) or [aw, bw]
-                seams.append(dict(pts=curved(pts), kind="bridge", ends=("L", "L")))
+                seams.append(dict(pts=curved(pts), kind="bridge", plain_ok=rp.plain_caps, ends=("L", "L")))
         # --- ring seams between neighbouring slots ---------------------------
         levels = [0.5] if rp.rows == 2 else list(rp.levels3)  # frac of cap h
         H = []
@@ -520,8 +534,22 @@ def build_ring(word, seed, rp: RingParams, cfg):
                 split.append(phi % (2 * math.pi))
         else:
             split = [(a0 + 2 * math.pi * s_ / 3) % (2 * math.pi) for s_ in range(3)]
+        # --- solid frame: its inner circle, split into a few host arcs ---------
+        if rp.frame_mm > 0:
+            f0 = rng.uniform(0, 2 * math.pi)
+            fa = [(f0 + 2 * math.pi * q / rp.frame_arcs) % (2 * math.pi) for q in range(rp.frame_arcs)]
+            fa.sort()
+            for q in range(len(fa)):
+                seams.insert(
+                    0,
+                    dict(
+                        pts=arc_pts(C, Rc, fa[q], fa[(q + 1) % len(fa)], 2 * ppm),
+                        kind="framearc",
+                        ends=("J", "J"),
+                    ),
+                )
         # --- square corners: arc on Rc across each corner + a diagonal split ---
-        if rp.shape == "square":
+        if rp.shape == "square" and rp.frame_mm <= 0:
             half = D / 2
             span = math.acos(
                 min(1.0, half / Rc)
@@ -677,7 +705,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C):
             # keep the seam untabbed only if it's needed for structure (hub
             # arcs, spokes); otherwise drop it like wave-grid does.
             cand = LineString(rs)
-            if (ea, eb) == ("J", "J") and not conflict(cand):
+            if ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand):
                 tabbed.append(rs)
                 accepted.append(cand)
                 s["status"] = "plain"
