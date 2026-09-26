@@ -59,6 +59,7 @@ class RingParams:
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
     letter_round_mm: float = 0.0  # fillet glyph corners (inside + out), like --letter-round-mm
+    outline_smooth_px: float = 1.2  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
 
 
 # --------------------------------------------------------------------------
@@ -171,7 +172,12 @@ def fit_ring(word, rp: RingParams, ppm):
         font = G.find_font(max(10, int(round(cap / cap_ratio))), rp.font)
         cap = font.getbbox("H")[3] - font.getbbox("H")[1]
         Rin = Ro - cap
-        locs = [glyph_local(c, font) for c in chars]
+        # Pixel-traced outlines are 1px staircases. Upright (banner) they're
+        # collinear runs the emitter merges, but ROTATED onto the ring every
+        # stair becomes a 0.1-0.2mm zig-zag move: thousands of micro-moves and
+        # near-reversals that stall GRBL and flicker the laser. Simplify in the
+        # local (unrotated) frame first so rotated edges are clean lines.
+        locs = [glyph_local(c, font).simplify(rp.outline_smooth_px) for c in chars]
         if rp.letter_round_mm > 0:
             r = rp.letter_round_mm * ppm
             locs = [
@@ -764,6 +770,12 @@ def generate(word, seed, rp):
         {"parent": None, "polygon": g, "kind": "letter"} for g in lp
     ]
     pieces = G.absorb_letter_slivers(pieces, letter_union, cfg)
+    # Snap every outline to a shared 1px (0.2mm, ~kerf) grid. The float
+    # rotations + carving leave near-duplicate vertices where pockets meet seams;
+    # after dedup those become 0.00-0.04mm stub edges, i.e. isolated micro cut
+    # paths. Shared boundaries snap identically, so pieces still tile exactly.
+    for p in pieces:
+        p["polygon"] = shapely.set_precision(p["polygon"], 1.0)
     for i, p in enumerate(pieces, 1):
         p["serial"] = i
     return pieces, cfg, L, st, panel, C
@@ -805,6 +817,14 @@ def main():
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
+    ap.add_argument(
+        "--max-backtrack-ms", type=float, default=5000.0,
+        help="re-trace already-cut line up to this many ms to avoid a restart+warmup",
+    )
+    ap.add_argument(
+        "--min-segment-mm", type=float, default=0.3,
+        help="drop G1 chords shorter than this (mm) so GRBL never stalls on micro-moves",
+    )
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     rp = RingParams(
@@ -837,6 +857,8 @@ def main():
         gcode = J._emit_cut_for(
             pieces, material, cfg, word, "ring", mode="static",
             feed_override=a.feed, power_percent=100.0,
+            min_segment_mm=a.min_segment_mm,
+            max_backtrack_ms=a.max_backtrack_ms,
         )
         Path(a.gcode).write_text(gcode)
         png, _svg = J.render_gcode_previews(

@@ -778,6 +778,16 @@ def emit_cut_gcode_full(
         if len(coords_mm) < 2:
             continue
         warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
+        path_len = sum(
+            math.hypot(b[0] - a[0], b[1] - a[1])
+            for a, b in zip(coords_mm, coords_mm[1:])
+        )
+        if path_len < lead_in_mm / 2:
+            # A path shorter than half the warmup would get warmup_wiggle's
+            # repeated full out-and-back trips: a stub under 1mm shuttles back
+            # and forth ~10x in place, which stalls/flickers the beam. One
+            # out-and-back is plenty for a stub.
+            warm = list(coords_mm[1:]) + list(reversed(coords_mm))[1:]
         x0, y0 = coords_mm[0]
         lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
