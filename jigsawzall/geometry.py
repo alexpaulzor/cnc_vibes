@@ -182,6 +182,13 @@ class PuzzleConfig:
     # 90 deg with no sharp point / cusp. Effectively a minimum launch curve radius.
     min_launch_radius_mm: float = 5.0
 
+    # Letter softening (spaced-layout names only). letter_bold_mm grows every
+    # stroke outward by this much (a heavier face without changing the font);
+    # letter_round_mm fillets the glyph corners, inside and out, to this radius
+    # so no sharp tips snap or char. 0/0 (default) = the traced glyph, unchanged.
+    letter_bold_mm: float = 0.0
+    letter_round_mm: float = 0.0
+
     # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
     # matches the original grid-puzzle behavior and keeps all existing
     # regression tests stable. >0 enables a single-half-sine perpendicular
@@ -1561,6 +1568,23 @@ def fit_config(word: str, cfg: PuzzleConfig) -> PuzzleConfig:
     return cfg
 
 
+def soften_letters(union, cfg: PuzzleConfig):
+    """Embolden and round the letter outlines (letter_bold_mm / letter_round_mm).
+
+    Closing (grow by bold+round, shrink by round) thickens strokes by `bold` and
+    fillets the concave corners (stroke joins, counters); opening (shrink then
+    grow by round) then fillets the convex tips. Applied before any seam or tab
+    is placed, so every clearance rule sees the final letter shape."""
+    b = cfg.letter_bold_mm * cfg.px_per_mm
+    r = cfg.letter_round_mm * cfg.px_per_mm
+    if union is None or (b <= 0 and r <= 0):
+        return union
+    u = union.buffer(b + r, join_style=1).buffer(-r, join_style=1)
+    if r > 0:
+        u = u.buffer(-r, join_style=1).buffer(r, join_style=1)
+    return u.simplify(0.25)
+
+
 def letter_layout_spaced(word: str, cfg: PuzzleConfig):
     """Lay out `word` for the letter-aligned grid with a guaranteed tab-width
     gap between every adjacent letter, using CONSISTENT tracking relative to
@@ -1609,7 +1633,7 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
         seam_nx.append(nx)
         through_ok.append(ok)
         hcut_ny.append(glyph_hcut_y(ink))
-    union = _trace_mask_polygons(mask)
+    union = soften_letters(_trace_mask_polygons(mask), cfg)
 
     # --- Vertical seam selection (general; works for arbitrary text) ---
     # DEFAULT: one seam per letter, through a SOLID part of the glyph (its center

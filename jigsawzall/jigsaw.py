@@ -85,6 +85,10 @@ def _apply_size_overrides(cfg, args):
         over["letter_clearance_mm"] = args.letter_clearance_mm
     if getattr(args, "letter_gap_extra_mm", None) is not None:
         over["letter_gap_extra_mm"] = args.letter_gap_extra_mm
+    if getattr(args, "letter_bold_mm", None) is not None:
+        over["letter_bold_mm"] = args.letter_bold_mm
+    if getattr(args, "letter_round_mm", None) is not None:
+        over["letter_round_mm"] = args.letter_round_mm
     if getattr(args, "wave_rows", None) is not None:
         over["wave_rows"] = args.wave_rows
     if getattr(args, "banner_h_mm", None) is not None:
@@ -214,6 +218,22 @@ def _add_size_override_flags(sub):
         default=None,
         help="extra inter-letter tracking (mm) beyond the tab-fit minimum; opens "
         "the gaps (vertex-grid defaults to 12mm for Arial Black). 0 = Bold-era spacing",
+    )
+    sub.add_argument(
+        "--letter-bold-mm",
+        dest="letter_bold_mm",
+        type=float,
+        default=None,
+        help="thicken every letter stroke outward by this many mm (bolder look, "
+        "sturdier letters); 0 = off",
+    )
+    sub.add_argument(
+        "--letter-round-mm",
+        dest="letter_round_mm",
+        type=float,
+        default=None,
+        help="round the letters' sharp corners (inside and out) to this radius "
+        "in mm; 0 = off",
     )
     sub.add_argument(
         "--font",
