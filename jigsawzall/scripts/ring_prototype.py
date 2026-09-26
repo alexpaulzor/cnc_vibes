@@ -335,10 +335,17 @@ def build_ring(word, seed, rp: RingParams, cfg):
         # radial rim seam lands on it (T) instead of on the panel edge.
         Rc = Rp - rp.frame_mm * ppm
 
+    frame_ends = []  # polar angles where rim seams land on the frame circle
+
     def rim_target(phi):
         b = boundary_hit(panel, C, phi, far)
         if math.hypot(b[0] - C[0], b[1] - C[1]) > Rc:
             b = (C[0] + Rc * math.sin(phi), C[1] - Rc * math.cos(phi))
+            if rp.frame_mm > 0:
+                # Frame: the circle is split into arcs AT every landing, so each
+                # piece touching the frame owns one arc (and gets its own tab).
+                frame_ends.append(phi % (2 * math.pi))
+                return b, out_vec(phi + math.pi), "J"
             return b, out_vec(phi + math.pi), "T"
         return b, inward_normal(panel, b, C), "B"
 
@@ -355,6 +362,7 @@ def build_ring(word, seed, rp: RingParams, cfg):
     best = None
     for variant in range(rp.variants):
         rng = random.Random(seed * 131 + variant * 9973)
+        frame_ends.clear()
         seams = []  # dicts: pts, ends=(type_a, type_b)
         hub_ends = []  # polar angles where seams land on the hub circle
         # --- per-slot caps -------------------------------------------------
@@ -536,9 +544,15 @@ def build_ring(word, seed, rp: RingParams, cfg):
             split = [(a0 + 2 * math.pi * s_ / 3) % (2 * math.pi) for s_ in range(3)]
         # --- solid frame: its inner circle, split into a few host arcs ---------
         if rp.frame_mm > 0:
-            f0 = rng.uniform(0, 2 * math.pi)
-            fa = [(f0 + 2 * math.pi * q / rp.frame_arcs) % (2 * math.pi) for q in range(rp.frame_arcs)]
-            fa.sort()
+            if frame_ends:
+                fa = sorted(frame_ends)
+                fa = [a for k, a in enumerate(fa) if k == 0 or a - fa[k - 1] > 1e-6]
+            else:
+                f0 = rng.uniform(0, 2 * math.pi)
+                fa = sorted(
+                    (f0 + 2 * math.pi * q / rp.frame_arcs) % (2 * math.pi)
+                    for q in range(rp.frame_arcs)
+                )
             for q in range(len(fa)):
                 seams.insert(
                     0,

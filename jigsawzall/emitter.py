@@ -630,6 +630,33 @@ def _fuse_touching_chains(chains, tol=0.1):
     return out
 
 
+def _collapse_shuttles(pts, max_leg_mm: float = 1.0, eps: float = 1e-3):
+    """Drop repeated back-and-forth trips over the same short edge.
+
+    Continuous routing can re-trace one sub-mm edge several times in a row
+    (A,B,A,B,A,...) when many trails meet at a tiny junction; the head then
+    shuttles in place and the static beam flickers/over-burns. Collapse every
+    extra A->B->A round trip, keeping one so the edge is still cut."""
+    out = list(pts)
+
+    def same(p, q):
+        return abs(p[0] - q[0]) <= eps and abs(p[1] - q[1]) <= eps
+
+    i = 0
+    while i + 4 < len(out):
+        a, b = out[i], out[i + 1]
+        if (
+            math.hypot(b[0] - a[0], b[1] - a[1]) < max_leg_mm
+            and same(out[i + 2], a)
+            and same(out[i + 3], b)
+            and same(out[i + 4], a)
+        ):
+            del out[i + 1 : i + 3]  # A,B,A,B,A -> A,B,A
+            continue
+        i += 1
+    return out
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -774,7 +801,7 @@ def emit_cut_gcode_full(
     )
 
     for idx, path_mm in enumerate(chains, start=1):
-        coords_mm = decimate(path_mm, min_segment_mm)
+        coords_mm = _collapse_shuttles(decimate(path_mm, min_segment_mm))
         if len(coords_mm) < 2:
             continue
         warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
