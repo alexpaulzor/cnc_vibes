@@ -58,6 +58,7 @@ class RingParams:
     ornament: str | None = "heart"  # None | "dot" | "heart" | "star"
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
+    letter_round_mm: float = 0.0  # fillet glyph corners (inside + out), like --letter-round-mm
 
 
 # --------------------------------------------------------------------------
@@ -171,6 +172,15 @@ def fit_ring(word, rp: RingParams, ppm):
         cap = font.getbbox("H")[3] - font.getbbox("H")[1]
         Rin = Ro - cap
         locs = [glyph_local(c, font) for c in chars]
+        if rp.letter_round_mm > 0:
+            r = rp.letter_round_mm * ppm
+            locs = [
+                g.buffer(r, join_style=1)
+                .buffer(-2 * r, join_style=1)
+                .buffer(r, join_style=1)
+                .simplify(0.25)
+                for g in locs
+            ]
         labels = list(chars)
         if rp.ornament:
             locs.append(ornament_local(rp.ornament, cap))
@@ -273,7 +283,12 @@ def build_ring(word, seed, rp: RingParams, cfg):
     D = rp.diameter_mm * ppm
     m = cfg.margin_px
     C = (m + D / 2, m + D / 2)
-    cfg = replace(cfg, panel_w_px_fit=int(D), panel_h_px_fit=int(D))
+    cfg = replace(
+        cfg,
+        panel_w_px_fit=int(D),
+        panel_h_px_fit=int(D),
+        panel_shape="disc" if rp.shape == "disc" else "rect",
+    )
     if rp.shape == "disc":
         panel = Point(C).buffer(D / 2, quad_segs=96)
     else:
@@ -784,7 +799,12 @@ def main():
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
     ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
     ap.add_argument("--font", default=None)
+    ap.add_argument("--letter-round-mm", type=float, default=0.0)
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
+    ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
+    ap.add_argument("--material", default="plywood_baltic_birch_3mm")
+    ap.add_argument("--feed", type=int, default=None)
+    ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     rp = RingParams(
@@ -808,6 +828,21 @@ def main():
     J.render_preview(pieces, cfg, title, out)
     if a.debug:
         render_debug_overlay(out, st["seams"])
+    if a.gcode:
+        from emitter import load_material
+
+        material = load_material(a.material)
+        if a.passes is not None:
+            material = {**material, "laser": {**material["laser"], "passes": a.passes}}
+        gcode = J._emit_cut_for(
+            pieces, material, cfg, word, "ring", mode="static",
+            feed_override=a.feed, power_percent=100.0,
+        )
+        Path(a.gcode).write_text(gcode)
+        png, _svg = J.render_gcode_previews(
+            gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{word} ring cut"
+        )
+        print(f"-> {a.gcode}  ({len(gcode.splitlines())} lines), toolpath {png}")
     print(
         f"{word}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "

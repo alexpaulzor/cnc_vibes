@@ -186,6 +186,10 @@ class PuzzleConfig:
     # stroke outward by this much (a heavier face without changing the font);
     # letter_round_mm fillets the glyph corners, inside and out, to this radius
     # so no sharp tips snap or char. 0/0 (default) = the traced glyph, unchanged.
+    # Outer panel outline: "rect" (default, rounded by corner_radius_mm) or
+    # "disc" (a circle inscribed in the fitted panel box — the ring layout). The
+    # emitter uses this to recognise the outside profile so it is cut LAST.
+    panel_shape: str = "rect"
     letter_bold_mm: float = 0.0
     letter_round_mm: float = 0.0
     # Fill any letter counter (hole) narrower than this (mm): a sliver of an A's

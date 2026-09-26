@@ -285,6 +285,10 @@ def classify_edge(
     panel_y0 = cfg.margin_px
     panel_w = cfg.puzzle_w_px
     panel_h = cfg.puzzle_h_px
+    if getattr(cfg, "panel_shape", "rect") == "disc":
+        cx, cy, r = panel_x0 + panel_w / 2, panel_y0 + panel_h / 2, panel_w / 2
+        if all(abs(math.hypot(x - cx, y - cy) - r) < eps for x, y in coords):
+            return "panel"
     on_left = all(abs(x - panel_x0) < eps for x, _ in coords)
     on_right = all(abs(x - (panel_x0 + panel_w)) < eps for x, _ in coords)
     on_top = all(abs(y - panel_y0) < eps for _, y in coords)
@@ -710,8 +714,16 @@ def emit_cut_gcode_full(
     ph = cfg.puzzle_h_px / cfg.px_per_mm
     eps = 1.0
 
+    ox, oy = cfg.origin_offset_mm
+
+    def _on_perim(x, y):
+        x, y = x + ox, y + oy  # back to panel-corner coords
+        if getattr(cfg, "panel_shape", "rect") == "disc":
+            return abs(math.hypot(x - pw / 2, y - ph / 2) - pw / 2) < eps
+        return x < eps or x > pw - eps or y < eps or y > ph - eps
+
     def _perim_frac(ch):
-        on = sum(1 for x, y in ch if x < eps or x > pw - eps or y < eps or y > ph - eps)
+        on = sum(1 for x, y in ch if _on_perim(x, y))
         return on / len(ch)
 
     border_chains = [c for c in all_chains if _perim_frac(c) > 0.15]
