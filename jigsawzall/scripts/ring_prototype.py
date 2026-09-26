@@ -766,6 +766,15 @@ def oversized_oriented(poly, cfg):
     ppm = cfg.px_per_mm
     if poly.area <= (50 * ppm) ** 2:
         return False
+    # The solid frame (frame_mm > 0) is a giant annulus by design -- correctly
+    # "oversized" by ordinary standards, and there is only ever one of it.
+    # Exempt anything more hole than material (a frame's defining shape) so
+    # it doesn't perpetually trip this check, which would also skew variant
+    # scoring away from an otherwise-clean layout during generate()'s search.
+    polys = poly.geoms if poly.geom_type == "MultiPolygon" else [poly]
+    hole_area = sum(Polygon(r).area for p in polys for r in p.interiors)
+    if hole_area > poly.area * 2:
+        return False
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mrr = poly.minimum_rotated_rectangle
