@@ -417,3 +417,90 @@ Holding tabs at the safe default and instead sweeping `rim_mm`/
 `hub_ring_min_mm` (opening more background room) found `rim_mm=24,
 hub_ring_min_mm=30` at 8 dropped tabs with zero lint defects — worse than
 the unsafe version's score, better than baseline, and actually safe to cut.
+
+## 12. TODO, from cutting the real contingency puzzle
+
+Two issues reported after physically cutting and assembling the
+NORA+BECS+ALEX contingency (frame_mm=15, 290mm disc). Not fixed yet —
+logged here with the diagnostic legwork already done, so whoever picks
+this up isn't starting cold. **Item 1 needs Alex's photo before attempting
+a fix**; guessing further without it risks the same false-start pattern
+§11.3 already documents for the lint checks.
+
+### 12.1 Outer-rim start/end doesn't fully separate; scattered backside burn spots
+Symptom: a sliver of wood stayed connected where the outermost cut should
+have met itself, causing warping/splitting on separation; several distinct
+burn spots on the back suggest uneven power/dwell somewhere in that cut's
+motion, not just a single clean under-cut.
+
+**Ruled out:** the outer edge is NOT fragmented into multiple G-code paths
+(verified on the `frame_mm=15` design -- nothing else touches the frame's
+outer ring, so it stays one connected loop end to end; the frame's INNER
+circle is deliberately split into many `framearc` segments for per-piece
+tabs (§11.2), but that's a different circle from the one the user is
+describing).
+
+**Most likely cause, not yet confirmed:** inspected the actual emitted
+G-code for that loop. It starts and ends at the *exact same coordinate*
+(e.g. `X289.920 Y149.740` both times, to 3 decimals) after one full
+uninterrupted lap, with a `warmup_wiggle` (motion.py) out-and-back
+excursion BEFORE the real cut begins, not a re-trace AFTER the loop closes.
+ALGORITHMS.md A7 describes the latter: cut the loop once (its start is
+necessarily under-cut, cold), THEN re-trace that start a second time once
+the diode is hot from finishing the loop. This code does the opposite
+(warm up first, cut once, stop exactly at closure) -- so there is zero
+physical redundancy at the one point the cut has to fully meet itself. If
+the diode isn't *quite* at full power by the time the warmup excursion
+ends (the default `ramp_ms=1000` is a conservative guess, not measured for
+this material/feed), or if a few microns of machine backlash means the
+beam doesn't perfectly retrace its own kerf on final approach, that's
+exactly this failure: a hairline connection at one specific point, everywhere
+else clean.
+
+**Proposed fix (once confirmed):** give closed loops actual overlap, not
+just closure -- after reaching back to the start point, continue a few mm
+PAST it along the same path (re-cutting that stretch a second time, now
+hot), the way `motion.py`'s `follow_through()` already describes for
+exactly this purpose. Cheap to try, likely helps regardless of which of
+the above is the precise mechanism. Needs the photo first to confirm this
+is really a single-point gap (supports the above) rather than something
+else entirely (e.g. a kerf/backlash issue visible as a dogleg in the cut
+line, which would point elsewhere).
+
+**Secondary hypothesis for the burn spots specifically:** the Eulerian/
+Chinese-Postman router (A6) already re-traces some connectors twice by
+design elsewhere in the cut (documented, expected). Separately, static
+M3 mode fires at constant power regardless of feed, so any point where
+GRBL's motion planner slows for a sharp direction change (every tab
+neck-to-bulb transition is exactly this) gets more beam dwell than a
+straight run -- worth checking whether the burn spots cluster at tab
+corners specifically, which would point at cornering dwell rather than
+the warmup/closure mechanism above.
+
+### 12.2 Every tab is identical -- any piece's tab fits any matching socket
+By design (A1/A2 in ALGORITHMS.md, load-bearing for correctness): a shared
+edge's tab is computed ONCE and reused by both neighbors, so a piece
+always fits its true partner. Nothing about that design makes a tab
+*distinctive* -- the same lollipop shape (fixed bulb radius, fixed neck
+width) repeats at every interior seam, so a piece's tab will just as
+happily nest into a stranger's matching socket. Alex has to sort loose
+pieces by wood grain to reassemble before painting.
+
+**Proposed approach:** vary tab bulb radius and/or neck width by a small
+amount, DETERMINISTICALLY per edge (e.g. seeded from a hash of the edge's
+endpoint coordinates, computed once and read by both the piece that gets
+the bulb and the piece that gets the matching socket -- never re-derived
+independently per piece, which would break A1). A few discrete size
+classes (e.g. 3-4 steps) rather than a continuum: easier to reason about
+for both cut strength and for a person sorting pieces by feel/sight, and
+keeps every step inside the proven-safe tab range from §11.4
+(`lint_tab_hardware`'s `MIN_PROVEN_TAB_STEM_PX`/`_R_PX` -- note that check
+only has a floor today, not a ceiling; a size-class scheme would need one,
+derived the same way once some upper size is actually cut and confirmed
+still tab-shaped rather than a blob).
+
+**Open question:** how much variation is enough to matter physically
+(stops a stranger's socket from accepting the bulb at all) without
+either (a) exceeding proven-safe tab dimensions at the large end, or
+(b) making the small end fragile again -- likely needs its own small
+physical test, the same way the tab-neck minimum did.
