@@ -188,6 +188,9 @@ class PuzzleConfig:
     # so no sharp tips snap or char. 0/0 (default) = the traced glyph, unchanged.
     letter_bold_mm: float = 0.0
     letter_round_mm: float = 0.0
+    # Fill any letter counter (hole) narrower than this (mm): a sliver of an A's
+    # triangle becomes a crumb of a piece that won't survive cutting. 0 = keep all.
+    letter_min_hole_mm: float = 0.0
 
     # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
     # matches the original grid-puzzle behavior and keeps all existing
@@ -1577,11 +1580,29 @@ def soften_letters(union, cfg: PuzzleConfig):
     is placed, so every clearance rule sees the final letter shape."""
     b = cfg.letter_bold_mm * cfg.px_per_mm
     r = cfg.letter_round_mm * cfg.px_per_mm
-    if union is None or (b <= 0 and r <= 0):
+    h = cfg.letter_min_hole_mm * cfg.px_per_mm
+    if union is None or (b <= 0 and r <= 0 and h <= 0):
         return union
-    u = union.buffer(b + r, join_style=1).buffer(-r, join_style=1)
+    u = union
+    if b > 0 or r > 0:
+        u = u.buffer(b + r, join_style=1).buffer(-r, join_style=1)
     if r > 0:
         u = u.buffer(-r, join_style=1).buffer(r, join_style=1)
+    if h > 0:
+        polys = list(u.geoms) if isinstance(u, MultiPolygon) else [u]
+        u = unary_union(
+            [
+                Polygon(
+                    p.exterior,
+                    [
+                        ring
+                        for ring in p.interiors
+                        if not Polygon(ring).buffer(-h / 2).is_empty
+                    ],
+                )
+                for p in polys
+            ]
+        )
     return u.simplify(0.25)
 
 

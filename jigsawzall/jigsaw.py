@@ -89,6 +89,8 @@ def _apply_size_overrides(cfg, args):
         over["letter_bold_mm"] = args.letter_bold_mm
     if getattr(args, "letter_round_mm", None) is not None:
         over["letter_round_mm"] = args.letter_round_mm
+    if getattr(args, "letter_min_hole_mm", None) is not None:
+        over["letter_min_hole_mm"] = args.letter_min_hole_mm
     if getattr(args, "wave_rows", None) is not None:
         over["wave_rows"] = args.wave_rows
     if getattr(args, "banner_h_mm", None) is not None:
@@ -234,6 +236,14 @@ def _add_size_override_flags(sub):
         default=None,
         help="round the letters' sharp corners (inside and out) to this radius "
         "in mm; 0 = off",
+    )
+    sub.add_argument(
+        "--letter-min-hole-mm",
+        dest="letter_min_hole_mm",
+        type=float,
+        default=None,
+        help="fill letter counters (holes) narrower than this many mm, so no "
+        "crumb-sized counter piece is cut (e.g. a small A's triangle); 0 = off",
     )
     sub.add_argument(
         "--font",
