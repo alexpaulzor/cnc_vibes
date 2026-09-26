@@ -27,6 +27,9 @@ never need spotting by eye again.
 
 import math
 import re
+
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -300,15 +303,27 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
     pieces into one and are the main source of "why is this piece so big")."""
     import ring_prototype as R
 
+    # Letter COUNTERS (O's centre, A's triangle hole, ...) are small, isolated
+    # drop-in pieces by design (R4/A4 in ALGORITHMS.md) -- exempt from
+    # sliver/thin-bridge/nub, which assume "small" means a badly-tiled
+    # background piece. A counter is a "cell" fragment sitting inside a
+    # letter's own silhouette (its exterior ring, holes filled back in).
+    letters_solid = unary_union(
+        [Polygon(p["polygon"].exterior) for p in pieces if p["kind"] == "letter"]
+    )
+
     findings = []
     for p in pieces:
         if p["kind"] != "cell":
             continue
         poly = p["polygon"]
         cen = poly.representative_point()
+        is_counter = not letters_solid.is_empty and letters_solid.contains(cen)
         cen = (cen.x, cen.y)
         if R.oversized_oriented(poly, cfg):
             findings.append(PieceFinding("oversized", p["serial"], cen, "exceeds the target piece size"))
+        if is_counter:
+            continue
         if R.G._vg_thin_bridge(poly, cfg):
             findings.append(PieceFinding("thin_bridge", p["serial"], cen, "material bridge under ~4mm somewhere on this piece"))
         if R.G._vg_sliver(poly, cfg):
