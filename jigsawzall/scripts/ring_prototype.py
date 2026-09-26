@@ -819,12 +819,19 @@ def generate(word, seed, rp):
         {"parent": None, "polygon": g, "kind": "letter"} for g in lp
     ]
     pieces = G.absorb_letter_slivers(pieces, letter_union, cfg)
-    # Snap every outline to a shared 1px (0.2mm, ~kerf) grid. The float
-    # rotations + carving leave near-duplicate vertices where pockets meet seams;
-    # after dedup those become 0.00-0.04mm stub edges, i.e. isolated micro cut
-    # paths. Shared boundaries snap identically, so pieces still tile exactly.
+    # Snap every outline to a fine (0.01mm) shared grid: cheap insurance against
+    # true floating-point duplicate vertices (near-zero-length stub edges) from
+    # the rotation + carving pipeline, with shared boundaries snapping
+    # identically so pieces still tile exactly. NOT a fix for visible cut
+    # quality -- keep this far finer than the kerf/laser spot size. An earlier
+    # version used a 1px (0.2mm) grid to kill 0.00-0.04mm stub edges that were
+    # causing laser restarts; once outline_smooth_px (glyph simplification) and
+    # emitter._collapse_shuttles() landed, those were the actual fix and the
+    # coarse grid was redundant -- it also visibly faceted every curved seam
+    # (each sampled point nudged up to 0.1mm off-curve). 0.01mm keeps the
+    # float-noise insurance without any visible effect.
     for p in pieces:
-        p["polygon"] = shapely.set_precision(p["polygon"], 1.0)
+        p["polygon"] = shapely.set_precision(p["polygon"], 0.01 * cfg.px_per_mm)
     for i, p in enumerate(pieces, 1):
         p["serial"] = i
     return pieces, cfg, L, st, panel, C
