@@ -354,6 +354,27 @@ def lint_tab_hardware(cfg) -> list:
     return findings
 
 
+# A merged piece can be well under the absolute oversized-area cutoff and
+# still look wrong: long and thin, reaching from one background band into
+# the next (found by Alex on a real render -- the "elongated" piece between
+# the middle band and the outer ring, aspect 2.87). oversized_oriented()'s
+# area+side thresholds didn't catch it. Flag by SHAPE (min-rotated-rect
+# long/short side ratio) as a second, independent signal.
+MAX_PIECE_ASPECT = 2.5
+
+
+def _aspect_ratio(poly) -> float:
+    import math
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        mrr = poly.minimum_rotated_rectangle
+    xs, ys = mrr.exterior.coords.xy
+    e = sorted(math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(2))
+    return e[1] / max(e[0], 1e-6)
+
+
 def lint_pieces(pieces, cfg, panel, seams=None) -> list:
     """Geometry-level defects: reuses ring_prototype's own scoring predicates
     (oversized/thin/sliver/nub) so this can never silently drift from what
@@ -393,6 +414,19 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
             findings.append(PieceFinding("sliver", p["serial"], cen, "too small or too narrow everywhere"))
         if R.G._vg_border_nub(poly, panel, cfg):
             findings.append(PieceFinding("border_nub", p["serial"], cen, "touches the outer edge for <20mm"))
+        if not is_counter:
+            asp = _aspect_ratio(poly)
+            if asp > MAX_PIECE_ASPECT:
+                findings.append(
+                    PieceFinding(
+                        "elongated",
+                        p["serial"],
+                        cen,
+                        f"{asp:.1f}x longer than wide -- reads as reaching out of "
+                        "its own ring/band into a neighbour's territory, even "
+                        "though it's under the absolute oversized-area cutoff",
+                    )
+                )
     if seams:
         for s in seams:
             if s.get("status") == "drop":
