@@ -59,7 +59,14 @@ class RingParams:
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
     letter_round_mm: float = 0.0  # fillet glyph corners (inside + out), like --letter-round-mm
-    outline_smooth_px: float = 1.2  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
+    outline_smooth_px: float = 1.2
+    # Tab / clearance sizing (defaults = the name-plate tabs). Small discs
+    # (~140mm, 4-up on a 300mm panel) need scaled-down tabs: every seam must
+    # hold tab_len + 2 * clearance, and 140mm-class seams are only 13-20mm long.
+    tab_r_px: int = 15
+    tab_stem_px: float = 30.0
+    border_floor_mm: float = 7.0
+    letter_clearance_mm: float = 4.0  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
 
 
 # --------------------------------------------------------------------------
@@ -736,12 +743,12 @@ def make_cfg(rp):
         panel_mm=rp.diameter_mm,
         panel_h_mm=rp.diameter_mm,
         piece_mm=25,
-        tab_circle_r_px=15,
-        tab_stem_w_px=30,
-        letter_clearance_mm=4.0,
+        tab_circle_r_px=rp.tab_r_px,
+        tab_stem_w_px=rp.tab_stem_px,
+        letter_clearance_mm=rp.letter_clearance_mm,
         corner_radius_mm=0.0,
-        tab_border_floor_v_mm=7.0,
-        tab_border_floor_h_mm=7.0,
+        tab_border_floor_v_mm=rp.border_floor_mm,
+        tab_border_floor_h_mm=rp.border_floor_mm,
         font_path=rp.font,
     )
 
