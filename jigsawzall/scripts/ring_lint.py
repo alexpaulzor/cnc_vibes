@@ -149,6 +149,21 @@ def lint_gcode(
         for i in range(1, min(len(pts), 60)):
             if math.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]) < 0.01:
                 warmup_end = i
+        # The real cut's own first stretch necessarily RE-TREADS the same
+        # ground the warmup already sampled (that's the whole point: the cold
+        # start gets re-cut hot) -- so points immediately after warmup_end
+        # keep echoing earlier warmup points, which looks like more
+        # reversals if not also skipped. Extend past every point that's a
+        # near-exact repeat of something already seen, stopping at the first
+        # genuinely new point.
+        if warmup_end:
+            seen = pts[: warmup_end + 1]
+            k = warmup_end + 1
+            while k < min(len(pts), warmup_end + 60) and any(
+                math.hypot(pts[k][0] - s[0], pts[k][1] - s[1]) < 0.01 for s in seen
+            ):
+                warmup_end = k
+                k += 1
 
         if C is not None:
             on_rim = sum(
@@ -295,13 +310,62 @@ class PieceFinding:
     detail: str
 
 
+# Minimum tab hardware proven to survive an actual cut. tab_stem_px=30/
+# tab_r_px=15 (6mm neck / 3mm bulb radius at 5px/mm) is the name-plate
+# default and has held up on every physical cut so far, including this
+# tool's own JONATHAN ring. tab_stem_px=22/tab_r_px=11 (4.4mm neck) is the
+# smallest size ALSO confirmed on a real small-disc cut (the 142mm 4-up
+# ring). Anything narrower than that has never been cut and must not be
+# presented as a candidate -- this is exactly the regression that slipped
+# through once already: chasing a lower dropped-tab count by shrinking the
+# tab hardware itself, producing pieces that looked fine on screen but had
+# a neck too narrow to survive being picked up.
+MIN_PROVEN_TAB_STEM_PX = 22.0
+MIN_PROVEN_TAB_R_PX = 11.0
+
+
+def lint_tab_hardware(cfg) -> list:
+    """Check the config's tab hardware against MIN_PROVEN_TAB_*. Call this on
+    every candidate BEFORE it's shown -- unlike lint_pieces, this doesn't need
+    a generated puzzle, just the cfg, so it can gate a whole tuning sweep."""
+    findings = []
+    stem = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else cfg.tab_circle_r_px
+    if stem < MIN_PROVEN_TAB_STEM_PX:
+        findings.append(
+            PieceFinding(
+                "narrow_tab_neck",
+                None,
+                (0, 0),
+                f"tab neck {stem / cfg.px_per_mm:.1f}mm < proven-safe minimum "
+                f"{MIN_PROVEN_TAB_STEM_PX / cfg.px_per_mm:.1f}mm -- will likely "
+                "snap off before or during assembly",
+            )
+        )
+    if cfg.tab_circle_r_px < MIN_PROVEN_TAB_R_PX:
+        findings.append(
+            PieceFinding(
+                "narrow_tab_bulb",
+                None,
+                (0, 0),
+                f"tab bulb radius {cfg.tab_circle_r_px / cfg.px_per_mm:.1f}mm < "
+                f"proven-safe minimum {MIN_PROVEN_TAB_R_PX / cfg.px_per_mm:.1f}mm",
+            )
+        )
+    return findings
+
+
 def lint_pieces(pieces, cfg, panel, seams=None) -> list:
     """Geometry-level defects: reuses ring_prototype's own scoring predicates
     (oversized/thin/sliver/nub) so this can never silently drift from what
     the generator itself optimizes against, plus reports every seam that
     dropped its tab (from `seams`, if the caller has them -- these merge two
-    pieces into one and are the main source of "why is this piece so big")."""
+    pieces into one and are the main source of "why is this piece so big").
+    Always also runs lint_tab_hardware(cfg) -- a low dropped-tab count is
+    worthless (actively dangerous) if it was bought by shrinking the tabs
+    themselves below what's been proven to survive a real cut."""
     import ring_prototype as R
+
+    findings = list(lint_tab_hardware(cfg))
 
     # Letter COUNTERS (O's centre, A's triangle hole, ...) are small, isolated
     # drop-in pieces by design (R4/A4 in ALGORITHMS.md) -- exempt from
@@ -312,7 +376,6 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
         [Polygon(p["polygon"].exterior) for p in pieces if p["kind"] == "letter"]
     )
 
-    findings = []
     for p in pieces:
         if p["kind"] != "cell":
             continue

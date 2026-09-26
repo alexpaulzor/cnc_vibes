@@ -327,3 +327,93 @@ defaults below are what the prototype does.
    (a spot for an engraved age/number).
 6. **Auto-switch:** pick ring automatically when the banner cap would fall
    below ~30 mm, or require `--ring`.
+
+## 11. Multi-word rings, the frame, and lessons from a real tuning session
+
+Since the above, `scripts/ring_prototype.py` grew three more features and
+`scripts/ring_lint.py` was added as a standing QA pass. All committed on
+this branch.
+
+### 11.1 Multi-word rings
+`fit_ring`/`build_ring`/`generate` accept `words` as a single string
+(unchanged, byte-identical) or a list of words; each word is followed by one
+`rp.ornament` slot, so `["NORA","BECS","ALEX"]` reads NORA♥BECS♥ALEX♥ around
+the ring. CLI: `word` arg takes `+`-separated words (`"NORA+BECS+ALEX"`).
+
+**Backlog idea from Alex, not yet designed:** make the seam either side of
+each word's ornament *interchangeable* between words of equal letter count,
+so a multi-name ring's words can be reordered without re-cutting — e.g. swap
+which name reads first. Needs the angular slot width, the ring-seam
+heights, and the ornament's own geometry to be identical across each word's
+boundary; easiest starting case is same-length words. Not started.
+
+### 11.2 Solid outer frame (`frame_mm`)
+A continuous annulus around the puzzle, never cut radially. Rim seams land
+on its inner circle as shared endpoints; the circle is split into arcs AT
+those landings (not a fixed count), so every piece touching the frame gets
+its own tab into it.
+
+**Rendering pitfall (fixed, but worth knowing):** `jigsaw.render_preview`'s
+`draw_geom` always paints a piece's holes white, unconditionally — correct
+for an ordinary letter counter, catastrophic for the frame, whose "hole" is
+the entire puzzle interior: whatever draws before the frame in piece-list
+order gets wiped white. `generate()` now sorts pieces by descending total
+hole area before assigning serials, so the frame (or any future giant-hole
+piece) always draws first.
+
+### 11.3 `scripts/ring_lint.py` — automated QA, run before anything is shown
+Two checkers: `lint_gcode()` parses emitted paths for shuttles (3+
+back-and-forth reversals in place — the real flicker pattern), short
+segments, aliasing runs, out-of-bounds coords, and rim-not-last.
+`lint_pieces()` reuses the generator's own oversized/thin/sliver/nub
+predicates plus reports every dropped-tab seam. `lint_tab_hardware(cfg)`
+checks tab neck/bulb size against `MIN_PROVEN_TAB_STEM_PX`/`_R_PX` — see
+11.4. `overlay_grid_mm()` draws a faint 1cm grid with Battleship-style
+labels (A/B/C.../1/2/3...) on piece renders so a spot can be named instead
+of marked up on an image; never call it on a G-code toolpath render, which
+is already plotted in real mm. `annotate_flaws()` draws both checkers'
+findings onto a piece render with a legend.
+
+**This tool is not infallible — every check in it was wrong at least once
+before it was right.** Three false-positive classes were found and fixed
+by cross-referencing actual G-code context against ALGORITHMS.md, not by
+guessing:
+- A lone near-180° reversal is usually the router's intentional
+  Chinese-Postman connector retrace (A6) — only a *run* of 3+ (genuine
+  oscillation) is a real defect.
+- The warmup wiggle's own tail, AND the real cut's necessary echo of it
+  (the first stretch of the real path re-treads the same ground the warmup
+  already sampled, by design — that's the whole point of the warmup), both
+  look like reversals unless explicitly excluded.
+- A piece flagged "oversized" or "sliver" may be the frame (huge by design)
+  or a letter counter (small by design, R4/A4) — both need exemption from
+  checks written for ordinary background pieces.
+When extending either checker, verify a new "defect" against raw G-code
+context or the piece geometry before trusting it, the same way — an
+unverified check that cries wolf is worse than no check.
+
+### 11.4 Tab-hardware regression (read this before ever tuning tab size)
+Chasing a lower dropped-tab count by shrinking `tab_r_px`/`tab_stem_px`
+produces pieces that render fine on screen but have a tab neck too narrow
+to survive assembly — caught only because Alex looked at a render and said
+the necks looked fragile, not by any automated check at the time.
+`lint_tab_hardware()` now exists specifically to catch this again:
+`MIN_PROVEN_TAB_STEM_PX = 22.0` / `MIN_PROVEN_TAB_R_PX = 11.0` (4.4mm/2.2mm
+at 5px/mm) are the smallest values confirmed on a real cut (the 142mm 4-up
+ring); the name-plate default (30px/15px = 6mm/3mm bulb) is proven on
+every full-size ring cut including JONATHAN. **Tune ring layouts by
+adjusting geometry (`rim_mm`, `hub_ring_min_mm`, `rows`, seed, variants) to
+open up room for tabs, never by shrinking the tabs themselves** below
+those minimums. `generate()`'s own internal variant-scoring search doesn't
+know about this constraint either — it will happily pick a smaller-tab
+config if asked to; the caller must hold tab size fixed and only vary
+geometry.
+
+Worked example (NORA+BECS+ALEX, 290mm disc, 15mm frame): baseline
+(`rim_mm=16, hub_ring_min_mm=22`, default safe tabs) scored 29 dropped
+tabs. Shrinking tabs to `tab_r_px=13, tab_stem_px=9` (1.8mm neck — well
+under the minimum) got that down to 4, but with dangerously fragile tabs.
+Holding tabs at the safe default and instead sweeping `rim_mm`/
+`hub_ring_min_mm` (opening more background room) found `rim_mm=24,
+hub_ring_min_mm=30` at 8 dropped tabs with zero lint defects — worse than
+the unsafe version's score, better than baseline, and actually safe to cut.
