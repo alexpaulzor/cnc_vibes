@@ -174,11 +174,19 @@ def ang_extent(poly, r_base):
     return -min(a), max(a)
 
 
-def fit_ring(word, rp: RingParams, ppm):
+def fit_ring(words, rp: RingParams, ppm):
     """Pick the largest cap height (<= cap_h_max) whose ring layout keeps
     every adjacent letter pair >= min_gap apart (the tight side is the INNER,
-    converging side) and leaves a hub ring + hub disc. Returns a layout dict."""
-    chars = [c for c in word.upper() if not c.isspace()]
+    converging side) and leaves a hub ring + hub disc. Returns a layout dict.
+
+    `words` is a single word (str) or a list of words: each word's letters are
+    followed by one ornament slot (the same rp.ornament, e.g. a heart), so
+    multiple names read as WORD1 <3 WORD2 <3 WORD3 <3 (back to WORD1). A
+    single-word `words` reproduces the original single-heart-at-the-join
+    layout exactly (one word -> one trailing ornament)."""
+    if isinstance(words, str):
+        words = [words]
+    words = [w.upper() for w in words]
     Rp = rp.diameter_mm / 2 * ppm
     Ro = Rp - (rp.frame_mm + rp.rim_mm) * ppm
     h_mm = rp.cap_h_max_mm
@@ -189,25 +197,35 @@ def fit_ring(word, rp: RingParams, ppm):
         font = G.find_font(max(10, int(round(cap / cap_ratio))), rp.font)
         cap = font.getbbox("H")[3] - font.getbbox("H")[1]
         Rin = Ro - cap
-        # Pixel-traced outlines are 1px staircases. Upright (banner) they're
-        # collinear runs the emitter merges, but ROTATED onto the ring every
-        # stair becomes a 0.1-0.2mm zig-zag move: thousands of micro-moves and
-        # near-reversals that stall GRBL and flicker the laser. Simplify in the
-        # local (unrotated) frame first so rotated edges are clean lines.
-        locs = [glyph_local(c, font).simplify(rp.outline_smooth_px) for c in chars]
-        if rp.letter_round_mm > 0:
-            r = rp.letter_round_mm * ppm
-            locs = [
-                g.buffer(r, join_style=1)
-                .buffer(-2 * r, join_style=1)
-                .buffer(r, join_style=1)
-                .simplify(0.25)
-                for g in locs
-            ]
-        labels = list(chars)
-        if rp.ornament:
-            locs.append(ornament_local(rp.ornament, cap))
-            labels.append("*")
+
+        def letter_glyph(c):
+            # Pixel-traced outlines are 1px staircases. Upright (banner)
+            # they're collinear runs the emitter merges, but ROTATED onto the
+            # ring every stair becomes a 0.1-0.2mm zig-zag move: thousands of
+            # micro-moves and near-reversals that stall GRBL and flicker the
+            # laser. Simplify in the local (unrotated) frame first so rotated
+            # edges are clean lines.
+            g = glyph_local(c, font).simplify(rp.outline_smooth_px)
+            if rp.letter_round_mm > 0:
+                r = rp.letter_round_mm * ppm
+                g = (
+                    g.buffer(r, join_style=1)
+                    .buffer(-2 * r, join_style=1)
+                    .buffer(r, join_style=1)
+                    .simplify(0.25)
+                )
+            return g
+
+        locs, labels = [], []
+        for w in words:
+            for c in w:
+                if c.isspace():
+                    continue
+                locs.append(letter_glyph(c))
+                labels.append(c)
+            if rp.ornament:
+                locs.append(ornament_local(rp.ornament, cap))
+                labels.append("*")
         n = len(locs)
         ext = [ang_extent(solid_of(g), Rin) for g in locs]
         span = sum(l + r for l, r in ext)
@@ -300,9 +318,9 @@ def n_sub(length_px, rp, ppm):
     return max(0, math.ceil(length_px / (1.3 * rp.target_w_mm * ppm)) - 1)
 
 
-def build_ring(word, seed, rp: RingParams, cfg):
+def build_ring(words, seed, rp: RingParams, cfg):
     ppm = cfg.px_per_mm
-    L = fit_ring(word, rp, ppm)
+    L = fit_ring(words, rp, ppm)
     D = rp.diameter_mm * ppm
     m = cfg.margin_px
     C = (m + D / 2, m + D / 2)
@@ -795,13 +813,17 @@ def make_cfg(rp):
     )
 
 
-def generate(word, seed, rp):
+def generate(words, seed, rp):
     """Same (pieces, ...) shape as geometry.generate_pieces: carve pockets,
-    fuse counters, append letters, absorb letter slivers."""
+    fuse counters, append letters, absorb letter slivers. `words` is a single
+    word (str) or a list of words, each followed by one rp.ornament slot
+    (see fit_ring)."""
     cfg = make_cfg(rp)
     if rp.shape == "square":
         cfg = replace(cfg, corner_radius_mm=5.0)
-    piece_polys, letter_union, cfg, L, st, panel, C = build_ring(word, seed, rp, cfg)
+    piece_polys, letter_union, cfg, L, st, panel, C = build_ring(
+        words, seed, rp, cfg
+    )
     frags = G.carve_letter_pockets(piece_polys, letter_union)
     frags = G.fuse_counter_fragments(frags, letter_union, cfg)
     if rp.shape == "square":
@@ -819,6 +841,21 @@ def generate(word, seed, rp):
         {"parent": None, "polygon": g, "kind": "letter"} for g in lp
     ]
     pieces = G.absorb_letter_slivers(pieces, letter_union, cfg)
+    # jigsaw.render_preview's draw_geom always paints a piece's holes WHITE,
+    # unconditionally, on the assumption that holes are small (a letter
+    # counter) relative to the canvas -- true for every OTHER layout, but the
+    # solid frame (frame_mm > 0) is a giant annulus whose "hole" is the ENTIRE
+    # puzzle interior. If anything else were drawn before it in piece-list
+    # order, the frame's white hole-paint wipes it out again (this bit a
+    # 2-hole letter "B" in a 3-word ring: its list position happened to fall
+    # after the frame). Draw largest-hole-first so a piece never gets
+    # overpainted by something enclosing it; harmless for ordinary small
+    # letter counters, which never enclose another whole piece.
+    def _hole_area(poly):
+        polys = poly.geoms if isinstance(poly, MultiPolygon) else [poly]
+        return sum(Polygon(r).area for p in polys for r in p.interiors)
+
+    pieces.sort(key=lambda p: -_hole_area(p["polygon"]))
     # Snap every outline to a fine (0.01mm) shared grid: cheap insurance against
     # true floating-point duplicate vertices (near-zero-length stub edges) from
     # the rotation + carving pipeline, with shared boundaries snapping
@@ -859,7 +896,11 @@ def main():
     import jigsaw as J
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("word")
+    ap.add_argument(
+        "word",
+        help="one word, or several separated by '+' (e.g. NORA+BECS+ALEX) -- "
+        "each word gets one --ornament slot after it",
+    )
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--variants", type=int, default=12)
     ap.add_argument("--shape", choices=("disc", "square"), default="disc")
@@ -890,17 +931,19 @@ def main():
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
+        letter_round_mm=a.letter_round_mm,
     )
-    word = a.word.upper()
-    pieces, cfg, L, st, _panel, _C = generate(word, a.seed, rp)
+    words = [w.upper() for w in a.word.split("+") if w.strip()]
+    tag = "-".join(words)
+    pieces, cfg, L, st, _panel, _C = generate(words, a.seed, rp)
     out = Path(
         a.out
         or Path(__file__).resolve().parent.parent
         / "figs"
-        / f"ring_{word}_{a.shape}.png"
+        / f"ring_{tag}_{a.shape}.png"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    title = f"{word} ring {a.shape} seed {a.seed}  cap {L['cap_mm']:.0f}mm  {len(pieces)}pc  score {st['score']}"
+    title = f"{tag} ring {a.shape} seed {a.seed}  cap {L['cap_mm']:.0f}mm  {len(pieces)}pc  score {st['score']}"
     J.render_preview(pieces, cfg, title, out)
     if a.debug:
         render_debug_overlay(out, st["seams"])
@@ -911,18 +954,18 @@ def main():
         if a.passes is not None:
             material = {**material, "laser": {**material["laser"], "passes": a.passes}}
         gcode = J._emit_cut_for(
-            pieces, material, cfg, word, "ring", mode="static",
+            pieces, material, cfg, tag, "ring", mode="static",
             feed_override=a.feed, power_percent=100.0,
             min_segment_mm=a.min_segment_mm,
             max_backtrack_ms=a.max_backtrack_ms,
         )
         Path(a.gcode).write_text(gcode)
         png, _svg = J.render_gcode_previews(
-            gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{word} ring cut"
+            gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{tag} ring cut"
         )
         print(f"-> {a.gcode}  ({len(gcode.splitlines())} lines), toolpath {png}")
     print(
-        f"{word}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
+        f"{tag}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "
         f"score (thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
