@@ -347,11 +347,26 @@ which name reads first. Needs the angular slot width, the ring-seam
 heights, and the ornament's own geometry to be identical across each word's
 boundary; easiest starting case is same-length words. Not started.
 
-### 11.2 Solid outer frame (`frame_mm`)
+### 11.2 Solid outer frame (`frame_mm`) -- ABANDONED, default is now `frame_mm=0`
 A continuous annulus around the puzzle, never cut radially. Rim seams land
 on its inner circle as shared endpoints; the circle is split into arcs AT
 those landings (not a fixed count), so every piece touching the frame gets
 its own tab into it.
+
+**Status: dropped per Alex, 2026-09-27.** The physical NORA+BECS+ALEX
+contingency cut (frame_mm=15) came off the machine heavily warped as the
+ring was cut free -- Alex attributed this to the workpiece itself shifting
+during the long uninterrupted rim cut (a workholding problem), not a
+G-code defect, and asked to abandon the frame rather than keep chasing
+§12.1's start/end-gap hypothesis. Every generation from here on defaults
+to `frame_mm=0`: rim seams land directly on the real panel boundary
+(`ends="B"`) instead of a frame's inner circle, so every outermost piece
+gets a real tab straight into the panel edge -- see §11.5. The frame code
+path in `ring_prototype.py` (`frame_mm > 0`, `frame_arcs`, `plain_caps`,
+the oversized-check exemption for the frame's giant hole) is left in place
+and still works, just unused by default; revisit only if a future need
+for a rigid outer lip resurfaces, and reconsider the rim-cut motion first
+(§12.1) before assuming a frame is required at all.
 
 **Rendering pitfall (fixed, but worth knowing):** `jigsaw.render_preview`'s
 `draw_geom` always paints a piece's holes white, unconditionally — correct
@@ -418,6 +433,25 @@ Holding tabs at the safe default and instead sweeping `rim_mm`/
 hub_ring_min_mm=30` at 8 dropped tabs with zero lint defects — worse than
 the unsafe version's score, better than baseline, and actually safe to cut.
 
+### 11.5 `no_interlock` check: every outermost piece must grip its neighbor
+Added alongside the frame removal (§11.2). With `frame_mm=0`, the true
+panel boundary is a `topcap`/`botcap`/`bridge` seam's `ends` containing
+`"B"`; if that seam's `status` is `"plain"` (cut all the way through but
+no tab fit), the piece it borders can touch its neighbor but not interlock
+with it -- exactly the "outermost pieces abutting without interlock"
+failure Alex flagged. `lint_pieces()` now reports this as a `no_interlock`
+finding, separate from `no_tab` (which covers a seam that got *merged*,
+i.e. `status="drop"`, not one that's cut clean but tab-less). `rimsub`
+seams can't trigger this (no `plain_ok`, so they're always `"ok"` or
+`"drop"`, never `"plain"`). A 24-seed sweep of NORA+BECS+ALEX at
+`frame_mm=0, rim_mm=24, hub_ring_min_mm=30` with safe tabs (15px/30px)
+found **every seed clears `no_interlock=0`** -- once the frame's
+constrained inner-circle geometry is gone, the rim naturally has enough
+room for a real tab at every outer piece. Seed 11 was selected as the
+delivered no-frame candidate: 0 `no_interlock`, 0 `elongated`, 0 real
+G-code defects, safe tab hardware, 9 `no_tab` (all interior/hub merges,
+none on the panel boundary), 61 pieces.
+
 ## 12. TODO, from cutting the real contingency puzzle
 
 Two issues reported after physically cutting and assembling the
@@ -428,6 +462,18 @@ a fix**; guessing further without it risks the same false-start pattern
 §11.3 already documents for the lint checks.
 
 ### 12.1 Outer-rim start/end doesn't fully separate; scattered backside burn spots
+**Status: reattributed, superseded by §11.2.** Alex's own read after seeing
+the ring warp as it was cut free was that the workpiece itself moved
+during the cut (a workholding/hold-down problem), not a G-code defect, and
+asked to drop the frame entirely rather than keep chasing this. The
+diagnostic work below is kept for reference (the G-code-level observation
+that the loop closes cold at an exact coordinate with no hot re-trace
+overlap is real and could still matter for some other long uninterrupted
+cut), but it is no longer the leading theory for what actually happened on
+this cut, and nothing here is currently being pursued. If a similar
+symptom shows up again on a future cut with the workpiece properly
+secured, this section is the place to pick the investigation back up.
+
 Symptom: a sliver of wood stayed connected where the outermost cut should
 have met itself, causing warping/splitting on separation; several distinct
 burn spots on the back suggest uneven power/dwell somewhere in that cut's
