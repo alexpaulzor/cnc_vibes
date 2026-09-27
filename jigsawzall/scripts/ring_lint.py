@@ -435,6 +435,27 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
                 findings.append(
                     PieceFinding("no_tab", None, tuple(mid), f"{s['kind']} seam: no tab fit, pieces merged")
                 )
+            elif s.get("status") == "plain" and "B" in s.get("ends", ()):
+                # A "plain" seam is a COMPLETE cut with no tab -- unlike "drop"
+                # (merged, still one piece), this one fully separates the two
+                # pieces with nothing gripping them together. Fine on an
+                # INTERIOR seam (the piece still has tabs on its other edges),
+                # but on the true outer panel boundary it means an outermost
+                # piece can have an edge that just abuts its neighbour with no
+                # interlock at all -- exactly what came loose/jumbled on a
+                # real cut. Interior-only "plain" (frame-facing, ends has "J"
+                # instead of "B") is unaffected.
+                pts = s["pts"]
+                mid = pts[len(pts) // 2]
+                findings.append(
+                    PieceFinding(
+                        "no_interlock",
+                        None,
+                        tuple(mid),
+                        f"{s['kind']} seam: fully cut but untabbed on the outer "
+                        "edge -- this piece has no grip on that side",
+                    )
+                )
     return findings
 
 
