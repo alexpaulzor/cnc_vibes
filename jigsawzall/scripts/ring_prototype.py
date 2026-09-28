@@ -36,6 +36,57 @@ from shapely.ops import nearest_points, polygonize, unary_union  # noqa: E402
 
 import geometry as G  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# Planet Labs logo: real letterforms + brand mark, traced from a photo of an
+# actual sticker (Alex is a Planet Labs employee; this is for his own desk --
+# see RING_SPEC.md for why traced-from-real beats guessing at a system font
+# or approximating their trademark from memory). See scripts/trace_planet_
+# logo.py for how data/planet_logo_glyphs.json was produced.
+# ---------------------------------------------------------------------------
+
+PLANET_LOGO_FONT = "planet_logo"  # RingParams.font sentinel
+PLANET_LOGO_ORNAMENT = "planet_logo"  # RingParams.ornament sentinel
+_planet_logo_glyphs_cache = None
+
+
+def _load_planet_logo_glyphs():
+    global _planet_logo_glyphs_cache
+    if _planet_logo_glyphs_cache is None:
+        import json
+
+        from shapely import wkt as _wkt
+
+        path = Path(__file__).resolve().parent.parent / "data" / "planet_logo_glyphs.json"
+        data = json.loads(path.read_text())
+        glyphs = {k: _wkt.loads(v) for k, v in data["glyphs"].items()}
+        _planet_logo_glyphs_cache = (glyphs, data["cap_ref_px"], data["ring"])
+    return _planet_logo_glyphs_cache
+
+
+def planet_logo_ornament_artwork(cap_h):
+    """Etch-only detail for the PLANET_LOGO_ORNAMENT disc: the real "p" +
+    brand-ring artwork, scaled so the ring's OUTER radius matches the
+    ornament disc's own radius (ornament_local's 0.30*cap_h) and positioned
+    in the SAME local frame (cy = -cap_h/2, same as ornament_local) so a
+    caller can union this directly with that disc's placement transform.
+    Returns a list of local-frame LineStrings (unplaced) -- never cut, only
+    etched (see the disc-not-a-thin-ring note in ornament_local)."""
+    glyphs, _, ring = _load_planet_logo_glyphs()
+    disc_r = 0.30 * cap_h
+    scale = disc_r / ring["outer_r"]
+    cy = -cap_h / 2
+    # The disc's radius came from the RING's outer radius, so the ring -- not
+    # "p" -- belongs at the disc's own center (0, cy); "p" sits at whatever
+    # offset it has from the ring's center in the traced artwork (ring[cx]/
+    # [cy] are p's local frame minus the ring's true center, i.e. the ring's
+    # position relative to p -- so p's placement is the negation of that).
+    p = affinity.scale(glyphs["p"], scale, scale, origin=(0, 0))
+    p = affinity.translate(p, -ring["cx"] * scale, cy - ring["cy"] * scale)
+    strokes = [p.exterior] + list(p.interiors)
+    for r in (ring["outer_r"] * scale, ring["inner_r"] * scale):
+        strokes.append(Point(0, cy).buffer(r, quad_segs=64).exterior)
+    return [LineString(s) for s in strokes]
+
 
 @dataclass
 class RingParams:
@@ -127,6 +178,16 @@ def ornament_local(kind, cap_h):
         # look comes from the etched background overlay (globe_etch.py)
         # crossing over it at its final placed position, not from special
         # ornament geometry here.
+        return Point(0, cy).buffer(0.30 * cap_h, quad_segs=48)
+    if kind == PLANET_LOGO_ORNAMENT:
+        # The real Planet Labs brand ring, traced from a photo (see
+        # trace_planet_logo.py) -- a SOLID disc as the physical cut piece
+        # (their actual mark is a thin open ring, which at ornament scale
+        # would be a fragile sliver; see planet_logo_ornament_artwork() for
+        # the etched p + ring-outline detail that goes ON this disc, not
+        # cut through it). Radius matches the "globe" ornament's so it
+        # takes a comparable angular slice of the ring regardless of which
+        # ornament kind is chosen.
         return Point(0, cy).buffer(0.30 * cap_h, quad_segs=48)
     if kind == "star":
         pts = []
@@ -255,15 +316,36 @@ def fit_ring(words, rp: RingParams, ppm):
     Rp = rp.diameter_mm / 2 * ppm
     Ro = Rp - (rp.frame_mm + rp.rim_mm) * ppm
     h_mm = rp.cap_h_max_mm
-    ref = G.find_font(1000, rp.font)
-    cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
+    is_logo_font = rp.font == PLANET_LOGO_FONT
+    if is_logo_font:
+        _logo_glyphs, _logo_cap_ref_px, _ = _load_planet_logo_glyphs()
+    else:
+        ref = G.find_font(1000, rp.font)
+        cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
     while True:
         cap = h_mm * ppm
-        font = G.find_font(max(10, int(round(cap / cap_ratio))), rp.font)
-        cap = font.getbbox("H")[3] - font.getbbox("H")[1]
+        if is_logo_font:
+            font = None  # no system font in play; nothing downstream reads
+            # `font` when is_logo_font, except L["font_size"] below.
+            logo_scale = cap / _logo_cap_ref_px
+        else:
+            font = G.find_font(max(10, int(round(cap / cap_ratio))), rp.font)
+            cap = font.getbbox("H")[3] - font.getbbox("H")[1]
         Rin = Ro - cap
 
         def letter_glyph(c):
+            if is_logo_font:
+                key = c.lower()
+                if key not in _logo_glyphs:
+                    raise SystemExit(
+                        f"planet_logo font has no traced glyph for {c!r} -- "
+                        "only p,l,a,n,e,t,. were traced (see "
+                        "scripts/trace_planet_logo.py)"
+                    )
+                g = affinity.scale(
+                    _logo_glyphs[key], logo_scale, logo_scale, origin=(0, 0)
+                )
+                return g.simplify(rp.outline_smooth_px)
             # Pixel-traced outlines are 1px staircases. Upright (banner)
             # they're collinear runs the emitter merges, but ROTATED onto the
             # ring every stair becomes a 0.1-0.2mm zig-zag move: thousands of
@@ -320,7 +402,7 @@ def fit_ring(words, rp: RingParams, ppm):
                 r_h=r_h,
                 min_gap_mm=min(gaps) / ppm,
                 ok=ok,
-                font_size=font.size,
+                font_size=(font.size if font is not None else None),
             )
         h_mm -= 1.0
 

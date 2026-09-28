@@ -779,8 +779,83 @@ A plain filled disc (like `"dot"`, slightly larger — `0.30*cap_h` radius),
 generic "planet" circle, not anyone's brand mark. Its "globe" look comes
 for free from the background etch overlay's graticule/coastline lines
 crossing over its placed position, not from special ornament geometry.
+**Superseded by §13.7 below** -- Alex clarified he wants the real logo
+after all (marketing use, his own desk); `ornament="globe"` still works
+as a generic fallback but isn't the default choice for this puzzle anymore.
 
-### 13.6 Status
+### 13.7 The real Planet Labs logo (`font="planet_logo"`, `ornament="planet_logo"`)
+Alex is a Planet Labs employee, making this for his own desk, and wants
+the ACTUAL logo and wordmark, not a generic placeholder. No internet
+access in this session to fetch it (site + Wikimedia Commons both blocked
+by network egress policy) -- rather than approximate their trademark from
+training-data memory or guess at the brand font's name, traced it
+directly from a photo Alex sent of a real Planet sticker.
+
+**Pipeline (`scripts/trace_planet_logo.py`, one-off, not re-run
+automatically):** crop the photo upright (`data/
+planet_logo_source_tight.png`, committed for reproducibility), threshold
+into two ink layers by color (dark charcoal wordmark vs. teal brand
+ring/period -- simple brightness + channel-difference heuristics, no ML
+needed), hand-picked pixel boxes per letter (the six are cleanly
+separated, non-touching, so no connected-component search was needed),
+trace each with `geometry._trace_mask_polygons` (the same contour tracer
+`glyph_local` already uses for system fonts) after a small morphological
+closing (dilate+erode) to bridge JPEG/threshold gaps -- caught for real on
+"a", whose bowl-counter wasn't quite closed and traced as two disconnected
+polygons instead of one with a hole until this was added. Output cached
+in `data/planet_logo_glyphs.json`: WKT per glyph (`p,l,a,n,e,t,.`,
+lowercase -- the brand is never capitalized), a `cap_ref_px` scaling
+reference (the "l"/"t" ascender height, this wordmark's tallest letters,
+analogous to a system font's cap-height), and the brand ring's measured
+`cx/cy/outer_r/inner_r` relative to the "p" glyph's own local frame.
+
+**Wordmark integration (`RingParams.font = PLANET_LOGO_FONT`):**
+`fit_ring()` branches around the whole `G.find_font`/`font.getbbox`
+machinery when this sentinel is set -- there's no real font file, so nothing
+to ask Pillow to size. Instead `logo_scale = target_cap_px / cap_ref_px`
+and each letter is `affinity.scale(traced_glyph, logo_scale, logo_scale)`,
+looked up by `c.lower()` (ring letters are conventionally upper()-cased
+for placement bookkeeping; the trace is real lowercase brand type). A
+request for a character outside `p,l,a,n,e,t,.` raises loudly rather than
+silently falling back to a system font, which would defeat the entire
+point silently. Everything downstream (placement, tabs, seams, lint) is
+unchanged -- the traced glyphs are drop-in `glyph_local()` replacements.
+
+**Ornament integration (`RingParams.ornament = PLANET_LOGO_ORNAMENT`):**
+the source logo's brand ring is a thin OPEN stroke (~18px of a 170px
+radius, roughly 5% of diameter) sitting behind a NORMAL-sized "p" --
+initially assumed the circle WAS the p's bowl (wrong; they're independent
+elements, the "p" in the wordmark itself is perfectly ordinary). Cutting
+that stroke as a literal thin annulus at ornament scale (~14mm diameter)
+would be exactly the kind of fragile sliver this project has flagged
+before (§11.4's tab-neck regression, the general thin-bridge checks) --
+so `ornament_local("planet_logo", cap_h)` cuts a SOLID disc (same
+`0.30*cap_h` radius as `"globe"`) as the physical piece, and
+`planet_logo_ornament_artwork(cap_h)` returns the real "p" outline + both
+ring-stroke edges as ETCH-only strokes, scaled so the ring's outer radius
+matches the disc radius and positioned so the ring -- not the "p" -- sits
+at the disc's own center (the disc radius was derived FROM the ring, so
+that's the anchor; "p" sits at its measured offset from the ring's true
+center). Caller places these local strokes into world space with the
+ornament's own `(th, Rin, C)` from `fit_ring`'s result, same `place()`
+transform every other slot uses -- so it inherits the same "bottom-of-
+ring reads upside down" behavior as any other slot there (§2), which is
+correct/expected, not a bug to special-case around.
+
+**First-draft bug (caught before it shipped, not after):** the ornament
+artwork initially anchored the "p" glyph at the disc center and added the
+ring as an offset from THAT, backwards from how the disc's radius was
+actually derived -- produced a ring visibly off-center from the disc
+boundary in the render. Caught by cropping and looking at the ornament
+piece in isolation before sizing up, the same "verify before trusting"
+discipline as every other rendered candidate this session.
+
+**Status:** integrated and rendering correctly (verified: recognizable
+traced letterforms in the piece render, ring/p artwork concentric with
+the ornament disc, upside-down-at-bottom behavior matches every other
+ring slot). Seed-swept for a clean final candidate — see §13.8.
+
+### 13.6 Status (round-font/generic-globe delivery -- superseded by §13.8)
 Delivered: PLANET, 290mm disc, no frame, round font, distinct tabs, globe
 ornament, globe etch overlay centered near San Francisco. Seed-swept (8
 seeds, `rim_mm=27, hub_ring_min_mm=30`) to seed 3: 0 piece findings
@@ -791,3 +866,28 @@ pieces). Both F350 1-pass and F500 2-pass cut variants generated, etch
 pass prepended to each. **Not yet**: any physical test cut -- the etch
 power/feed numbers are still an unverified starting guess (§13.3); the
 cut settings are the same proven values as every prior ring.
+
+### 13.8 Status: real-logo delivery
+Delivered: PLANET, real Planet Labs wordmark + brand-ring ornament
+(§13.7), 290mm disc, no frame, distinct tabs, globe etch overlay
+(coastlines + graticule, centered near San Francisco) plus the ornament's
+own etched p+ring detail unioned into the same pass. Seed-swept (8 seeds,
+`rim_mm=27, hub_ring_min_mm=30`, `variants=16`) -- seed 1 picked: 51
+pieces, only 2 `no_tab` (interior merges, nowhere near the boundary or
+the ornament), 0 oversized/elongated/no_interlock, safe tab hardware at
+the smallest distinct-tab class, 0 real G-code defects on both etch and
+cut passes, 100% etch coverage (1 auto-patched tick). Both F350 1-pass
+and F500 2-pass cut variants generated, etch pass prepended to each.
+
+**Separately delivered:** `scripts/etch_calibration.py`, a standalone
+self-labeled scrap-test grid (5 power levels x 4 feeds, each swatch
+etched at its own exact setting with the numbers traced onto the wood
+itself) so the placeholder `etch:` profile in laser_materials.yaml can be
+replaced with a real number instead of a guess -- sent to Alex ahead of
+the full puzzle files since it doesn't depend on which puzzle design
+ships.
+
+**Not yet**: any physical test cut of either the calibration grid or the
+real puzzle -- once Alex reports back a good calibration swatch, update
+`laser_materials.yaml`'s `etch:` block and this becomes a real, tested
+value instead of a starting guess.
