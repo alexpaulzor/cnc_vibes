@@ -278,6 +278,22 @@ def place(poly, th, r_base, C):
     )
 
 
+def place_upright(poly, th, r_base, C, anchor_y):
+    """Like place(), but TRANSLATION ONLY -- no rotation. For decoration
+    that should stay upright wherever it lands on the ring, unlike a
+    letter (which must rotate to keep reading around the circle): the
+    planet_logo ornament's etched p+ring art is a brand mark, not a
+    spelled-out letter, so it shouldn't flip upside-down just because the
+    join happens to sit in the bottom half (§2). `anchor_y` is the local y
+    of the point that should land exactly at the target world position
+    (e.g. cy = -cap_h/2, ornament_local's own disc-center convention) --
+    without it, translating by the placed local origin (0,0) instead of
+    the piece's actual center would offset the art from the disc it's
+    decorating."""
+    wx, wy = place(Point(0, anchor_y), th, r_base, C).coords[0]
+    return affinity.translate(poly, wx, wy - anchor_y)
+
+
 def xf_pt(p, th, r_base, C):
     c, s = math.cos(th), math.sin(th)
     x, y = p
