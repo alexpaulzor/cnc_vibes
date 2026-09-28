@@ -407,7 +407,7 @@ When extending either checker, verify a new "defect" against raw G-code
 context or the piece geometry before trusting it, the same way — an
 unverified check that cries wolf is worse than no check.
 
-### 11.6 "Rounder letters" means a different font, not a Minkowski sum
+### 11.4 "Rounder letters" means a different font, not a Minkowski sum
 `RingParams.letter_round_mm` (a `buffer(r).buffer(-2r).buffer(r)`
 close-then-open on the traced glyph outline, applied per letter) has been
 **removed** — the CLI flag, the field, and the code path. When Alex asked
@@ -436,7 +436,7 @@ the sizing table in §1 (cap height / min letter gap will differ slightly
 from Arial Black's metrics); re-run `fit_ring` sizing checks on real names
 before treating it as a drop-in default.
 
-### 11.4 Tab-hardware regression (read this before ever tuning tab size)
+### 11.5 Tab-hardware regression (read this before ever tuning tab size)
 Chasing a lower dropped-tab count by shrinking `tab_r_px`/`tab_stem_px`
 produces pieces that render fine on screen but have a tab neck too narrow
 to survive assembly — caught only because Alex looked at a render and said
@@ -462,7 +462,7 @@ Holding tabs at the safe default and instead sweeping `rim_mm`/
 hub_ring_min_mm=30` at 8 dropped tabs with zero lint defects — worse than
 the unsafe version's score, better than baseline, and actually safe to cut.
 
-### 11.5 `no_interlock` check: every outermost piece must grip its neighbor
+### 11.6 `no_interlock` check: every outermost piece must grip its neighbor
 Added alongside the frame removal (§11.2). With `frame_mm=0`, the true
 panel boundary is a `topcap`/`botcap`/`bridge` seam's `ends` containing
 `"B"`; if that seam's `status` is `"plain"` (cut all the way through but
@@ -480,6 +480,68 @@ room for a real tab at every outer piece. Seed 11 was selected as the
 delivered no-frame candidate: 0 `no_interlock`, 0 `elongated`, 0 real
 G-code defects, safe tab hardware, 9 `no_tab` (all interior/hub merges,
 none on the panel boundary), 61 pieces.
+
+### 11.7 Center medallion text (`RingParams.center_text`)
+**Status: implemented, `scripts/ring_prototype.py`.** The extra-credit ask
+from earlier this session: two lines of plain, non-wrapped text (e.g.
+`("THE", "PAULS")`) in the hub disc, exempt from the ring's own
+letter-gap rules, each word fused into one piece so it survives handling.
+
+**Implementation:** `RingParams.center_text: tuple | None = None` (CLI
+`--center-text "THE+PAULS"`), plus `center_text_cap_mm` (13, shrinks in
+1mm steps to `center_text_cap_min_mm`=6 if it doesn't fit),
+`center_text_gap_mm` (3, between the two lines), `center_text_baseline_mm`
+(5, the support-bar height under each line), `center_text_fit_frac` (0.82
+of the hub radius `r_h`). `center_text_block()` renders each word with
+`glyph_local()` (already generalizes to a whole string, not just one
+char) and unions it with a support bar spanning its width just below the
+baseline -- **critical detail:** the bar must overlap a couple px PAST
+the glyph's own lowest point, not start exactly at the nominal baseline
+y=0, because font metrics leave a hairline gap there; get this wrong (as
+the first version did) and `unary_union` produces a MultiPolygon of
+disconnected per-letter chips instead of one fused word piece, which
+defeats the entire point ("so the tiny pieces don't break apart") while
+looking fine in a quick glance at the render -- caught only by explicitly
+counting pieces near the hub center, not by eyeballing. Each word's block
+is independent of the other (no bar connects "THE" to "PAULS"), so they
+come out of the hub as two separate one-piece medallion pieces, matching
+"treating each word like a single letter of the full-sized text."
+
+**Wiring:** when `center_text` fits, the block is unioned straight into
+`letter_union` before the background carve, so it rides the *existing*
+letter-pocket machinery (`carve_letter_pockets`, `fuse_counter_fragments`)
+for free -- no new seam/tab bookkeeping needed, same as why the main ring
+letters themselves never need tabs (a letter just fills its own pocket by
+shape). Setting `center_text` also forces the hub disc to skip pinwheel
+spoke generation entirely (stays one undivided background piece) so
+nothing slices through the text; `oversized_oriented()` gained a matching
+exemption for that one big medallion-background piece, keyed off a
+`(Cx, Cy, r_h)` tuple that has to be threaded through explicitly --
+**it's process-global state during generation only**, so a caller
+re-running `lint_pieces()` from a pickled `(pieces, cfg, st, panel)` tuple
+in a fresh process (this tool's own normal workflow all session) must
+pass `center_medallion=st["center_medallion"]` or the exemption silently
+doesn't apply and the medallion background piece gets misreported as
+oversized. `generate()` now stashes it in `st` for exactly this reason.
+
+**Verified:** NORA+BECS+ALEX, no frame, round font, distinct tabs, seed
+11: "THE"/"PAULS" render as two clean fused pieces centered in the hub
+(cap settled at the full 13mm, easily inside `r_h`=57.8mm with room to
+spare), 0 `no_interlock`, 0 `elongated`, tab hardware safe. One `oversized`
+finding remains at seed 11 specifically, elsewhere in the ring (unrelated
+to the medallion, centroid nowhere near hub) -- combining round font +
+distinct tabs + center text shifts the wave-grid subdivision boundaries
+enough that seed 11 (clean for the no-frame-only candidate) isn't
+automatically clean for the full combined feature set; screen a fresh
+seed pool for the actual delivered candidate rather than assuming a seed
+that worked for one feature set carries over.
+
+**Not yet done:** the double-extra-credit ask (rotate the medallion so no
+single outer name is privileged as "up") isn't touched by this --
+`center_text` places the block at a fixed 12-o'clock-relative orientation
+regardless of which outer word starts there. Sizing (`cap_mm` 13/6mm
+default/floor) is a first guess, not benchmarked against real letter
+legibility at this scale the way §1's table does for the outer ring.
 
 ## 12. TODO, from cutting the real contingency puzzle
 

@@ -382,7 +382,7 @@ def _aspect_ratio(poly) -> float:
     return e[1] / max(e[0], 1e-6)
 
 
-def lint_pieces(pieces, cfg, panel, seams=None) -> list:
+def lint_pieces(pieces, cfg, panel, seams=None, center_medallion="_unset") -> list:
     """Geometry-level defects: reuses ring_prototype's own scoring predicates
     (oversized/thin/sliver/nub) so this can never silently drift from what
     the generator itself optimizes against, plus reports every seam that
@@ -390,8 +390,21 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
     pieces into one and are the main source of "why is this piece so big").
     Always also runs lint_tab_hardware(cfg) -- a low dropped-tab count is
     worthless (actively dangerous) if it was bought by shrinking the tabs
-    themselves below what's been proven to survive a real cut."""
+    themselves below what's been proven to survive a real cut.
+
+    `center_medallion`: pass `st["center_medallion"]` (from generate()'s
+    stats dict) when checking a center_text ring, so oversized_oriented()'s
+    hub-medallion exemption applies here too -- it's process-global state
+    set only during generation, which is lost if `pieces` came from a
+    pickled tuple loaded in a fresh process (the normal workflow for this
+    tool). Default sentinel leaves the module's current value alone."""
     import ring_prototype as R
+
+    if center_medallion != "_unset":
+        orig_medallion = R._center_medallion
+        R._center_medallion = center_medallion
+    else:
+        orig_medallion = None
 
     findings = list(lint_tab_hardware(cfg))
 
@@ -463,6 +476,8 @@ def lint_pieces(pieces, cfg, panel, seams=None) -> list:
                         "edge -- this piece has no grip on that side",
                     )
                 )
+    if center_medallion != "_unset":
+        R._center_medallion = orig_medallion
     return findings
 
 

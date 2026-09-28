@@ -81,6 +81,19 @@ class RingParams:
     # (see TAB_SIZE_CLASSES) so loose pieces don't all interchange -- every
     # class still stays within lint_tab_hardware's proven-safe range.
     distinct_tabs: bool = True
+    # Center medallion: two lines of plain (non-wrapped) text in the hub disc,
+    # e.g. ("THE", "PAULS"). Exempt from the ring's own letter-gap rules --
+    # each word is fused into ONE piece (letters + a support baseline bar) so
+    # it holds together, like a single oversized "letter" of the outer name.
+    # Forces the hub disc to stay undivided (no pinwheel spokes) so nothing
+    # slices through the text. None = no center text (default, unchanged
+    # pinwheel hub).
+    center_text: tuple | None = None
+    center_text_cap_mm: float = 13.0  # per-line cap height, shrinks to fit
+    center_text_cap_min_mm: float = 6.0
+    center_text_gap_mm: float = 3.0  # vertical gap between the two lines
+    center_text_baseline_mm: float = 5.0  # support bar height, below each line
+    center_text_fit_frac: float = 0.82  # block must fit within r_h * this
 
 
 # --------------------------------------------------------------------------
@@ -132,6 +145,47 @@ def ornament_local(kind, cap_h):
     p = affinity.scale(p, s, s, origin=(0, 0))
     b = p.bounds
     return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+
+
+def _center_text_word(word, font, baseline_mm, ppm):
+    """One word as a single fused piece: glyph_local's usual trace (already
+    handles multi-char strings, x=0 centred, y=0 baseline) unioned with a
+    thin support bar just below the baseline, spanning the word's width, so
+    letters that don't touch each other (most short words at a small size)
+    still come out of the pocket as one piece instead of loose chips."""
+    poly = glyph_local(word, font)
+    minx, miny, maxx, maxy = poly.bounds
+    # Overlap a couple px PAST the nominal baseline (maxy, the glyph's own
+    # lowest point) rather than starting exactly at y=0: font metrics leave
+    # a hairline gap between the rendered glyph bottom and the "baseline" y
+    # coordinate, which left the bar touching nothing and every letter its
+    # own disconnected piece instead of one fused word.
+    bar = box(minx - 2 * ppm, maxy - 2, maxx + 2 * ppm, baseline_mm * ppm)
+    return unary_union([poly, bar])
+
+
+def center_text_block(rp, ppm):
+    """Fit `rp.center_text` (two words, e.g. ("THE","PAULS")) into a single
+    local-frame polygon (x=0, y=0 at its own vertical centre), shrinking cap
+    height until it clears the caller's fit check. Returns None if it can't
+    fit even at center_text_cap_min_mm."""
+    cap_mm = rp.center_text_cap_mm
+    w1, w2 = rp.center_text
+    while cap_mm >= rp.center_text_cap_min_mm:
+        ref = G.find_font(1000, rp.font)
+        cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
+        font = G.find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
+        b1 = _center_text_word(w1, font, rp.center_text_baseline_mm, ppm)
+        b2 = _center_text_word(w2, font, rp.center_text_baseline_mm, ppm)
+        gap = rp.center_text_gap_mm * ppm
+        dy = b2.bounds[1] - gap - b1.bounds[3]
+        b1s = affinity.translate(b1, 0, dy)
+        block = unary_union([b1s, b2])
+        minx, miny, maxx, maxy = block.bounds
+        block = affinity.translate(block, -(minx + maxx) / 2, -(miny + maxy) / 2)
+        r = max(math.hypot(x, y) for x, y in block.convex_hull.exterior.coords)
+        yield cap_mm, r, block
+        cap_mm -= 1
 
 
 def solid_of(g):
@@ -313,6 +367,13 @@ def n_sub(length_px, rp, ppm):
     return max(0, math.ceil(length_px / (1.3 * rp.target_w_mm * ppm)) - 1)
 
 
+# Set by build_ring() when rp.center_text fits: (Cx, Cy, r_h_px) of the hub
+# circle, so oversized_oriented() can exempt the one big undivided medallion
+# background piece that surrounds the center text, the same way it already
+# exempts the solid outer frame (§11.2 in RING_SPEC.md).
+_center_medallion = None
+
+
 def build_ring(words, seed, rp: RingParams, cfg):
     ppm = cfg.px_per_mm
     L = fit_ring(words, rp, ppm)
@@ -333,9 +394,27 @@ def build_ring(words, seed, rp: RingParams, cfg):
     ths, locs = L["ths"], L["locs"]
     n = len(locs)
     world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
+    global _center_medallion
+    _center_medallion = None
+    if rp.center_text:
+        found = None
+        for cap_mm, r, block in center_text_block(rp, ppm):
+            if r <= r_h * rp.center_text_fit_frac:
+                found = block
+                break
+        if found is None:
+            warnings.warn(
+                f"center_text {rp.center_text!r} doesn't fit hub radius "
+                f"{r_h / ppm:.0f}mm even at {rp.center_text_cap_min_mm}mm cap "
+                "-- skipping, hub stays a plain pinwheel"
+            )
+        else:
+            world_block = affinity.translate(found, C[0], C[1])
+            world.append(world_block)
+            _center_medallion = (C[0], C[1], r_h)
     letter_union = unary_union(world)
     solids_l = [solid_of(g) for g in locs]
-    solids = [solid_of(w) for w in world]
+    solids = [solid_of(w) for w in world[:n]]
     letters_solid = unary_union(solids)
     background = panel.difference(letter_union)
     far = 2 * D
@@ -535,12 +614,16 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="hubsub", ends=("T", "T")))
         # --- hub disc spokes (pinwheel), landing on the hub circle -------------
+        # Skipped entirely when a center_text medallion is present: the hub
+        # disc must stay one undivided piece so no spoke slices through the
+        # text (oversized_oriented() exempts that one big piece, above).
         k_hub = 1
-        while (
-            2 * r_h * (math.sin(math.pi / k_hub) if k_hub > 1 else 1.0)
-            > rp.hub_piece_mm * ppm
-        ):
-            k_hub += 1
+        if _center_medallion is None:
+            while (
+                2 * r_h * (math.sin(math.pi / k_hub) if k_hub > 1 else 1.0)
+                > rp.hub_piece_mm * ppm
+            ):
+                k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
         if k_hub > 1:
@@ -624,6 +707,12 @@ def build_ring(words, seed, rp: RingParams, cfg):
     st["score"] = sc
     pieces = {(k, 0): p for k, p in enumerate(surround + counters)}
     st["seams"] = seams
+    # _center_medallion is process-global state, set only for the duration of
+    # this build -- stash it in st too so a caller working from a pickled
+    # (pieces, cfg, st, panel) tuple in a FRESH process (the normal workflow
+    # for lint_pieces here) can still pass it through and get the same
+    # oversized-check exemption, instead of silently losing it.
+    st["center_medallion"] = _center_medallion
     return pieces, letter_union, cfg, L, st, panel, C
 
 
@@ -796,6 +885,16 @@ def oversized_oriented(poly, cfg):
     hole_area = sum(Polygon(r).area for p in polys for r in p.interiors)
     if hole_area > poly.area * 2:
         return False
+    # The undivided hub medallion background around a center_text block is
+    # correctly "oversized" by ordinary standards too -- it's deliberately
+    # one big solid piece (spokes skipped) instead of pinwheel wedges, same
+    # reasoning as the frame exemption above. Exempt anything centered on
+    # and mostly inside the hub circle.
+    if _center_medallion is not None:
+        cx, cy, r_h = _center_medallion
+        c = poly.centroid
+        if math.hypot(c.x - cx, c.y - cy) < r_h:
+            return False
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         mrr = poly.minimum_rotated_rectangle
@@ -942,6 +1041,10 @@ def main():
         "--no-distinct-tabs", action="store_true",
         help="disable per-edge tab size variation, all tabs identical (old behavior)",
     )
+    ap.add_argument(
+        "--center-text", default=None,
+        help="two words for the hub medallion, e.g. 'THE+PAULS' (forces the hub disc undivided)",
+    )
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
@@ -965,6 +1068,7 @@ def main():
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
         distinct_tabs=not a.no_distinct_tabs,
+        center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
     )
     words = [w.upper() for w in a.word.split("+") if w.strip()]
     tag = "-".join(words)
