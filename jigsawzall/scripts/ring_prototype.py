@@ -614,16 +614,19 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="hubsub", ends=("T", "T")))
         # --- hub disc spokes (pinwheel), landing on the hub circle -------------
-        # Skipped entirely when a center_text medallion is present: the hub
-        # disc must stay one undivided piece so no spoke slices through the
-        # text (oversized_oriented() exempts that one big piece, above).
+        # With a center_text medallion, the DISC must stay undivided (no spoke
+        # slices through the text -- oversized_oriented() exempts that one big
+        # piece, above), but the hub CIRCLE should still get its usual number
+        # of landing points: they're what nearby hub-ring subdivisions (hubsub)
+        # anchor to, and starving that down to a fixed 3 (the small-hub-disc
+        # case) was quietly forcing bigger, occasionally oversized merges in
+        # the hub-ring band -- unrelated to the medallion, but caused by it.
         k_hub = 1
-        if _center_medallion is None:
-            while (
-                2 * r_h * (math.sin(math.pi / k_hub) if k_hub > 1 else 1.0)
-                > rp.hub_piece_mm * ppm
-            ):
-                k_hub += 1
+        while (
+            2 * r_h * (math.sin(math.pi / k_hub) if k_hub > 1 else 1.0)
+            > rp.hub_piece_mm * ppm
+        ):
+            k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
         if k_hub > 1:
@@ -631,11 +634,13 @@ def build_ring(words, seed, rp: RingParams, cfg):
             for s_ in range(k_hub):
                 phi = a0 + 2 * math.pi * s_ / k_hub
                 b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
+                split.append(phi % (2 * math.pi))
+                if _center_medallion is not None:
+                    continue  # landing point only -- no spoke into the text
                 # pinwheel: leave the centre along a rotated direction
                 na = out_vec(phi + twist * math.radians(50))
                 pts = G._vg_bez(C, na, b, out_vec(phi + math.pi), 0.45 * r_h)
                 seams.append(dict(pts=pts, kind="spoke", ends=("J", "J")))
-                split.append(phi % (2 * math.pi))
         else:
             split = [(a0 + 2 * math.pi * s_ / 3) % (2 * math.pi) for s_ in range(3)]
         # --- solid frame: its inner circle, split into a few host arcs ---------
