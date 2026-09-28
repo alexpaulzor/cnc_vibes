@@ -736,24 +736,32 @@ A shallow, non-cutting score pass, structurally similar to
 polylines with no tab/kerf concerns at all -- just line-follow at much
 lower power. Reads `material["etch"]` (power_percent/feed_mm_per_min/
 passes) rather than silently scaling down the cut settings, so a material
-with no etch profile fails loudly instead of gouging. **No per-stroke
-warmup lead-in** -- hundreds of short disconnected strokes make a full
-out-and-back warmup per stroke impractically slow, so the first ~1mm of
-each stroke may come in faint while the diode ramps. Acceptable for a
-decorative/orientation mark in a way it would NOT be for a structural cut
-(§12.1's whole rim-gap investigation was about exactly this risk on a
-CUT). Combine with a normal cut pass by emitting both and concatenating
-(etch first, then cut -- matches common engrave-then-cut practice; the
-piece hasn't separated from the stock yet when the etch pass runs, so
-alignment is trivial).
+with no etch profile fails loudly instead of gouging. Combine with a
+normal cut pass by emitting both and concatenating (etch first, then cut
+-- matches common engrave-then-cut practice; the piece hasn't separated
+from the stock yet when the etch pass runs, so alignment is trivial).
+Concatenate with `emitter.combine_passes()` (§13.11), never naive string
+concat.
 
-`laser_materials.yaml` gained an optional `etch:` block per material
-(only `plywood_baltic_birch_3mm` has one so far: 20% power / 2500mm/min /
-1 pass) explicitly marked **UNVERIFIED** -- nobody has cut a real test
-piece with these numbers. Scale down from the cut setting toward "visible
-light score, no smoke, nowhere near cut depth," the same empirical
-process every other number in that file went through. Score a scrap
-corner before trusting a real part.
+**Per-stroke warmup wiggle, linear power model (§13.12).** Every etch
+stroke gets a `warmup_wiggle()` lead-in (fwd half / back to start, same
+mechanism as the cut pass), sized from a linear ramp-vs-power model:
+`ramp_ms = WARMUP_MS * (power_percent/100)`. A 25% etch's lead-in is a
+quarter of the 1000ms/full-power ramp (~250ms, ~2mm at typical etch
+feeds) rather than either the full 1s or nothing. A fused chain (already
+touching strokes joined by `_fuse_touching_chains`) has one true start
+and gets one wiggle, not one per original stroke. Strokes are NEVER
+re-traced/backtracked to avoid a wiggle (no `max_backtrack_ms`-style
+logic in the etch path) -- retracing an already-etched line would
+double-etch and visibly darken it unevenly, unlike a cut where retracing
+the same kerf is invisible.
+
+`laser_materials.yaml` gained an optional `etch:` block per material.
+`plywood_baltic_birch_3mm`'s is **calibrated** (§13.10: 25% power /
+2500mm/min / 1 pass, from a real scrap grid test) -- any other
+material's `etch:` block is still an unverified starting guess until it
+gets the same treatment. Score a scrap corner before trusting a real
+part.
 
 ### 13.4 `lint_gcode(..., is_etch=True)`
 The existing G-code checker's `shuttle`/`aliasing`/`rim_not_last` classes
@@ -972,3 +980,35 @@ over. `laser_materials.yaml`'s `etch:` block for that material is now a
 tested value, not a starting guess -- every etch pass generated from here
 on for this material uses it. Other materials' `etch:` blocks (should any
 get added) still need their own scrap test before being trusted.
+
+### 13.11 Fixed: duplicate `$32=1` in combined etch+cut files
+Every combined etch+cut file delivered earlier in this project used naive
+string concatenation of two full `_header()`-built programs (etch, then
+cut), which duplicated the ENTIRE `_PREAMBLE` mid-file -- including
+`$32=1`, a GRBL **settings write**, not a motion command, landing where a
+sender expects ordinary G-code. This is the most likely cause of a real
+physical run stalling partway through on the 175mm 2-up PLANET job. Fixed
+with a new `emitter.combine_passes(*gcodes)`: keeps the first program's
+preamble, strips every subsequent program's `$32=1`/`G21`/`G90`/`M5`/`G0
+X0 Y0` block (keeping its descriptive header comments). Verified on the
+actual broken file's regenerated equivalent: `$32=1` count went from 2 to
+1. This is now the required way to concatenate any two emitted programs
+-- never `a + b` string concat.
+
+### 13.12 Etch warmup wiggle, linear power model
+Alex, after a physical scrap-piece photo showed the etched "p" ring's
+outer circle visibly faint for the first stretch after the seam (cold
+diode start, same effect §12.1 documented for cuts): "treat the warmup
+time as linear and implement the wiggle behavior for etching too. But it
+always must wiggle every start, rather than 'follow-through' on loop cuts
+or retracing already-etched areas to avoid a warmup wiggle." Implemented
+in `emit_etch_gcode()` (§13.3): `ramp_ms = WARMUP_MS * (power_percent /
+100)` (linear, not the fixed full-power 1000ms), `lead_in_mm` from that
+at the etch feed, and every stroke gets `warmup_wiggle()` before its real
+path -- mirroring `emit_cut_gcode_full()`'s per-chain pattern (including
+the short-stub fallback to a single out-and-back when a stroke is shorter
+than half the lead-in). No backtrack/follow-through re-tracing was added
+or exists in the etch path, matching the "always wiggle every start"
+requirement. `_fuse_touching_chains()` still runs first, so genuinely
+continuous strokes get exactly one wiggle at their one true start, not
+one per original disconnected polyline segment.

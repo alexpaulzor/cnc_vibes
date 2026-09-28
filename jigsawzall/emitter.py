@@ -292,10 +292,15 @@ def emit_etch_gcode(
     not silently defaulted from the cut settings, which would gouge instead
     of score). See laser_materials.yaml's `etch:` schema note.
 
-    No per-stroke warmup lead-in (hundreds of short strokes make that
-    impractically slow) -- the first ~1mm of each stroke may come in faint
-    while the diode ramps. Chains are ordered by nearest-neighbor and fused
-    where they already touch, same as the cut emitters, to cut down on
+    Every stroke gets its own warmup wiggle (fwd half / back to start, same
+    pattern as the cut emitters) -- the diode's cold-start ramp is assumed
+    LINEAR in power (ramp_ms_at_pct = WARMUP_MS * pct/100), so a shallow 25%
+    etch gets a much shorter lead-in than a 100% cut, not zero. Unlike the
+    cut pass, strokes are NEVER re-traced/backtracked to avoid a wiggle --
+    that would double-etch an already-scored line and darken it unevenly.
+    Chains are ordered by nearest-neighbor and fused where they already
+    touch (a fused chain has one true start, so it gets one wiggle, not one
+    per original stroke), same as the cut emitters, to cut down on
     lift/re-fire count."""
     if "etch" not in material:
         raise SystemExit(
@@ -309,6 +314,10 @@ def emit_etch_gcode(
     feed = feed_override if feed_override is not None else etch["feed_mm_per_min"]
     passes = etch.get("passes", 1)
     on = "M3" if mode == "static" else "M4"
+    # Linear warmup model: ramp time scales with power, so a shallow etch's
+    # cold-start lead-in is proportionally shorter than a full-power cut's.
+    ramp_ms = WARMUP_MS * (pct / 100.0)
+    lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
 
     chains = [
         [img_to_machine_mm(x, y, cfg) for x, y in s] for s in strokes_px if len(s) >= 2
@@ -324,18 +333,34 @@ def emit_etch_gcode(
         "mark only",
         f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test "
         "first (see laser_materials.yaml)",
-        f"{len(chains)} strokes, no per-stroke warmup lead-in",
+        f"{len(chains)} strokes",
     ]
+    if lead_in_mm > 0:
+        extra.append(
+            f"warmup: linear model, {ramp_ms:.0f}ms = {lead_in_mm:.2f}mm at "
+            f"F{feed} ({pct}% of the {WARMUP_MS:.0f}ms full-power ramp) -- "
+            "EVERY stroke wiggles fwd half / back to start first, no "
+            "backtrack/follow-through re-tracing (would double-etch)"
+        )
     lines = _header(
         title=f"ETCH: {title}", material_id=material["id"], extra=extra, mode=mode
     )
     for i, pts in enumerate(chains, start=1):
+        warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
+        path_len = sum(
+            math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])
+        )
+        if path_len < lead_in_mm / 2:
+            warm = list(pts[1:]) + list(reversed(pts))[1:]
         x0, y0 = pts[0]
         lines.append(f"; --- etch stroke {i} ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")
         for pass_n in range(passes):
+            if pass_n == 0 and warm:
+                for x, y in warm:
+                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
             seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
             for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")

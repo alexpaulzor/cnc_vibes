@@ -64,11 +64,11 @@
       picked by inspection as the sweet spot: clearly visible medium-brown
       contrast, no smoke, not approaching cut depth. 30% showed diminishing
       returns over 25% (not meaningfully darker, just more energy spent),
-      10-15% too faint to rely on once painted over. No warmup lead-in is
-      applied per etch stroke (hundreds of short disconnected strokes make
-      a per-stroke warmup impractically slow) -- expect the first ~1mm of
-      each stroke to start faint before reaching full power; acceptable
-      for a decorative/orientation mark, unlike a structural cut.
+      10-15% too faint to rely on once painted over. Every etch stroke gets
+      its own warmup wiggle, scaled linearly from the 1s full-power ramp
+      (jigsawzall/emitter.py WARMUP_MS) by this profile's power_percent --
+      at 25% that's a ~250ms / ~2mm lead-in, not the full 1s/8.3mm a 100%
+      cut needs.
 
 - id: plywood_baltic_birch_6mm
   family: wood
