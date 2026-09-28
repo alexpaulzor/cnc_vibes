@@ -891,3 +891,59 @@ ships.
 real puzzle -- once Alex reports back a good calibration swatch, update
 `laser_materials.yaml`'s `etch:` block and this becomes a real, tested
 value instead of a starting guess.
+
+### 13.9 How small can PLANET go? (4-up / 2-up on a 300mm panel)
+
+Alex asked for the smallest diameter that still avoids fragile tabs,
+ideally fitting 4 discs per 300mm square panel (2 is an acceptable
+fallback). Swept `diameter_mm` from 145 down to 75, tabs held EXACTLY at
+`MIN_PROVEN_TAB_STEM_PX`/`_R_PX` (22px/11px, §11.4/§11.5) with
+`distinct_tabs=False` -- its smallest class (0.85x) would otherwise push
+an already-floor-sized tab below the proven minimum, a real bug caught by
+`lint_tab_hardware` itself on the first sweep attempt.
+
+**First finding: the real bottleneck isn't tab geometry, it's the traced
+letterforms' own stroke width.** The delivered 290mm design's `rim_mm`/
+`hub_ring_min_mm` etc. are absolute-mm values tuned for that size; naively
+scaling them down proportionally with diameter breaks two different ways
+that both trace back to the SAME cause -- those margins need to stay
+closer to fixed (not shrink with diameter), because they exist to fit a
+FIXED-size tab (the proven floor doesn't get smaller just because the
+disc does):
+- Scaled proportionally, `hub_r_min_mm`/`min_gap_mm`/etc default to
+  values tuned for 290mm and become infeasible below ~125mm (`fit_ring`
+  returns `ok=False`) well before tab hardware is actually the problem.
+- Fixed at `rim_mm=18, hub_ring_min_mm=20` (vs. the 290mm design's 27/30
+  -- notably NOT scaled down by the same 140/290 ratio) `min_gap_mm`
+  derived from the actual tab length in play (`(tab_stem_px + 2*tab_r_px)
+  /ppm + 2mm` clearance, ~11mm at the proven floor, vs. the default
+  14mm tuned for the larger default tabs) rather than the disc: seams get
+  enough absolute room to fit a tab regardless of how small the disc is,
+  **down to where the traced glyphs themselves run out of stroke width**
+  -- confirmed by a parallel morphological-opening sweep (erode-then-
+  dilate by increasing radii, find the largest radius that doesn't shrink
+  a glyph's area by >3%) measuring the thinnest stroke across all seven
+  traced glyphs at each candidate cap height. Below `cap_mm≈18` (the
+  existing `cap_h_min_mm` floor) the thinnest stroke ("t") drops under
+  1.5mm -- fragile in 3mm ply regardless of anything tab-related. This is
+  a property of the ACTUAL brand font (traced faithfully, not a bold
+  placeholder) -- §13.7 already flagged this tradeoff in the abstract;
+  this sweep puts a real number on it.
+
+**Two real candidates**, both `rim_mm=18, hub_ring_min_mm=20,
+hub_r_min_mm=11, hub_arc_mm=20, target_w_mm=40, distinct_tabs=False`,
+tabs at the proven floor:
+
+| | diameter | cap height | pieces | no_tab | min letter stroke | fits |
+|---|---|---|---|---|---|---|
+| 4-up | 140mm | 21mm | 25 | 3 | ~1.6mm | 2x2, 280mm across, 20mm total margin in 300mm |
+| 2-up | 175mm | 38mm | 30 | 8 (unswept) | ~3.0mm | diagonal packing, the max 2 circles fit in a 300mm square |
+
+4-up's letter strokes are thinner than anything cut so far in this
+project (the 290mm/1-up delivery measures ~4.6mm at its thinnest by the
+same method) -- workable, but a real fragility risk specific to this
+font, worth its own scrap confirmation separate from the etch power/feed
+test. 2-up's margins are back in the same range as every prior delivery.
+**Waiting on Alex's choice before running a full seed sweep for a clean
+final candidate at whichever size he picks** -- neither 140mm nor 175mm
+above has been screened past seed 1.
