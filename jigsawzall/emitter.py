@@ -108,6 +108,31 @@ _PREAMBLE = (
 )
 
 
+def combine_passes(*gcodes: str) -> str:
+    """Concatenate multiple full G-code programs (each built by _header(),
+    so each carries its own copy of _PREAMBLE) into ONE program: keeps the
+    first program's preamble, strips every subsequent one's $32=1/G21/G90/
+    M5/G0-X0Y0 block (its descriptive comments above that block are kept).
+
+    $32=1 is a GRBL SETTINGS write, not a motion command -- unlike G21/G90/
+    M5/G0 (harmless if repeated), a $-command appearing mid-stream is not
+    normal G-code-file content, and at least one real sender stopped a job
+    right after the etch pass because of exactly this: the cut pass's own
+    header re-issued $32=1 partway through the combined file. Always use
+    this instead of naive string concatenation when combining an etch pass
+    with a cut pass (or any two _header()-built programs)."""
+    preamble_block = "\n".join(_PREAMBLE[:-1])  # drop the trailing blank line
+    parts = [gcodes[0].rstrip()]
+    for g in gcodes[1:]:
+        g = g.rstrip()
+        idx = g.find(preamble_block)
+        if idx != -1:
+            end = idx + len(preamble_block)
+            g = g[:idx].rstrip() + "\n\n" + g[end:].lstrip("\n")
+        parts.append(g)
+    return "\n\n".join(parts) + "\n"
+
+
 def _header(
     title: str,
     material_id: str,
