@@ -28,7 +28,7 @@ never need spotting by eye again.
 import math
 import re
 
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -103,6 +103,7 @@ def lint_gcode(
     alias_run_len: int = 4,
     alias_angle_deg: float = 20.0,
     alias_seg_mm: float = 1.2,
+    is_etch: bool = False,
 ) -> GcodeReport:
     """Parse emitted G-code and flag every defect class seen on a real cut:
 
@@ -123,6 +124,15 @@ def lint_gcode(
     - rim_not_last: for a disc/framed ring (diameter_mm given), some other
       path draws material after the rim/frame's own final cut -- the puzzle
       would separate from the stock before the job finishes.
+
+    `is_etch=True` for a shallow non-cutting score pass (emit_etch_gcode):
+    shuttle/aliasing report at "info" instead of "defect" -- a jagged
+    coastline or decorative curve legitimately reverses direction a lot,
+    and unlike a through-cut there's no burn-through/stall risk from
+    dwelling on one spot at 20% power. rim_not_last is skipped entirely --
+    an etch pass has no rim/frame-last ordering requirement, nothing
+    separates from the stock. out_of_bounds and short_segment still apply
+    (machine-safety and G-code quality concerns either way).
     """
     paths = _parse_paths(gcode)
     rep = GcodeReport(n_paths=len(paths))
@@ -193,7 +203,7 @@ def lint_gcode(
                     rep.findings.append(
                         GcodeFinding(
                             "shuttle",
-                            "defect",
+                            "info" if is_etch else "defect",
                             pi,
                             b,
                             f"{run}+ back-and-forth moves in place at this point "
@@ -271,7 +281,7 @@ def lint_gcode(
                         rep.findings.append(
                             GcodeFinding(
                                 "aliasing",
-                                "defect",
+                                "info" if is_etch else "defect",
                                 pi,
                                 b0,
                                 f"{zz}+ alternating short-segment turns near here "
@@ -301,7 +311,12 @@ def lint_gcode(
                         )
                         break
 
-    if C is not None and rim_last_seen_at is not None and rim_last_seen_at != len(paths) - 1:
+    if (
+        not is_etch
+        and C is not None
+        and rim_last_seen_at is not None
+        and rim_last_seen_at != len(paths) - 1
+    ):
         rep.findings.append(
             GcodeFinding(
                 "rim_not_last",
@@ -498,6 +513,32 @@ def lint_pieces(pieces, cfg, panel, seams=None, center_medallion="_unset") -> li
                 )
     if center_medallion != "_unset":
         R._center_medallion = orig_medallion
+    return findings
+
+
+def lint_etch_coverage(pieces, strokes) -> list:
+    """The point of an etched orientation mark (RING_SPEC.md, "etch design
+    touches every piece") is defeated if even one piece comes out blank --
+    verify it rather than trust the design by eye. `strokes` is a list of
+    point-lists in the same image-px frame as piece polygons (e.g. from
+    globe_etch.build_globe(), plus ensure_full_coverage()'s patches --
+    check AFTER patching, this reports what actually failed to patch)."""
+    stroke_lines = [LineString(s) for s in strokes if len(s) >= 2]
+    covered = unary_union(stroke_lines) if stroke_lines else None
+    findings = []
+    for p in pieces:
+        poly = p["polygon"]
+        if covered is None or not poly.intersects(covered):
+            cen = poly.representative_point()
+            findings.append(
+                PieceFinding(
+                    "no_etch",
+                    p.get("serial"),
+                    (cen.x, cen.y),
+                    "no etch stroke crosses this piece -- its up/down side "
+                    "won't be identifiable by the etched mark alone",
+                )
+            )
     return findings
 
 

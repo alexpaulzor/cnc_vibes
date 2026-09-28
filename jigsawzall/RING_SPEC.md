@@ -673,3 +673,117 @@ from accepting a mismatched bulb, or whether the classes need to be
 pushed further apart (revisit `TAB_SIZE_CLASSES` after a real assembly
 test, not before -- this is exactly the kind of number that looked fine
 on screen before, per §11.4's own history).
+
+## 13. Etched orientation/decorative patterns (PLANET, globe ornament)
+
+New for the PLANET puzzle (Alex works at Planet Labs, a satellite imagery
+company). Two asks combined into one feature:
+
+1. A **generic orientation problem**: shuffled loose pieces give no way to
+   tell "which side is up" before painting. Fix: etch (shallow, non-cutting
+   score) some design that's guaranteed to touch every piece.
+2. For PLANET specifically: the etched design IS a world map -- an
+   orthographic (satellite-view) globe with coastlines + lat/lon graticule
+   -- doubling as decoration and as the orientation guarantee, since a
+   full-disc design naturally crosses nearly every piece.
+
+### 13.1 `scripts/globe_etch.py` -- orthographic globe line art
+`build_globe(lon0, lat0, R, cx, cy, coastlines=None)` returns a list of
+open polyline "strokes" (point lists, same image-px frame as everything
+else) for the visible hemisphere centered on `(lon0, lat0)`: coastlines
+(`project_ring`, clipped at the horizon by checking `cosc = sin(lat0)*
+sin(lat) + cos(lat0)*cos(lat)*cos(lon-lon0) >= 0` per densified vertex,
+breaking the polyline wherever visibility flips) plus a 30°/30° lat/lon
+graticule and the limb (horizon circle) itself. `R` should be the full
+panel radius (not just the hub) so the design spans rim to center and
+actually has a chance of crossing every piece, not just the hub disc's.
+
+Coastline source: GSHHS crude resolution (`apt install
+python-cartopy-data`, then `geopandas.read_file(..., on_invalid="fix")` --
+needs `OGR_GEOMETRY_ACCEPT_UNCLOSED_RING=YES` in the environment, some
+crude-resolution rings aren't quite closed). **Cached** as
+`data/gshhs_coastlines_crude.json` (~140KB, committed) so regenerating a
+puzzle never needs geopandas/cartopy-data installed again -- only
+`scripts/globe_etch.py --refresh-cache` does, e.g. to switch to a finer
+resolution later. Visually verified at seed-independent standalone scale
+before wiring into the ring: a genuine "satellite view of Earth" look,
+recognizable continents, no visual defects from the crude resolution at
+puzzle scale (fine detail would be illegible at this size anyway).
+
+**Default view: centered near San Francisco** (`lon0=-122.4, lat0=37.7`,
+Planet Labs HQ) as a small deliberate nod -- easy to change, it's one
+function call.
+
+### 13.2 Coverage guarantee: `ensure_full_coverage(pieces, strokes)`
+A sparse line-art design (coastlines + a 30°-step graticule) can still
+miss an occasional piece by chance -- verified on the first PLANET
+candidate: 1 piece out of 51 landed in a gap with no coastline or grid
+line through it. `ensure_full_coverage()` finds every piece the given
+strokes don't intersect and adds one short tick through its centroid,
+along its own longest axis (via `minimum_rotated_rectangle`, so it reads
+as a plausible continuation of nearby line-work rather than a random
+mark) -- generic, not globe-specific, so any future etch design can reuse
+it as a correctness backstop rather than hand-tuning line density per
+puzzle. `ring_lint.lint_etch_coverage(pieces, strokes)` is the
+corresponding standing check (reports a `no_etch` finding for anything
+still missed after patching) -- run it the same way as every other lint
+check, never trust an etch design by eye.
+
+### 13.3 New G-code capability: `emitter.emit_etch_gcode()`
+A shallow, non-cutting score pass, structurally similar to
+`emit_cut_gcode_simple` (nearest-neighbor chain ordering via the existing
+`_order_chains_min_travel`/`_fuse_touching_chains`) but for **open**
+polylines with no tab/kerf concerns at all -- just line-follow at much
+lower power. Reads `material["etch"]` (power_percent/feed_mm_per_min/
+passes) rather than silently scaling down the cut settings, so a material
+with no etch profile fails loudly instead of gouging. **No per-stroke
+warmup lead-in** -- hundreds of short disconnected strokes make a full
+out-and-back warmup per stroke impractically slow, so the first ~1mm of
+each stroke may come in faint while the diode ramps. Acceptable for a
+decorative/orientation mark in a way it would NOT be for a structural cut
+(§12.1's whole rim-gap investigation was about exactly this risk on a
+CUT). Combine with a normal cut pass by emitting both and concatenating
+(etch first, then cut -- matches common engrave-then-cut practice; the
+piece hasn't separated from the stock yet when the etch pass runs, so
+alignment is trivial).
+
+`laser_materials.yaml` gained an optional `etch:` block per material
+(only `plywood_baltic_birch_3mm` has one so far: 20% power / 2500mm/min /
+1 pass) explicitly marked **UNVERIFIED** -- nobody has cut a real test
+piece with these numbers. Scale down from the cut setting toward "visible
+light score, no smoke, nowhere near cut depth," the same empirical
+process every other number in that file went through. Score a scrap
+corner before trusting a real part.
+
+### 13.4 `lint_gcode(..., is_etch=True)`
+The existing G-code checker's `shuttle`/`aliasing`/`rim_not_last` classes
+all assume CUT semantics and produced heavy false-positive noise the
+first time they were run on etch G-code (59 "defects" on the PLANET
+candidate, all illusory): a jagged coastline or a decorative curve
+legitimately reverses direction constantly (that's what a coastline
+looks like), and unlike a through-cut there's no burn-through/stall risk
+from dwelling at 20% power, so `shuttle`/`aliasing` report as `"info"`
+instead of `"defect"` when `is_etch=True`. `rim_not_last` is skipped
+entirely -- an etch pass has no rim/frame-last ordering requirement,
+nothing separates from the stock partway through. `out_of_bounds` and
+`short_segment` still apply at full severity (machine-safety / G-code
+quality concerns regardless of etch vs. cut). Verified: 0 real defects
+on the PLANET etch pass after this fix, versus 59 false ones before it --
+same "verify before trusting a new finding" discipline as §11.3/§11.6,
+just applied to a genuinely new kind of G-code this checker had never
+seen before.
+
+### 13.5 Globe ornament (`ornament="globe"`)
+A plain filled disc (like `"dot"`, slightly larger — `0.30*cap_h` radius),
+**deliberately not a reproduction of Planet Labs' actual logo** -- a
+generic "planet" circle, not anyone's brand mark. Its "globe" look comes
+for free from the background etch overlay's graticule/coastline lines
+crossing over its placed position, not from special ornament geometry.
+
+### 13.6 Status
+Prototyped and visually verified (globe projection quality, piece-render
+overlay, 100% coverage after patching, 0 real G-code defects on both
+passes) on a single PLANET candidate. **Not yet**: a full seed sweep to
+pick a clean final candidate (parallel to every other delivered ring so
+far -- in progress), and no physical test cut of the etch pass at all --
+the power/feed numbers in §13.3 are a starting guess, not a result.

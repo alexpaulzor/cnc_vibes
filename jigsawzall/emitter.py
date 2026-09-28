@@ -245,6 +245,82 @@ def emit_cut_gcode_simple(
 
 
 # ---------------------------------------------------------------------------
+# Etch GCode: shallow non-cutting score pass (orientation / decorative marks)
+# ---------------------------------------------------------------------------
+
+
+def emit_etch_gcode(
+    strokes_px: list[list[tuple[float, float]]],
+    material: dict,
+    cfg: PuzzleConfig,
+    title: str,
+    mode: str = "static",
+    feed_override: int | None = None,
+    power_percent: float | None = None,
+    min_segment_mm: float = 0.0,
+) -> str:
+    """A shallow, non-cutting score pass tracing `strokes_px` (open
+    polylines, image px, e.g. from scripts/globe_etch.py) -- NOT piece
+    boundaries, no tabs/kerf considerations, just line-follow. Reads
+    material["etch"] for power/feed (falls back to a hard failure if the
+    material has no etch profile -- these numbers are meant to be looked at,
+    not silently defaulted from the cut settings, which would gouge instead
+    of score). See laser_materials.yaml's `etch:` schema note.
+
+    No per-stroke warmup lead-in (hundreds of short strokes make that
+    impractically slow) -- the first ~1mm of each stroke may come in faint
+    while the diode ramps. Chains are ordered by nearest-neighbor and fused
+    where they already touch, same as the cut emitters, to cut down on
+    lift/re-fire count."""
+    if "etch" not in material:
+        raise SystemExit(
+            f"material {material.get('id')!r} has no etch: profile -- "
+            "add one to laser_materials.yaml (see the etch: schema note) "
+            "before emitting an etch pass for it"
+        )
+    etch = material["etch"]
+    pct = power_percent if power_percent is not None else etch["power_percent"]
+    power_s = int(round(pct * 10))
+    feed = feed_override if feed_override is not None else etch["feed_mm_per_min"]
+    passes = etch.get("passes", 1)
+    on = "M3" if mode == "static" else "M4"
+
+    chains = [
+        [img_to_machine_mm(x, y, cfg) for x, y in s] for s in strokes_px if len(s) >= 2
+    ]
+    chains = [decimate(c, min_segment_mm) for c in chains]
+    chains = [c for c in chains if len(c) >= 2]
+    start = (0.0, 0.0)
+    chains = _order_chains_min_travel(chains, start)
+    chains = _fuse_touching_chains(chains)
+
+    extra = [
+        "SHALLOW ETCH PASS -- does not cut through, orientation/decorative "
+        "mark only",
+        f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test "
+        "first (see laser_materials.yaml)",
+        f"{len(chains)} strokes, no per-stroke warmup lead-in",
+    ]
+    lines = _header(
+        title=f"ETCH: {title}", material_id=material["id"], extra=extra, mode=mode
+    )
+    for i, pts in enumerate(chains, start=1):
+        x0, y0 = pts[0]
+        lines.append(f"; --- etch stroke {i} ---")
+        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
+        lines.append(f"{on} S{power_s}")
+        lines.append(f"F{feed}")
+        for pass_n in range(passes):
+            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
+            for x, y in seq:
+                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        lines.append("M5")
+        lines.append("")
+    lines += ["G0 X0 Y0", ""]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Cut GCode: edge-dedup with containment-aware ordering — for full puzzle
 # ---------------------------------------------------------------------------
 

@@ -28,6 +28,14 @@
 #                      cut-through control (slower = deeper)
 #     passes           cut-through passes (1 = single pass; more = deeper)
 #     notes            free-form safety / quality / technique notes
+#   etch (optional):   a SHALLOW, non-cutting score pass (e.g. an orientation
+#                      mark or decorative line design) -- much lower power
+#                      and/or higher feed than `laser`, same static-M3 /
+#                      single-pass conventions. UNVERIFIED where present:
+#                      nobody has cut a real test piece with these numbers
+#                      yet. Always score a scrap corner first and adjust
+#                      before trusting a real part (jigsawzall/scripts/
+#                      globe_etch.py first user, RING_SPEC.md).
 
 - id: plywood_baltic_birch_3mm
   family: wood
@@ -44,6 +52,21 @@
       default is 500 for margin. Static M3 at 100% with the 1s out-and-back warmup
       lead-in handles the cold-start zone. Springier than MDF — may flex/curl more
       readily. Drop feed or add a pass only for stubborn/thicker stock.
+  etch:
+    power_percent: 20
+    feed_mm_per_min: 2500
+    passes: 1
+    notes: |
+      UNVERIFIED STARTING GUESS, not calibrated on this machine -- scale down
+      from the cut setting (100%/500) toward "visible light-brown score, no
+      smoke plume, doesn't approach cut depth" rather than trusting these
+      numbers outright. Score a few lines on a scrap corner first: too dark/
+      deep, drop power in 5% steps; too faint to see, raise power before
+      slowing feed (slowing first risks tipping into a cut). No warmup
+      lead-in is applied per etch stroke (hundreds of short disconnected
+      strokes make a per-stroke warmup impractically slow) -- expect the
+      first ~1mm of each stroke to start faint before reaching full power;
+      acceptable for a decorative/orientation mark, unlike a structural cut.
 
 - id: plywood_baltic_birch_6mm
   family: wood

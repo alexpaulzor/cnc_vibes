@@ -121,6 +121,13 @@ def ornament_local(kind, cap_h):
     cy = -cap_h / 2
     if kind == "dot":
         return Point(0, cy).buffer(0.22 * cap_h, quad_segs=32)
+    if kind == "globe":
+        # A plain filled disc -- deliberately NOT a copy of anyone's brand
+        # mark, just a generic "planet" silhouette. The graticule/coastline
+        # look comes from the etched background overlay (globe_etch.py)
+        # crossing over it at its final placed position, not from special
+        # ornament geometry here.
+        return Point(0, cy).buffer(0.30 * cap_h, quad_segs=48)
     if kind == "star":
         pts = []
         for k in range(10):
