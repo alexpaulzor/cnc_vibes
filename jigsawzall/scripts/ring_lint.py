@@ -236,10 +236,13 @@ def lint_gcode(
         ]
         zz = 0
         last_sign = 0
+        run_start = None
+        run_len = 0.0
         for k in range(1, len(segs) - 1):
             (a0, a1, la), (b0, b1, lb) = segs[k - 1], segs[k]
             if la > alias_seg_mm or lb > alias_seg_mm or la < 1e-6 or lb < 1e-6:
                 zz = 0
+                run_start = None
                 continue
             v1 = (a1[0] - a0[0], a1[1] - a0[1])
             v2 = (b1[0] - b0[0], b1[1] - b0[1])
@@ -248,19 +251,36 @@ def lint_gcode(
             ang = math.degrees(math.atan2(abs(cross), dot))
             sign = 1 if cross > 0 else -1
             if ang > alias_angle_deg and sign != last_sign and last_sign != 0:
+                if zz == 0:
+                    run_start = a0
+                    run_len = la
                 zz += 1
+                run_len += lb
                 if zz == alias_run_len:
-                    rep.findings.append(
-                        GcodeFinding(
-                            "aliasing",
-                            "defect",
-                            pi,
-                            b0,
-                            f"{zz}+ alternating short-segment turns near here",
+                    # A run of alternating short turns is also exactly what a
+                    # smoothly curving outline looks like at fine sampling
+                    # (an "S", a rounded tab bulb -- more of these now that
+                    # letters can be genuinely round, not just Arial Black's
+                    # straighter strokes). The real flicker signature is
+                    # little NET progress despite lots of local movement;
+                    # a real curve keeps advancing. Only flag when net
+                    # displacement over the run is small relative to the
+                    # path actually traveled.
+                    net = math.hypot(b0[0] - run_start[0], b0[1] - run_start[1])
+                    if run_len > 1e-9 and net / run_len < 0.4:
+                        rep.findings.append(
+                            GcodeFinding(
+                                "aliasing",
+                                "defect",
+                                pi,
+                                b0,
+                                f"{zz}+ alternating short-segment turns near here "
+                                f"(net {net:.2f}mm over {run_len:.2f}mm traveled)",
+                            )
                         )
-                    )
             else:
                 zz = 0
+                run_start = None
             last_sign = sign
 
     if xs:

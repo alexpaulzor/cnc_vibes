@@ -403,6 +403,19 @@ guessing:
 - A piece flagged "oversized" or "sliver" may be the frame (huge by design)
   or a letter counter (small by design, R4/A4) — both need exemption from
   checks written for ordinary background pieces.
+- A run of 4+ alternating short-segment turns (`aliasing`) may be a
+  genuinely smooth curve finely sampled -- an "S", a rounded tab bulb --
+  not a stalled zigzag. Found on the first round-font (Quicksand Bold)
+  candidate: an "S"-shaped stretch of real letter outline tripped the old
+  heuristic, which only looked at local turn angles with no notion of
+  whether the path was actually GOING anywhere. Fixed by requiring low net
+  displacement over the run relative to the path length traveled (< 0.4
+  ratio) before flagging -- a real flicker pattern covers a lot of path
+  length while barely moving; a curve keeps advancing. Expect MORE of this
+  class of false alarm now that letters can be genuinely round instead of
+  Arial Black's straighter strokes -- verify with a net-displacement check
+  (or by eye on the raw coordinates) before trusting any future aliasing
+  finding, the same way.
 When extending either checker, verify a new "defect" against raw G-code
 context or the piece geometry before trusting it, the same way — an
 unverified check that cries wolf is worse than no check.
