@@ -781,9 +781,13 @@ for free from the background etch overlay's graticule/coastline lines
 crossing over its placed position, not from special ornament geometry.
 
 ### 13.6 Status
-Prototyped and visually verified (globe projection quality, piece-render
-overlay, 100% coverage after patching, 0 real G-code defects on both
-passes) on a single PLANET candidate. **Not yet**: a full seed sweep to
-pick a clean final candidate (parallel to every other delivered ring so
-far -- in progress), and no physical test cut of the etch pass at all --
-the power/feed numbers in §13.3 are a starting guess, not a result.
+Delivered: PLANET, 290mm disc, no frame, round font, distinct tabs, globe
+ornament, globe etch overlay centered near San Francisco. Seed-swept (8
+seeds, `rim_mm=27, hub_ring_min_mm=30`) to seed 3: 0 piece findings
+(oversized/elongated/no_interlock/no_tab all clear), safe tab hardware
+at the smallest distinct-tab class, 0 real G-code defects on both the
+etch and cut passes, 100% etch coverage (1 auto-patched tick out of 49
+pieces). Both F350 1-pass and F500 2-pass cut variants generated, etch
+pass prepended to each. **Not yet**: any physical test cut -- the etch
+power/feed numbers are still an unverified starting guess (§13.3); the
+cut settings are the same proven values as every prior ring.
