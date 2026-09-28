@@ -34,6 +34,7 @@ happens in the emitter.
 from __future__ import annotations
 
 import math
+import pathlib
 import random
 import warnings
 from dataclasses import dataclass, field
@@ -620,11 +621,17 @@ def find_clear_tab_offset(
 # ---------------------------------------------------------------------------
 
 
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+
 _FONT_ALIASES = {
     "bold": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "black": "/System/Library/Fonts/Supplemental/Arial Black.ttf",
     "impact": "/System/Library/Fonts/Supplemental/Impact.ttf",
     "narrow": "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+    # Bundled in fonts/ (OFL-1.1, see fonts/Quicksand-OFL-LICENSE.txt) so a
+    # genuinely rounded face is available on every checkout, not just
+    # machines that happen to have it installed system-wide.
+    "round": str(_REPO_ROOT / "fonts" / "Quicksand-Bold.ttf"),
 }
 
 

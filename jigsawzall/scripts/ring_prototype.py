@@ -17,6 +17,7 @@ geometry.py / jigsaw.py. Render a sketch:
 
 import argparse
 import contextlib
+import hashlib
 import math
 import random
 import sys
@@ -58,7 +59,6 @@ class RingParams:
     ornament: str | None = "heart"  # None | "dot" | "heart" | "star"
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
-    letter_round_mm: float = 0.0  # fillet glyph corners (inside + out), like --letter-round-mm
     outline_smooth_px: float = 1.2
     # Tab / clearance sizing (defaults = the name-plate tabs). Small discs
     # (~140mm, 4-up on a 300mm panel) need scaled-down tabs: every seam must
@@ -77,6 +77,10 @@ class RingParams:
     # instead of dropping them and merging their pieces. Needed with a frame:
     # letter-top -> frame caps are too short for any tab.
     plain_caps: bool = False  # Douglas-Peucker on glyph outlines (px) to kill pixel stairs
+    # Vary each tab's bulb/neck size by a small, deterministic-per-edge amount
+    # (see TAB_SIZE_CLASSES) so loose pieces don't all interchange -- every
+    # class still stays within lint_tab_hardware's proven-safe range.
+    distinct_tabs: bool = True
 
 
 # --------------------------------------------------------------------------
@@ -205,16 +209,7 @@ def fit_ring(words, rp: RingParams, ppm):
             # micro-moves and near-reversals that stall GRBL and flicker the
             # laser. Simplify in the local (unrotated) frame first so rotated
             # edges are clean lines.
-            g = glyph_local(c, font).simplify(rp.outline_smooth_px)
-            if rp.letter_round_mm > 0:
-                r = rp.letter_round_mm * ppm
-                g = (
-                    g.buffer(r, join_style=1)
-                    .buffer(-2 * r, join_style=1)
-                    .buffer(r, join_style=1)
-                    .simplify(0.25)
-                )
-            return g
+            return glyph_local(c, font).simplify(rp.outline_smooth_px)
 
         locs, labels = [], []
         for w in words:
@@ -619,7 +614,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
 
         with _oriented_oversized():
             surround, counters, st = assemble(
-                seams, letter_union, letters_solid, background, panel, cfg, C
+                seams, letter_union, letters_solid, background, panel, cfg, C,
+                distinct_tabs=rp.distinct_tabs,
             )
         sc = score(surround, panel, cfg) + (st["dropped"],)
         if best is None or sc < best[0]:
@@ -646,7 +642,29 @@ def _extend(pts, end, d):
     return [q] + pts if end == 0 else pts + [q]
 
 
-def assemble(seams, letter_union, letters_solid, background, panel, cfg, C):
+# Distinct-tab size classes (see RingParams.distinct_tabs, RING_SPEC.md
+# §12.2). Multipliers on the base tab_circle_r_px/tab_stem_w_px. Chosen so
+# even the smallest class clears ring_lint.MIN_PROVEN_TAB_STEM_PX/_R_PX with
+# margin at the proven 30px/15px default (0.85 -> 25.5px/12.75px, both above
+# the 22px/11px floor), and the largest is only a modest, likely-safe step
+# above the proven default -- not yet physically confirmed at 1.10x, so
+# don't push it further without a test cut.
+TAB_SIZE_CLASSES = (0.85, 1.0, 1.10)
+
+
+def _tab_size_class(pts):
+    """Deterministic size-class index for a seam, from its own endpoints.
+    Each seam is computed once (A1: shared edges are single-sourced) and
+    read by both neighboring pieces, so hashing the seam's own points is
+    enough to keep a tab and its matching socket consistent -- no need to
+    coordinate across pieces."""
+    a, b = pts[0], pts[-1]
+    key = f"{a[0]:.1f},{a[1]:.1f},{b[0]:.1f},{b[1]:.1f}".encode()
+    h = hashlib.md5(key).digest()
+    return TAB_SIZE_CLASSES[h[0] % len(TAB_SIZE_CLASSES)]
+
+
+def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True):
     ppm = cfg.px_per_mm
     st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
     min_gap = cfg.letter_clearance_px
@@ -700,10 +718,13 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C):
         chosen = None
         s["ncand"] = 0
         s["nconf"] = 0
-        for scale in (1.0, 0.85, 0.7):
+        base_class = _tab_size_class(s["pts"]) if distinct_tabs else 1.0
+        s["tab_class"] = base_class
+        for fallback in (1.0, 0.85, 0.7):
+            scale = base_class * fallback
             c2 = (
                 cfg
-                if scale >= 0.999
+                if scale >= 0.999 and scale <= 1.001
                 else replace(
                     cfg,
                     tab_circle_r_px=max(6, int(round(cfg.tab_circle_r_px * scale))),
@@ -917,7 +938,10 @@ def main():
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
     ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
     ap.add_argument("--font", default=None)
-    ap.add_argument("--letter-round-mm", type=float, default=0.0)
+    ap.add_argument(
+        "--no-distinct-tabs", action="store_true",
+        help="disable per-edge tab size variation, all tabs identical (old behavior)",
+    )
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
@@ -940,7 +964,7 @@ def main():
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
-        letter_round_mm=a.letter_round_mm,
+        distinct_tabs=not a.no_distinct_tabs,
     )
     words = [w.upper() for w in a.word.split("+") if w.strip()]
     tag = "-".join(words)

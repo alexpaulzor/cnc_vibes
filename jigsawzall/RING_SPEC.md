@@ -407,6 +407,35 @@ When extending either checker, verify a new "defect" against raw G-code
 context or the piece geometry before trusting it, the same way — an
 unverified check that cries wolf is worse than no check.
 
+### 11.6 "Rounder letters" means a different font, not a Minkowski sum
+`RingParams.letter_round_mm` (a `buffer(r).buffer(-2r).buffer(r)`
+close-then-open on the traced glyph outline, applied per letter) has been
+**removed** — the CLI flag, the field, and the code path. When Alex asked
+for rounder letters, the ask was a genuinely different typeface, not a
+morphological filleting pass over Arial Black's corners; the Minkowski
+approach also never looked right (the earlier "too bulbous" feedback on
+the banner's similar `letter_bold_mm`/`letter_round_mm` was the same
+category of problem). Alex also called it "vestigial," and it defaulted
+to 0 (unused) in every delivered candidate except the one experiment that
+prompted this feedback, so removing it outright (rather than leaving a
+dead opt-in) is the right call.
+
+In its place: `find_font()` in `geometry.py` now has a `"round"` font
+alias resolving to `fonts/Quicksand-Bold.ttf`, **bundled directly in the
+repo** (OFL-1.1, `fonts/Quicksand-OFL-LICENSE.txt`) rather than assumed to
+be present on whatever machine runs the generator — the existing Arial
+Black/Bold/DejaVu candidates in `find_font` are all absolute paths to
+fonts that happen to be installed on this container or a Mac, which
+doesn't help the actual cutting machine. Quicksand Bold was picked over
+Comfortaa Bold and Dosis ExtraBold (also apt-installed and compared side
+by side) for keeping the boldest, most closed stroke shapes of the three
+rounded options while still reading as visibly rounded — important since
+thin strokes are exactly what tends to fail in wood. Use it with
+`RingParams(font="round")` / `--font round`. Not yet re-benchmarked against
+the sizing table in §1 (cap height / min letter gap will differ slightly
+from Arial Black's metrics); re-run `fit_ring` sizing checks on real names
+before treating it as a drop-in default.
+
 ### 11.4 Tab-hardware regression (read this before ever tuning tab size)
 Chasing a lower dropped-tab count by shrinking `tab_r_px`/`tab_stem_px`
 produces pieces that render fine on screen but have a tab neck too narrow
@@ -524,29 +553,48 @@ corners specifically, which would point at cornering dwell rather than
 the warmup/closure mechanism above.
 
 ### 12.2 Every tab is identical -- any piece's tab fits any matching socket
-By design (A1/A2 in ALGORITHMS.md, load-bearing for correctness): a shared
-edge's tab is computed ONCE and reused by both neighbors, so a piece
-always fits its true partner. Nothing about that design makes a tab
-*distinctive* -- the same lollipop shape (fixed bulb radius, fixed neck
-width) repeats at every interior seam, so a piece's tab will just as
-happily nest into a stranger's matching socket. Alex has to sort loose
-pieces by wood grain to reassemble before painting.
+**Status: implemented, `scripts/ring_prototype.py`, not yet physically
+tested.** By design (A1/A2 in ALGORITHMS.md, load-bearing for
+correctness): a shared edge's tab is computed ONCE and reused by both
+neighbors, so a piece always fits its true partner. Nothing about that
+design made a tab *distinctive* -- the same lollipop shape (fixed bulb
+radius, fixed neck width) repeated at every interior seam, so a piece's
+tab would just as happily nest into a stranger's matching socket. Alex
+had to sort loose pieces by wood grain to reassemble before painting.
 
-**Proposed approach:** vary tab bulb radius and/or neck width by a small
-amount, DETERMINISTICALLY per edge (e.g. seeded from a hash of the edge's
-endpoint coordinates, computed once and read by both the piece that gets
-the bulb and the piece that gets the matching socket -- never re-derived
-independently per piece, which would break A1). A few discrete size
-classes (e.g. 3-4 steps) rather than a continuum: easier to reason about
-for both cut strength and for a person sorting pieces by feel/sight, and
-keeps every step inside the proven-safe tab range from §11.4
-(`lint_tab_hardware`'s `MIN_PROVEN_TAB_STEM_PX`/`_R_PX` -- note that check
-only has a floor today, not a ceiling; a size-class scheme would need one,
-derived the same way once some upper size is actually cut and confirmed
-still tab-shaped rather than a blob).
+**Implementation:** `RingParams.distinct_tabs: bool = True` (CLI:
+`--no-distinct-tabs` to turn it off). `TAB_SIZE_CLASSES = (0.85, 1.0,
+1.10)` -- multipliers on the base `tab_circle_r_px`/`tab_stem_w_px`.
+`_tab_size_class(pts)` hashes each seam's own two endpoints (MD5, first
+byte mod 3) to deterministically pick one of the three classes; since a
+shared edge's seam entry is computed exactly once and read by both
+neighboring pieces (A1), hashing the seam's own points is sufficient --
+no need to coordinate the choice across pieces separately. The choice
+feeds in as the STARTING point of the existing space-constrained
+shrink ladder in `assemble()` (previously `(1.0, 0.85, 0.7)` flat,
+now `(1.0, 0.85, 0.7) * base_class`), so a seam that can't fit its
+assigned class still falls back to smaller sizes exactly as before --
+distinctness never costs a dropped tab that would otherwise have fit.
 
-**Open question:** how much variation is enough to matter physically
-(stops a stranger's socket from accepting the bulb at all) without
-either (a) exceeding proven-safe tab dimensions at the large end, or
-(b) making the small end fragile again -- likely needs its own small
-physical test, the same way the tab-neck minimum did.
+**Safety margins (not yet cut):** at the proven 30px/15px (6mm/3mm)
+default, the small class is 25.5px/12.75px neck/bulb -- both comfortably
+above `MIN_PROVEN_TAB_STEM_PX`/`_R_PX` (22px/11px, §11.4) even before the
+shrink ladder's further fallback. The large class is 33px/16.5px, a
+modest ~10% step above the proven default; `lint_tab_hardware()` now
+takes an optional `min_class` parameter so a caller using distinct tabs
+can validate against the smallest class actually cut rather than the
+cfg's base value (`lint_tab_hardware(cfg, min_class=min(TAB_SIZE_CLASSES))`).
+Smoke-tested on NORA+BECS+ALEX (seed 11, no frame): tabs spread roughly
+evenly across all three classes, `lint_tab_hardware` clean at the
+smallest class, no new oversized/elongated/no_interlock findings.
+**Not yet on a physical cut** -- treat the same way §11.4 treats any
+untested tab dimension: fine to generate and preview, worth a real test
+cut before fully trusting the large class holds up and the small class
+is actually graspable by hand, not just clear of the lint floor.
+
+**Open question, now narrower:** whether a ~10-15% size spread is
+perceptible enough by feel/sight to meaningfully stop a stranger's socket
+from accepting a mismatched bulb, or whether the classes need to be
+pushed further apart (revisit `TAB_SIZE_CLASSES` after a real assembly
+test, not before -- this is exactly the kind of number that looked fine
+on screen before, per §11.4's own history).

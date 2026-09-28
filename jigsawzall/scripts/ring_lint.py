@@ -324,12 +324,19 @@ MIN_PROVEN_TAB_STEM_PX = 22.0
 MIN_PROVEN_TAB_R_PX = 11.0
 
 
-def lint_tab_hardware(cfg) -> list:
+def lint_tab_hardware(cfg, min_class: float = 1.0) -> list:
     """Check the config's tab hardware against MIN_PROVEN_TAB_*. Call this on
     every candidate BEFORE it's shown -- unlike lint_pieces, this doesn't need
-    a generated puzzle, just the cfg, so it can gate a whole tuning sweep."""
+    a generated puzzle, just the cfg, so it can gate a whole tuning sweep.
+
+    `min_class`: when distinct-tab size classes are in play (RingParams.
+    distinct_tabs, ring_prototype.TAB_SIZE_CLASSES), pass the SMALLEST class
+    multiplier here (e.g. 0.85) so the check validates the smallest tab that
+    will actually get cut, not just the cfg's base/default size."""
     findings = []
-    stem = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else cfg.tab_circle_r_px
+    base_stem = cfg.tab_stem_w_px if cfg.tab_stem_w_px is not None else cfg.tab_circle_r_px
+    stem = base_stem * min_class
+    r = cfg.tab_circle_r_px * min_class
     if stem < MIN_PROVEN_TAB_STEM_PX:
         findings.append(
             PieceFinding(
@@ -341,13 +348,13 @@ def lint_tab_hardware(cfg) -> list:
                 "snap off before or during assembly",
             )
         )
-    if cfg.tab_circle_r_px < MIN_PROVEN_TAB_R_PX:
+    if r < MIN_PROVEN_TAB_R_PX:
         findings.append(
             PieceFinding(
                 "narrow_tab_bulb",
                 None,
                 (0, 0),
-                f"tab bulb radius {cfg.tab_circle_r_px / cfg.px_per_mm:.1f}mm < "
+                f"tab bulb radius {r / cfg.px_per_mm:.1f}mm < "
                 f"proven-safe minimum {MIN_PROVEN_TAB_R_PX / cfg.px_per_mm:.1f}mm",
             )
         )
