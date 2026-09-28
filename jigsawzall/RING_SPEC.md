@@ -947,3 +947,28 @@ test. 2-up's margins are back in the same range as every prior delivery.
 **Waiting on Alex's choice before running a full seed sweep for a clean
 final candidate at whichever size he picks** -- neither 140mm nor 175mm
 above has been screened past seed 1.
+
+**Resolved: Alex picked 2-up (175mm).** Seed-swept (8 seeds) to seed 2:
+33 pieces, 6 interior merges only, 0 oversized/elongated, safe tab
+hardware, 0 real G-code defects, 100% etch coverage. Delivered.
+
+Also caught and fixed a real orientation bug on this candidate: the
+ornament's etched "p" was rotating WITH the ring (upside-down whenever
+the join lands in the bottom half, same as any letter) -- correct for a
+spelled letter (§2), wrong for a brand mark that isn't part of the word.
+Added `place_upright()` (translation-only placement -- the disc itself is
+a circle, so rotation never affected the physical piece, only the etched
+decoration) and used it for the ornament artwork specifically. Verified
+the ring stays exactly circular (must, being pure translation) and the
+"p" now reads upright regardless of ring position.
+
+### 13.10 Etch calibration: real numbers, not a guess
+Alex ran `scripts/etch_calibration.py`'s grid on scrap
+`plywood_baltic_birch_3mm` and picked **25% power / 2500mm/min** by
+inspection: clearly visible medium-brown contrast, no smoke, not
+approaching cut depth; 30% showed diminishing returns over 25% (no more
+visible, just more energy); 10-15% too faint to rely on once painted
+over. `laser_materials.yaml`'s `etch:` block for that material is now a
+tested value, not a starting guess -- every etch pass generated from here
+on for this material uses it. Other materials' `etch:` blocks (should any
+get added) still need their own scrap test before being trusted.

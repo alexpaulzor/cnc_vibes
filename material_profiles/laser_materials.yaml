@@ -31,11 +31,13 @@
 #   etch (optional):   a SHALLOW, non-cutting score pass (e.g. an orientation
 #                      mark or decorative line design) -- much lower power
 #                      and/or higher feed than `laser`, same static-M3 /
-#                      single-pass conventions. UNVERIFIED where present:
-#                      nobody has cut a real test piece with these numbers
-#                      yet. Always score a scrap corner first and adjust
-#                      before trusting a real part (jigsawzall/scripts/
-#                      globe_etch.py first user, RING_SPEC.md).
+#                      single-pass conventions. Verify on a fresh material
+#                      with scripts/etch_calibration.py (a self-labeled
+#                      power x feed grid) before trusting an entry's
+#                      numbers on a real part -- plywood_baltic_birch_3mm's
+#                      is calibrated this way; any other material's etch:
+#                      block is still an unverified starting guess until
+#                      it gets the same treatment (jigsawzall/RING_SPEC.md).
 
 - id: plywood_baltic_birch_3mm
   family: wood
@@ -53,20 +55,20 @@
       lead-in handles the cold-start zone. Springier than MDF — may flex/curl more
       readily. Drop feed or add a pass only for stubborn/thicker stock.
   etch:
-    power_percent: 20
+    power_percent: 25
     feed_mm_per_min: 2500
     passes: 1
     notes: |
-      UNVERIFIED STARTING GUESS, not calibrated on this machine -- scale down
-      from the cut setting (100%/500) toward "visible light-brown score, no
-      smoke plume, doesn't approach cut depth" rather than trusting these
-      numbers outright. Score a few lines on a scrap corner first: too dark/
-      deep, drop power in 5% steps; too faint to see, raise power before
-      slowing feed (slowing first risks tipping into a cut). No warmup
-      lead-in is applied per etch stroke (hundreds of short disconnected
-      strokes make a per-stroke warmup impractically slow) -- expect the
-      first ~1mm of each stroke to start faint before reaching full power;
-      acceptable for a decorative/orientation mark, unlike a structural cut.
+      CALIBRATED on a real scrap test (scripts/etch_calibration.py, a 5
+      power x 4 feed grid self-labeled on the wood). 25%/2500mm/min was
+      picked by inspection as the sweet spot: clearly visible medium-brown
+      contrast, no smoke, not approaching cut depth. 30% showed diminishing
+      returns over 25% (not meaningfully darker, just more energy spent),
+      10-15% too faint to rely on once painted over. No warmup lead-in is
+      applied per etch stroke (hundreds of short disconnected strokes make
+      a per-stroke warmup impractically slow) -- expect the first ~1mm of
+      each stroke to start faint before reaching full power; acceptable
+      for a decorative/orientation mark, unlike a structural cut.
 
 - id: plywood_baltic_birch_6mm
   family: wood
