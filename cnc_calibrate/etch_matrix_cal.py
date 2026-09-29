@@ -33,11 +33,14 @@ Comparing mark 1 vs mark 2 at the same cell is the actual test: a good
 power/feed setting is one where neither is badly off from the other --
 long lines readable, short ticks not blown out.
 
-Tick clusters are cut in FARTHEST-FIRST order (greedy nearest-remaining-
-is-excluded, next-cut is the remaining cell farthest from the one just
-cut) so consecutive laser-off/laser-on events are never physically
-adjacent -- avoids one swatch's residual heat biasing its neighbor's
-read, per the "start the next cut a few cm away" concern.
+Tick clusters are cut in NEAREST-SAFE order: from the cell just cut, jump
+to the CLOSEST remaining cell that still clears a minimum separation (a
+multiple of that cell's own wiggle lead_in_mm, since that's the length
+scale of heat just deposited nearby) -- not the globally farthest, which
+would waste a lot of travel for no extra cooling benefit. Falls back to
+the plain nearest remaining cell once too few are left to satisfy the
+floor. Addresses the "start the next cut a few cm away" concern without
+turning the whole plate into a cross-country tour.
 
 Invoked standalone (see main() below). Outputs gcode + toolpath PNG to
 build/etch_matrix_cal/.
@@ -67,24 +70,33 @@ DEFAULT_FEEDS = [1500, 2500, 4000, 6000]  # rings, inner -> outer, mm/min
 DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
+# Minimum separation between consecutive tick-cluster cuts, as a multiple of
+# the cell's own wiggle lead_in_mm -- an assumed safety margin, not measured.
+SAFETY_MARGIN = 1.5
 
 
-def _farthest_order(cells, center_of):
-    """Greedy farthest-neighbor traversal: start at cells[0], then repeatedly
-    jump to whichever remaining cell is farthest from the one just visited.
-    Not a globally optimal max-separation tour, just a cheap way to keep
-    consecutive laser-off/on events from landing next to each other."""
+def _order_nearest_safe(cells, center_of, min_sep_of):
+    """Nearest-neighbor traversal with a per-move safety floor: from the
+    cell just visited, jump to the CLOSEST remaining cell that is still
+    farther than min_sep_of(candidate) away, so residual heat from the
+    last cut has room to dissipate before the next one starts nearby.
+    Falls back to the plain closest remaining cell once none of them clear
+    the floor (e.g. near the end, when only nearby cells are left) --
+    cheap and keeps travel short, unlike a pure farthest-first tour."""
     remaining = list(cells)
     order = [remaining.pop(0)]
     while remaining:
         last = center_of(order[-1])
-        best_i, best_d = 0, -1.0
-        for i, c in enumerate(remaining):
+
+        def dist2(c):
             p = center_of(c)
-            d = (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2
-            if d > best_d:
-                best_d, best_i = d, i
-        order.append(remaining.pop(best_i))
+            return (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2
+
+        safe = [c for c in remaining if dist2(c) > min_sep_of(c) ** 2]
+        pool = safe if safe else remaining
+        best = min(pool, key=dist2)
+        order.append(best)
+        remaining.remove(best)
     return order
 
 
@@ -124,9 +136,10 @@ def generate(
         "; A good setting is one where the long arc and the short ticks in",
         "; the same cell don't look very different from each other.",
         ";",
-        "; Short-tick clusters are cut in farthest-first order -- consecutive",
-        "; laser-off/on events land far apart on the plate, so residual heat",
-        "; from one cluster doesn't bias its neighbor's read.",
+        "; Short-tick clusters are cut in nearest-safe order (closest cell",
+        f"; that still clears {SAFETY_MARGIN:g}x its own wiggle lead-in away) --",
+        "; residual heat has room to dissipate without wasting travel on a",
+        "; farther jump than that.",
         ";",
         ";HEAD: laser",
         ";MATERIAL: plywood_baltic_birch_3mm (scrap)",
@@ -216,7 +229,7 @@ def generate(
         lines.append("M5")
         lines.append("")
 
-    # ---- short-tick clusters (the short-segment worst case), farthest-first ----
+    # ---- short-tick clusters (the short-segment worst case), nearest-safe ----
     cells = [(i, k) for i in range(n_rings) for k in range(n_sectors)]
 
     def cell_center(c):
@@ -225,9 +238,23 @@ def generate(
         th = (k + 0.5) * sec
         return ellipse_pt(r, r, th)
 
-    order = _farthest_order(cells, cell_center)
+    def cell_lead_in_mm(c):
+        i, k = c
+        feed, power = feeds[i], powers[k]
+        return WARMUP_MS * (power / 100.0) / 1000.0 * feed / 60.0
+
+    def cell_min_sep(c):
+        # Safety margin over the wiggle's own lead-in distance -- the length
+        # scale of heat the wiggle just deposited nearby. SAFETY_MARGIN is an
+        # assumed multiplier (not independently measured): this plate is
+        # what tests whether it's enough.
+        return SAFETY_MARGIN * cell_lead_in_mm(c)
+
+    order = _order_nearest_safe(cells, cell_center, cell_min_sep)
     lines.append(
-        f"; --- {len(cells)} short-tick clusters (feed x power), farthest-first ---"
+        f"; --- {len(cells)} short-tick clusters (feed x power), nearest-safe "
+        f"order (min separation = {SAFETY_MARGIN:g}x that cell's own wiggle "
+        "lead-in) ---"
     )
     for i, k in order:
         r, feed, power = radii[i], feeds[i], powers[k]
@@ -303,7 +330,7 @@ def main(argv=None) -> int:
     print(f"feeds (rings): {meta['feeds']}")
     print(f"powers (sectors): {meta['powers']}")
     print(f"radii mm: {[round(r, 1) for r in meta['radii']]}")
-    print(f"{meta['n_ticks']} short ticks, farthest-first ordered")
+    print(f"{meta['n_ticks']} short ticks, nearest-safe ordered")
     print(f"-> {out}")
     print(f"-> {png_path}  (toolpath preview)")
     print(
