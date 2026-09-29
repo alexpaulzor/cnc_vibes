@@ -325,8 +325,14 @@ def emit_etch_gcode(
     chains = [decimate(c, min_segment_mm) for c in chains]
     chains = [c for c in chains if len(c) >= 2]
     start = (0.0, 0.0)
+    # _order_chains_min_travel groups genuinely touching strokes adjacently
+    # so _fuse_touching_chains can join them into one real chain; ONLY THEN
+    # does nearest-safe reorder the final fused chains (each is one true
+    # laser-off/on event) for thermal separation instead of pure travel.
     chains = _order_chains_min_travel(chains, start)
     chains = _fuse_touching_chains(chains)
+    min_sep_mm = SAFETY_MARGIN * lead_in_mm
+    chains = _order_chains_nearest_safe(chains, start, lambda ch: min_sep_mm)
 
     extra = [
         "SHALLOW ETCH PASS -- does not cut through, orientation/decorative "
@@ -334,6 +340,10 @@ def emit_etch_gcode(
         f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test "
         "first (see laser_materials.yaml)",
         f"{len(chains)} strokes",
+        f"chain order: nearest-safe (min separation {SAFETY_MARGIN:g}x each "
+        f"chain's own wiggle lead-in = {min_sep_mm:.2f}mm) -- keeps "
+        "consecutive laser-off/on events apart enough to avoid residual-heat "
+        "bias, without a farthest-first travel penalty",
     ]
     if lead_in_mm > 0:
         extra.append(
@@ -753,6 +763,55 @@ def _fuse_touching_chains(chains, tol=0.1):
             out[-1] = out[-1] + list(ch[1:])
         else:
             out.append(list(ch))
+    return out
+
+
+# Minimum separation between consecutive etch chains, as a multiple of the
+# chain's own wiggle lead_in_mm -- an assumed safety margin (not
+# independently measured), same constant/algorithm validated in
+# cnc_calibrate/etch_matrix_cal.py's tick-cluster ordering (git show
+# e6421bf) before that file moved on to a different test-pattern design.
+SAFETY_MARGIN = 1.5
+
+
+def _order_chains_nearest_safe(chains, start, min_sep_of):
+    """Nearest-neighbor chain order with a per-move thermal-safety floor:
+    from the chain just cut, jump to the CLOSEST remaining chain whose
+    entry point is still farther than min_sep_of(candidate) from the last
+    chain's entry point -- so residual heat from the laser-off/on event
+    just finished (min_sep_of is a multiple of THAT chain's own wiggle
+    lead-in, the physical length scale of the heat it just deposited) has
+    room to dissipate before the next one fires nearby. Falls back to the
+    plain closest remaining chain once none of the candidates clear the
+    floor (typically near the end, when only nearby chains are left) --
+    NOT a pure farthest-first tour, which would waste travel time for no
+    extra cooling benefit once already past the safety floor.
+
+    Runs on the chains AFTER _order_chains_min_travel + _fuse_touching_chains,
+    so each chain here is one real fused laser-off/on event, not a raw
+    stroke fragment. A chain's own first point stands in for its position
+    (matches the G0 entry point the emission loop actually targets) --
+    good enough at chain-to-chain scale, not meant to be exact.
+    """
+
+    def pos(ch):
+        return ch[0]
+
+    remaining = list(chains)
+    out = []
+    cur = start
+    while remaining:
+
+        def dist2(ch):
+            p = pos(ch)
+            return (p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2
+
+        safe = [ch for ch in remaining if dist2(ch) > min_sep_of(ch) ** 2]
+        pool = safe if safe else remaining
+        best = min(pool, key=dist2)
+        out.append(best)
+        cur = pos(best)
+        remaining.remove(best)
     return out
 
 
