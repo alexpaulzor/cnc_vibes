@@ -107,7 +107,11 @@ class RingParams:
         0.18,
         0.82,
     )  # rows=3 ring-seam heights (frac of cap h), banner-equivalent
-    ornament: str | None = "heart"  # None | "dot" | "heart" | "star"
+    # None | "dot" | "heart" | "star" | "globe" | "rocket" | "satellite" | ...
+    # -- or a list/tuple of kinds, one per word in `words` (cycled if shorter),
+    # for a different separator after each word instead of the same one
+    # every time (e.g. ["rocket", "satellite"] for a two-word ring).
+    ornament: str | list[str] | None = "heart"
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
     outline_smooth_px: float = 1.2
@@ -196,6 +200,42 @@ def ornament_local(kind, cap_h):
             a = -math.pi / 2 + k * math.pi / 5
             pts.append((r * math.cos(a), cy + r * math.sin(a)))
         return Polygon(pts).buffer(0.03 * cap_h).buffer(-0.03 * cap_h)
+    if kind == "rocket":
+        # Nose pointing OUTWARD (local -y, same direction letter caps extend --
+        # the direction place() maps to "away from the hub" at th=0), flared
+        # fin skirt toward the hub. No window cutout -- an interior hole here
+        # would be a separate ring at ornament scale, fragile for no reason
+        # since the window is purely decorative; save it for an etched detail.
+        half_w = 0.15 * cap_h
+        nose_h = 0.16 * cap_h
+        body_h = 0.22 * cap_h
+        fin_h = 0.12 * cap_h
+        fin_out = half_w + 0.10 * cap_h
+        y1, y2, y3 = nose_h, nose_h + body_h, nose_h + body_h + fin_h
+        pts = [
+            (0, 0),
+            (half_w, y1),
+            (half_w, y2),
+            (fin_out, y3),
+            (-fin_out, y3),
+            (-half_w, y2),
+            (-half_w, y1),
+        ]
+        p = Polygon(pts).buffer(0.02 * cap_h).buffer(-0.02 * cap_h)
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+    if kind == "satellite":
+        # Body + two flanking solar-panel wings, all touching (one fused
+        # piece, no gaps to bridge). Symmetric, so it reads the same
+        # whichever way the ring rotation flips it.
+        bw, bh = 0.16 * cap_h, 0.30 * cap_h
+        ww, wh = 0.20 * cap_h, 0.42 * cap_h
+        body = box(-bw / 2, -bh / 2, bw / 2, bh / 2)
+        wing_r = box(bw / 2, -wh / 2, bw / 2 + ww, wh / 2)
+        wing_l = box(-bw / 2 - ww, -wh / 2, -bw / 2, wh / 2)
+        p = unary_union([body, wing_r, wing_l])
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
     # heart (point toward the hub)
     pts = []
     for k in range(120):
@@ -370,15 +410,21 @@ def fit_ring(words, rp: RingParams, ppm):
             # edges are clean lines.
             return glyph_local(c, font).simplify(rp.outline_smooth_px)
 
+        orn_kinds = (
+            list(rp.ornament)
+            if isinstance(rp.ornament, (list, tuple))
+            else [rp.ornament]
+        )
         locs, labels = [], []
-        for w in words:
+        for i, w in enumerate(words):
             for c in w:
                 if c.isspace():
                     continue
                 locs.append(letter_glyph(c))
                 labels.append(c)
-            if rp.ornament:
-                locs.append(ornament_local(rp.ornament, cap))
+            orn = orn_kinds[i % len(orn_kinds)]
+            if orn:
+                locs.append(ornament_local(orn, cap))
                 labels.append("*")
         n = len(locs)
         ext = [ang_extent(solid_of(g), Rin) for g in locs]
