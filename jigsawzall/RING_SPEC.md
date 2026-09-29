@@ -1021,68 +1021,76 @@ than its own power/feed setting alone would predict (residual heat bias)
 machine travel time jumping across the whole plate every move when a
 nearer stroke would have been just as thermally safe. Wants: from the
 chain just cut, jump to the CLOSEST remaining chain that still clears a
-safety floor (a multiple of that chain's own wiggle lead-in distance,
-the physical length scale of the heat just deposited there), falling
-back to plain-nearest once too few chains remain to satisfy the floor.
+safety floor based on that chain's own wiggle lead-in distance (the
+physical length scale of the heat just deposited there), falling back to
+plain-nearest once too few chains remain to satisfy the floor.
 
-**Not a new algorithm** -- exactly this ordering was already designed and
-validated once, in `cnc_calibrate/etch_matrix_cal.py`'s tick-cluster
-ordering (`_order_nearest_safe`/`SAFETY_MARGIN`, `git show e6421bf`), for
-a different, standalone calibration test pattern with tuple-keyed cells
-and an ellipse-based center function. That file has since moved on to a
+**Not a new algorithm** -- exactly this shape of ordering was already
+designed and validated once, in `cnc_calibrate/etch_matrix_cal.py`'s
+tick-cluster ordering (`_order_nearest_safe`, `git show e6421bf`), for a
+different, standalone calibration test pattern with tuple-keyed cells and
+an ellipse-based center function. That file has since moved on to a
 different test-pattern design and no longer has this code (a parallel
 session's track, not touched here). Ported the ALGORITHM (not the code
 verbatim) into `emitter.py` to operate on `emit_etch_gcode()`'s real
 `chains` list of point-lists in machine mm.
 
-**Implementation:** `emitter.SAFETY_MARGIN = 1.5` (same value as the
-original validated version -- an assumed margin, not independently
-measured) and `emitter._order_chains_nearest_safe(chains, start,
+**Floor size, corrected twice after first landing wrong:** the reference
+implementation's floor was `1.5x` the chain's lead-in (a `SAFETY_MARGIN`
+constant) -- ported that value verbatim on the first pass without
+checking it was actually wanted. It wasn't: Alex clarified he never asked
+for a margin at all, then that even a full lead-in as the floor is
+probably more than needed, landing on **half the chain's own wiggle
+lead-in distance** as the floor -- no separate constant, just
+`lead_in_mm / 2.0` computed inline in `emit_etch_gcode()` from the
+per-pass `lead_in_mm` (linear power model, previous section) already
+resolved earlier in the same function call.
+
+**Implementation:** `emitter._order_chains_nearest_safe(chains, start,
 min_sep_of)`, wired into `emit_etch_gcode()` to run AFTER
 `_order_chains_min_travel` + `_fuse_touching_chains`, not instead of
 them: fusion still needs strokes grouped adjacently by
 `_order_chains_min_travel` to find genuinely touching pairs, so
 nearest-safe reorders the FINAL fused chains -- each one a real
-laser-off/on event -- rather than raw stroke fragments. `min_sep_of` is
-`SAFETY_MARGIN * lead_in_mm`, reusing the per-pass `lead_in_mm` (linear
-power model, previous section) already resolved earlier in the same
-function call. A chain's own first point stands in for its position for
-distance purposes (matches the `G0` entry point the emission loop
-actually targets) -- a single-point approximation, not meant to be exact
-for long strokes like coastlines.
+laser-off/on event -- rather than raw stroke fragments. `min_sep_of` is a
+plain callable so the caller decides the floor; `emit_etch_gcode` passes
+`lambda ch: lead_in_mm / 2.0`. A chain's own first point stands in for
+its position for distance purposes (matches the `G0` entry point the
+emission loop actually targets) -- a single-point approximation, not
+meant to be exact for long strokes like coastlines.
 
 **Verified** (scratch test, not committed to the repo -- see commit
 message for the exact script if it needs re-running):
-- Unit-level: 4 synthetic chains at known mm positions with a 3mm floor.
-  The chain 1mm from the start point (inside the floor) is correctly
-  skipped on the first move even though it's globally closest, revisited
-  once a later position makes it safe, and the algorithm correctly falls
-  back to the plain-nearest chain when NO candidate clears the floor
-  (both remaining chains inside a 10mm floor).
-- Integration-level, 6 synthetic clustered strokes on a 300mm panel
-  (25%/2500mm/min etch, `lead_in_mm=10.42mm`, floor=`15.62mm`): the plain
-  min-travel order placed two chains only **6.08mm** apart mid-sequence
-  (under the floor); nearest-safe reordered around that gap to insert a
-  **156.2mm** separation there instead, at a total entry-to-entry travel
-  cost of 793.8mm vs. 679.3mm for min-travel-only on this deliberately
-  clustered synthetic case -- exactly the correctness-over-speed tradeoff
-  asked for, not a pure farthest-first blowout. (The one remaining
-  6.08mm gap is the required end-of-sequence fallback: only one chain is
-  left and it can't be avoided.)
-- Real pipeline: ran the actual PLANET globe etch
-  (`scripts/globe_etch.py build_globe(lon0=-122.4, lat0=37.7, ...)` on a
-  300mm panel config) through the patched `emit_etch_gcode()` -- 490 raw
-  strokes fuse to 476 chains, valid G-code, single `$32=1` preamble.
+- Unit-level: synthetic chains at known mm positions confirm the floor
+  logic -- a too-close chain is correctly skipped on its first candidacy
+  even though it's globally closest, revisited once a later position
+  makes it safe, and the algorithm correctly falls back to plain-nearest
+  when NO candidate clears the floor.
+- Real pipeline, current (half-lead-in) floor: ran the actual PLANET
+  globe etch (`scripts/globe_etch.py build_globe(lon0=-122.4,
+  lat0=37.7, ...)` on a 300mm test-panel config) through the patched
+  `emit_etch_gcode()` -- 490 raw strokes fuse to 476 chains,
+  `lead_in_mm=10.42mm` so `floor=5.21mm`. Plain min-travel order left
+  **342 of 476** consecutive moves under that floor (this design packs
+  coastline/graticule strokes densely, so nearest-neighbor naturally
+  chains adjacent short segments); nearest-safe cuts that to **2 of
+  476** (the unavoidable end-of-sequence fallback), at a total
+  entry-to-entry travel cost of **6556.5mm vs. 4847.1mm** for
+  min-travel-only (+35%) -- a much smaller travel penalty than the
+  rejected `1.5x`-margin version measured earlier (which drove travel to
+  13707.9mm, +183%, to enforce a 15.62mm floor on the same design).
+  Valid G-code, single `$32=1` preamble either way.
   `ring_lint.lint_gcode(is_etch=True)` reports the identical 16
   `short_segment` defects / 403 `reversal` + 43 `shuttle` + 16 `aliasing`
   info findings before and after this change (confirmed by re-running
   lint against the pre-change code via `git stash`) -- those are
   pre-existing artifacts of the raw coastline point density within each
-  stroke, completely unaffected by which order the strokes are cut in.
-  **No new G-code defects from this change.**
+  stroke, completely unaffected by which order the strokes are cut in or
+  how large the floor is. **No new G-code defects from this change.**
 
 **Not yet**: no physical test cut of this specific change (it only
 reorders WHICH stroke is cut when, not any geometry or power/feed
-number) -- the residual-heat-bias hypothesis itself and the `1.5x`
-margin are both unverified assumptions carried over from the
-`etch_matrix_cal.py` version, same status they had there.
+number) -- the residual-heat-bias hypothesis itself and the half-lead-in
+floor size are both unverified assumptions, same status the original
+`etch_matrix_cal.py` version's `1.5x` margin had before it was corrected
+here.

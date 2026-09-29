@@ -331,7 +331,8 @@ def emit_etch_gcode(
     # laser-off/on event) for thermal separation instead of pure travel.
     chains = _order_chains_min_travel(chains, start)
     chains = _fuse_touching_chains(chains)
-    min_sep_mm = SAFETY_MARGIN * lead_in_mm
+    # Floor is half each chain's own wiggle lead-in distance.
+    min_sep_mm = lead_in_mm / 2.0
     chains = _order_chains_nearest_safe(chains, start, lambda ch: min_sep_mm)
 
     extra = [
@@ -340,10 +341,10 @@ def emit_etch_gcode(
         f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test "
         "first (see laser_materials.yaml)",
         f"{len(chains)} strokes",
-        f"chain order: nearest-safe (min separation {SAFETY_MARGIN:g}x each "
-        f"chain's own wiggle lead-in = {min_sep_mm:.2f}mm) -- keeps "
-        "consecutive laser-off/on events apart enough to avoid residual-heat "
-        "bias, without a farthest-first travel penalty",
+        f"chain order: nearest-safe (min separation = half each chain's own "
+        f"wiggle lead-in, {min_sep_mm:.2f}mm) -- keeps consecutive "
+        "laser-off/on events apart enough to avoid residual-heat bias, "
+        "without a farthest-first travel penalty",
     ]
     if lead_in_mm > 0:
         extra.append(
@@ -766,26 +767,19 @@ def _fuse_touching_chains(chains, tol=0.1):
     return out
 
 
-# Minimum separation between consecutive etch chains, as a multiple of the
-# chain's own wiggle lead_in_mm -- an assumed safety margin (not
-# independently measured), same constant/algorithm validated in
-# cnc_calibrate/etch_matrix_cal.py's tick-cluster ordering (git show
-# e6421bf) before that file moved on to a different test-pattern design.
-SAFETY_MARGIN = 1.5
-
-
 def _order_chains_nearest_safe(chains, start, min_sep_of):
     """Nearest-neighbor chain order with a per-move thermal-safety floor:
     from the chain just cut, jump to the CLOSEST remaining chain whose
     entry point is still farther than min_sep_of(candidate) from the last
     chain's entry point -- so residual heat from the laser-off/on event
-    just finished (min_sep_of is a multiple of THAT chain's own wiggle
-    lead-in, the physical length scale of the heat it just deposited) has
-    room to dissipate before the next one fires nearby. Falls back to the
-    plain closest remaining chain once none of the candidates clear the
-    floor (typically near the end, when only nearby chains are left) --
-    NOT a pure farthest-first tour, which would waste travel time for no
-    extra cooling benefit once already past the safety floor.
+    just finished (min_sep_of is derived from THAT chain's own wiggle
+    lead-in distance, the physical length scale of the heat it just
+    deposited -- the caller decides the fraction/multiple) has room to
+    dissipate before the next one fires nearby. Falls back to the plain
+    closest remaining chain once none of the candidates clear the floor
+    (typically near the end, when only nearby chains are left) -- NOT a
+    pure farthest-first tour, which would waste travel time for no extra
+    cooling benefit once already past the safety floor.
 
     Runs on the chains AFTER _order_chains_min_travel + _fuse_touching_chains,
     so each chain here is one real fused laser-off/on event, not a raw
