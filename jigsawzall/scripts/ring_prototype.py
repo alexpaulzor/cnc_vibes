@@ -112,6 +112,16 @@ class RingParams:
     # for a different separator after each word instead of the same one
     # every time (e.g. ["rocket", "satellite"] for a two-word ring).
     ornament: str | list[str] | None = "heart"
+    # Indices into `words` that should read upright "from the south" instead
+    # of the default ring convention (every letter's cap radially OUTWARD,
+    # baseline INWARD, uniformly -- correct reading at the top, but requires
+    # physically flipping the piece 180 to read at the bottom, like a coin).
+    # A mirrored word instead reads correctly left-to-right without flipping
+    # anything: cap toward the CENTER, baseline toward the OUTSIDE/rim,
+    # still following the ring's curve letter-by-letter (each letter its own
+    # tabbed piece, same as any other word) -- like text arcing under the
+    # bottom of a circular badge/seal, not a coin's inverted second line.
+    mirror_words: tuple[int, ...] = ()
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
     outline_smooth_px: float = 1.2
@@ -417,10 +427,25 @@ def fit_ring(words, rp: RingParams, ppm):
         )
         locs, labels = [], []
         for i, w in enumerate(words):
-            for c in w:
+            mirrored = i in rp.mirror_words
+            # Reversed iteration order + a 180 local pre-rotation together
+            # (not either alone) is what keeps a mirrored word reading
+            # correctly left-to-right: increasing th runs clockwise, which
+            # is left-to-right across the TOP of the ring but right-to-left
+            # across the BOTTOM, so un-reversing the char order compensates
+            # for that side's direction -- while the 180 rotation is what
+            # actually flips each letter's cap from outward to inward (see
+            # RingParams.mirror_words). Baking the rotation into the glyph
+            # here (rather than a separate placement function) keeps
+            # ang_extent/place() downstream unchanged: they just see
+            # whatever polygon is in `locs`.
+            for c in (w[::-1] if mirrored else w):
                 if c.isspace():
                     continue
-                locs.append(letter_glyph(c))
+                g = letter_glyph(c)
+                if mirrored:
+                    g = affinity.rotate(g, 180, origin=(0, 0))
+                locs.append(g)
                 labels.append(c)
             orn = orn_kinds[i % len(orn_kinds)]
             if orn:
