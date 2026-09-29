@@ -5,42 +5,29 @@ through-cut.
 
 One plate maps two variables:
 
-  * FEED  -- concentric rings, inner=slow -> outer=fast (up to the
-             machine's rated max, e.g. F6000).
+  * FEED  -- concentric ring PAIRS, inner=slow -> outer=fast (default up
+             to F5000 -- not pushing the machine's rated max, just the
+             practical ceiling once a heavier laser mount eats into it).
   * POWER -- each ring is split into equal-angle SECTORS, one per test
-             power. A ring is cut as ONE continuous laser-on path (the
-             diode is already lasing at a sector boundary, so an S-value
-             change there does NOT re-trigger a cold-start ramp -- only
-             the ring's own first point, where the laser turns on from
-             cold, gets a warmup wiggle).
+             power.
 
-Each (ring, sector) = (feed, power) cell gets TWO comparison marks, both
-using the SAME warmup model as emitter.emit_etch_gcode() (ramp_ms =
-WARMUP_MS * power_percent/100, lead_in_mm = ramp_ms/1000 * feed/60):
+Each feed gets TWO nested rings, one power-sector apart in radius, so a
+single photo straight down shows both at once:
 
-  1. The ring's own arc through that sector -- a LONG continuous stroke,
-     wiggled once at the ring's start (far from most sectors), so most of
-     a sector's arc is read at steady-state power with no double-dose.
-  2. A cluster of short radial tick marks just outside the ring, in that
-     sector's angular band -- SHORT disconnected strokes, each with its
-     OWN individual wiggle, matching how real etch strokes (e.g. globe
-     coastline detail) get wiggled once per stroke. This is where the
-     "first few mm get ~2x dose from the wiggle's forward+back overlap"
-     effect shows up hardest, since the overlap is a much bigger fraction
-     of a short stroke's total length.
+  * the OUTER ring of the pair: ONE continuous laser-on path all the way
+    around -- only its very first point (sector 0) is a genuine cold
+    start: sector boundaries are just an S-value change while the diode
+    stays lit, no re-ramp. Steady-state read.
+  * the INNER ring of the pair: laser-off BETWEEN every sector, so each
+    sector is its own fresh cold start at its own power -- worst case for
+    the wiggle's cold-start artifact, one clean arc per cell instead of a
+    scatter of ticks too small to read from a phone photo.
 
-Comparing mark 1 vs mark 2 at the same cell is the actual test: a good
-power/feed setting is one where neither is badly off from the other --
-long lines readable, short ticks not blown out.
-
-Tick clusters are cut in NEAREST-SAFE order: from the cell just cut, jump
-to the CLOSEST remaining cell that still clears a minimum separation (a
-multiple of that cell's own wiggle lead_in_mm, since that's the length
-scale of heat just deposited nearby) -- not the globally farthest, which
-would waste a lot of travel for no extra cooling benefit. Falls back to
-the plain nearest remaining cell once too few are left to satisfy the
-floor. Addresses the "start the next cut a few cm away" concern without
-turning the whole plate into a cross-country tour.
+Both rings use the SAME warmup formula as emitter.emit_etch_gcode():
+ramp_ms = WARMUP_MS * power_percent/100, lead_in_mm = ramp_ms/1000 *
+feed/60. Comparing the two rings at the same radius band (same feed) is
+the actual test: a good setting is one where the cold-start ring isn't
+visibly worse than the continuous one.
 
 Invoked standalone (see main() below). Outputs gcode + toolpath PNG to
 build/etch_matrix_cal/.
@@ -66,80 +53,64 @@ from spiral_cal import (  # noqa: E402
     ellipse_pt,
 )
 
-DEFAULT_FEEDS = [1500, 2500, 4000, 6000]  # rings, inner -> outer, mm/min
+DEFAULT_FEEDS = [1250, 2000, 3200, 5000]  # ring pairs, inner -> outer, mm/min
 DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
-# Minimum separation between consecutive tick-cluster cuts, as a multiple of
-# the cell's own wiggle lead_in_mm -- an assumed safety margin, not measured.
-SAFETY_MARGIN = 1.5
 
 
-def _order_nearest_safe(cells, center_of, min_sep_of):
-    """Nearest-neighbor traversal with a per-move safety floor: from the
-    cell just visited, jump to the CLOSEST remaining cell that is still
-    farther than min_sep_of(candidate) away, so residual heat from the
-    last cut has room to dissipate before the next one starts nearby.
-    Falls back to the plain closest remaining cell once none of them clear
-    the floor (e.g. near the end, when only nearby cells are left) --
-    cheap and keeps travel short, unlike a pure farthest-first tour."""
-    remaining = list(cells)
-    order = [remaining.pop(0)]
-    while remaining:
-        last = center_of(order[-1])
-
-        def dist2(c):
-            p = center_of(c)
-            return (p[0] - last[0]) ** 2 + (p[1] - last[1]) ** 2
-
-        safe = [c for c in remaining if dist2(c) > min_sep_of(c) ** 2]
-        pool = safe if safe else remaining
-        best = min(pool, key=dist2)
-        order.append(best)
-        remaining.remove(best)
-    return order
+def _ring_pass(r, feed, powers, sec, ring_step_deg, cold_start_per_sector):
+    """Sample points + power for one ring's sectors. Returns a list of
+    (power, [pts...]) -- one entry per sector if cold_start_per_sector,
+    else a single entry covering the whole ring (S changes mid-path,
+    handled by the caller)."""
+    out = []
+    for k, power in enumerate(powers):
+        th0, th1 = k * sec, (k + 1) * sec
+        n_steps = max(1, int(round((th1 - th0) / ring_step_deg)))
+        pts = [ellipse_pt(r, r, th0)]
+        for j in range(1, n_steps + 1):
+            th = th0 + (th1 - th0) * j / n_steps
+            pts.append(ellipse_pt(r, r, th))
+        out.append((power, pts))
+    return out
 
 
 def generate(
     feeds=DEFAULT_FEEDS,
     powers=DEFAULT_POWERS,
-    min_r=15.0,
-    max_r=45.0,
-    tick_len_mm=4.0,
-    ticks_per_sector=3,
+    min_r=8.0,
+    max_r=24.0,
+    ring_gap_mm=3.0,
     ring_step_deg=2.0,
     engrave_power=ENGRAVE_POWER_PCT,
     engrave_feed=ENGRAVE_FEED,
 ):
     """Build the etch calibration gcode. Returns (lines, meta)."""
     n_rings, n_sectors = len(feeds), len(powers)
-    radii = [
+    centers = [
         min_r + (max_r - min_r) * i / max(1, n_rings - 1) for i in range(n_rings)
     ]
     sec = 360.0 / n_sectors
-    p0 = powers[0]  # power the ring itself starts cold on (sector 0)
+    p0 = powers[0]  # power the continuous ring itself starts cold on
 
     lines = [
-        "; ETCH calibration -- concentric rings (feed) x sectors (power)",
-        f"; rings (feed mm/min, inner->outer): {feeds}",
+        "; ETCH calibration -- concentric ring PAIRS (feed) x sectors (power)",
+        f"; feeds (mm/min, inner->outer pair): {feeds}",
         f"; sectors (power %%, per ring, CCW from angle 0): {powers}",
         f"; warmup model: ramp_ms = WARMUP_MS({WARMUP_MS:.0f}) * power_pct/100 "
         "-- SAME formula as emitter.emit_etch_gcode(), not independently "
         "re-measured here; this plate is what re-measures it.",
         ";",
-        "; Each (ring, sector) cell has TWO marks to compare:",
-        ";  - the ring's own arc through that sector: a LONG stroke, wiggled",
-        ";    only once (at the ring's start, sector 0) -- steady-state read.",
-        ";  - a cluster of short radial ticks just outside the ring in that",
-        ";    sector's band: SHORT strokes, each wiggled individually --",
-        ";    worst-case read for the wiggle-overlap double-dose effect.",
-        "; A good setting is one where the long arc and the short ticks in",
-        "; the same cell don't look very different from each other.",
-        ";",
-        "; Short-tick clusters are cut in nearest-safe order (closest cell",
-        f"; that still clears {SAFETY_MARGIN:g}x its own wiggle lead-in away) --",
-        "; residual heat has room to dissipate without wasting travel on a",
-        "; farther jump than that.",
+        "; Each feed gets a nested ring PAIR:",
+        ";  - outer ring: ONE continuous laser-on path, only sector 0 is a",
+        ";    genuine cold start (S changes at boundaries, diode stays lit) --",
+        ";    steady-state read.",
+        ";  - inner ring: laser OFF between every sector, so each sector is",
+        ";    its own fresh cold start at its own power -- worst-case wiggle",
+        ";    read, as one clean arc per cell (not a tick too small to photo).",
+        "; Compare inner vs outer at the same radius band (= same feed): a",
+        "; good setting is one where the cold-start ring isn't visibly worse.",
         ";",
         ";HEAD: laser",
         ";MATERIAL: plywood_baltic_birch_3mm (scrap)",
@@ -153,28 +124,27 @@ def generate(
         "",
     ]
 
-    # ---- engraved labels: feed per ring, power per sector ----
-    # Ring labels sit AT each ring's own radius, tangentially oriented (running
-    # along the circumference, not radially outward) so a thin annulus band
-    # holds one ring's number without smearing into its neighbors. Fixed angle
-    # -90 (south) keeps them clear of the sector-0/wiggle region at angle 0.
+    # ---- engraved labels: feed per ring pair, power per sector ----
+    # Feed labels sit at a fixed angle (south), tangentially oriented, one per
+    # ring-pair radius band, so they stack cleanly without smearing into their
+    # neighbors. Power labels sit on the outer rim, one per sector.
     label_strokes = []
-    ring_label_th = -90.0
-    ring_tang = ring_label_th + 90.0
-    for i, (r, feed) in enumerate(zip(radii, feeds)):
-        x, y = ellipse_pt(r, r, ring_label_th)
-        label_strokes += _label_strokes(str(feed), x, y, 2.0, angle_deg=ring_tang)
-    label_r = max_r + tick_len_mm * (ticks_per_sector + 2.5)
+    label_th = -90.0
+    label_tang = label_th + 90.0
+    for i, (c, feed) in enumerate(zip(centers, feeds)):
+        x, y = ellipse_pt(c, c, label_th)
+        label_strokes += _label_strokes(str(feed), x, y, 1.6, angle_deg=label_tang)
+    label_r = max_r + ring_gap_mm * 2.5
     for k, power in enumerate(powers):
         th = (k + 0.5) * sec
         x, y = ellipse_pt(label_r, label_r, th)
         tang = th + 90.0
         if math.cos(math.radians(tang)) < 0:
             tang += 180
-        label_strokes += _label_strokes(f"{power}", x, y, 3.0, angle_deg=tang)
+        label_strokes += _label_strokes(f"{power}", x, y, 2.5, angle_deg=tang)
     if label_strokes:
         ordered = _order_strokes(label_strokes)
-        lines.append("; --- labels: ring=feed (near angle 0), sector=power (rim) ---")
+        lines.append("; --- labels: feed (south, per ring pair), power (rim) ---")
         pts = [(ordered[0][0], ordered[0][1])]
         for x1, y1, x2, y2 in ordered:
             if (x1, y1) != pts[-1]:
@@ -192,114 +162,89 @@ def generate(
         lines.append("M5")
         lines.append("")
 
-    # ---- rings: one continuous laser-on path per ring, S changes at sector
-    # boundaries (no re-ramp -- diode stays lit), wiggle only at the very start ----
-    for i, (r, feed) in enumerate(zip(radii, feeds)):
-        ramp_ms = WARMUP_MS * (p0 / 100.0)
-        lead_in_mm = ramp_ms / 1000.0 * feed / 60.0
-        # Sample only the arc the warmup wiggle actually needs (it walks
-        # forward from angle 0 until it's covered lead_in_mm, then reverses)
-        # -- a full-circle point list here just wastes points on comparisons
-        # the wiggle never reaches.
-        warmup_span_deg = min(360.0, 360.0 * lead_in_mm / max(1e-6, 2 * math.pi * r))
+    # ---- ring pairs ----
+    for i, (c, feed) in enumerate(zip(centers, feeds)):
+        r_outer = c + ring_gap_mm / 2.0
+        r_inner = c - ring_gap_mm / 2.0
+        power_s = {power: int(round(power * 10)) for power in powers}
+
+        # -- outer ring: ONE continuous path, wiggle only at the very start --
+        ramp_ms0 = WARMUP_MS * (p0 / 100.0)
+        lead_in_mm0 = ramp_ms0 / 1000.0 * feed / 60.0
+        warmup_span_deg = min(
+            360.0, 360.0 * lead_in_mm0 / max(1e-6, 2 * math.pi * r_outer)
+        )
         n_warm_pts = max(4, int(round(warmup_span_deg / ring_step_deg)) + 1)
         warm_pts = [
-            ellipse_pt(r, r, k * warmup_span_deg / max(1, n_warm_pts - 1))
+            ellipse_pt(r_outer, r_outer, k * warmup_span_deg / max(1, n_warm_pts - 1))
             for k in range(n_warm_pts)
         ]
         lines.append(
-            f"; --- ring #{i + 1} feed={feed}mm/min r={r:.1f}mm "
-            f"(cold-start sector power={p0}%, wiggle {ramp_ms:.0f}ms = "
-            f"{lead_in_mm:.2f}mm) ---"
+            f"; --- feed={feed}mm/min outer ring r={r_outer:.1f}mm CONTINUOUS "
+            f"(cold-start sector power={p0}%, wiggle {ramp_ms0:.0f}ms = "
+            f"{lead_in_mm0:.2f}mm) ---"
         )
         lines.append(f"G0 X{warm_pts[0][0]:.3f} Y{warm_pts[0][1]:.3f}")
-        lines.append(f"M3 S{int(round(p0 * 10))}")
+        lines.append(f"M3 S{power_s[p0]}")
         lines.append(f"F{feed}")
-        for x, y in _warmup_points(warm_pts, lead_in_mm):
+        for x, y in _warmup_points(warm_pts, lead_in_mm0):
             lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         for k, power in enumerate(powers):
             th0, th1 = k * sec, (k + 1) * sec
             n_steps = max(1, int(round((th1 - th0) / ring_step_deg)))
             lines.append(f"; sector {k + 1}/{n_sectors} power={power}%")
-            lines.append(f"M3 S{int(round(power * 10))}")
+            lines.append(f"M3 S{power_s[power]}")
             for j in range(1, n_steps + 1):
                 th = th0 + (th1 - th0) * j / n_steps
-                x, y = ellipse_pt(r, r, th)
+                x, y = ellipse_pt(r_outer, r_outer, th)
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")
 
-    # ---- short-tick clusters (the short-segment worst case), nearest-safe ----
-    cells = [(i, k) for i in range(n_rings) for k in range(n_sectors)]
-
-    def cell_center(c):
-        i, k = c
-        r = radii[i] + tick_len_mm * (ticks_per_sector / 2.0 + 1)
-        th = (k + 0.5) * sec
-        return ellipse_pt(r, r, th)
-
-    def cell_lead_in_mm(c):
-        i, k = c
-        feed, power = feeds[i], powers[k]
-        return WARMUP_MS * (power / 100.0) / 1000.0 * feed / 60.0
-
-    def cell_min_sep(c):
-        # Safety margin over the wiggle's own lead-in distance -- the length
-        # scale of heat the wiggle just deposited nearby. SAFETY_MARGIN is an
-        # assumed multiplier (not independently measured): this plate is
-        # what tests whether it's enough.
-        return SAFETY_MARGIN * cell_lead_in_mm(c)
-
-    order = _order_nearest_safe(cells, cell_center, cell_min_sep)
-    lines.append(
-        f"; --- {len(cells)} short-tick clusters (feed x power), nearest-safe "
-        f"order (min separation = {SAFETY_MARGIN:g}x that cell's own wiggle "
-        "lead-in) ---"
-    )
-    for i, k in order:
-        r, feed, power = radii[i], feeds[i], powers[k]
-        ramp_ms = WARMUP_MS * (power / 100.0)
-        lead_in_mm = ramp_ms / 1000.0 * feed / 60.0
-        power_s = int(round(power * 10))
+        # -- inner ring: laser OFF between sectors, each its own cold start --
         lines.append(
-            f"; cluster ring#{i + 1} sector#{k + 1} feed={feed} power={power}% "
-            f"wiggle {ramp_ms:.0f}ms = {lead_in_mm:.2f}mm"
+            f"; --- feed={feed}mm/min inner ring r={r_inner:.1f}mm COLD-START "
+            "PER SECTOR ---"
         )
-        for t in range(ticks_per_sector):
-            th = k * sec + (t + 0.5) / ticks_per_sector * sec
-            r0 = r + 1.0 + t * tick_len_mm * 1.3
-            r1 = r0 + tick_len_mm
-            p0pt = ellipse_pt(r0, r0, th)
-            p1pt = ellipse_pt(r1, r1, th)
-            pts = [p0pt, p1pt]
-            lines.append(f"G0 X{p0pt[0]:.3f} Y{p0pt[1]:.3f}")
-            lines.append(f"M3 S{power_s}")
+        for k, power in enumerate(powers):
+            th0, th1 = k * sec, (k + 1) * sec
+            n_steps = max(1, int(round((th1 - th0) / ring_step_deg)))
+            pts = [ellipse_pt(r_inner, r_inner, th0)]
+            for j in range(1, n_steps + 1):
+                th = th0 + (th1 - th0) * j / n_steps
+                pts.append(ellipse_pt(r_inner, r_inner, th))
+            ramp_ms = WARMUP_MS * (power / 100.0)
+            lead_in_mm = ramp_ms / 1000.0 * feed / 60.0
+            lines.append(
+                f"; sector {k + 1}/{n_sectors} power={power}% wiggle "
+                f"{ramp_ms:.0f}ms = {lead_in_mm:.2f}mm"
+            )
+            lines.append(f"G0 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
+            lines.append(f"M3 S{power_s[power]}")
             lines.append(f"F{feed}")
             for x, y in _warmup_points(pts, lead_in_mm):
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-            lines.append(f"G1 X{p1pt[0]:.3f} Y{p1pt[1]:.3f}")
+            for x, y in pts[1:]:
+                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
             lines.append("M5")
+        lines.append("")
 
-    lines += ["", "G0 X0 Y0", ""]
-    meta = {
-        "feeds": feeds,
-        "powers": powers,
-        "radii": radii,
-        "n_ticks": len(cells) * ticks_per_sector,
-    }
+    lines += ["G0 X0 Y0", ""]
+    meta = {"feeds": feeds, "powers": powers, "centers": centers}
     return lines, meta
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog="etch_matrix_cal.py",
-        description="Concentric-ring feed x power ETCH calibration.",
+        description="Concentric ring-pair feed x power ETCH calibration "
+        "(continuous vs cold-start-per-sector).",
     )
     p.add_argument(
         "--feeds",
         type=lambda s: [int(x) for x in s.split(",")],
         default=DEFAULT_FEEDS,
-        help=f"comma-separated feeds mm/min, inner->outer rings "
+        help=f"comma-separated feeds mm/min, inner->outer ring pairs "
         f"(default {DEFAULT_FEEDS})",
     )
     p.add_argument(
@@ -309,10 +254,9 @@ def main(argv=None) -> int:
         help=f"comma-separated power percents, per-ring sectors "
         f"(default {DEFAULT_POWERS})",
     )
-    p.add_argument("--min-r", dest="min_r", type=float, default=15.0)
-    p.add_argument("--max-r", dest="max_r", type=float, default=45.0)
-    p.add_argument("--tick-len", dest="tick_len", type=float, default=4.0)
-    p.add_argument("--ticks-per-sector", dest="tps", type=int, default=3)
+    p.add_argument("--min-r", dest="min_r", type=float, default=8.0)
+    p.add_argument("--max-r", dest="max_r", type=float, default=24.0)
+    p.add_argument("--ring-gap", dest="ring_gap", type=float, default=3.0)
     args = p.parse_args(argv)
 
     lines, meta = generate(
@@ -320,24 +264,22 @@ def main(argv=None) -> int:
         powers=args.powers,
         min_r=args.min_r,
         max_r=args.max_r,
-        tick_len_mm=args.tick_len,
-        ticks_per_sector=args.tps,
+        ring_gap_mm=args.ring_gap,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "etch_matrix_cal.gcode"
     out.write_text("\n".join(lines))
     png_path = _render_gcode_png(lines, BUILD_DIR / "etch_matrix_cal.png")
-    print(f"feeds (rings): {meta['feeds']}")
+    print(f"feeds (ring pairs): {meta['feeds']}")
     print(f"powers (sectors): {meta['powers']}")
-    print(f"radii mm: {[round(r, 1) for r in meta['radii']]}")
-    print(f"{meta['n_ticks']} short ticks, nearest-safe ordered")
+    print(f"ring-pair center radii mm: {[round(r, 1) for r in meta['centers']]}")
     print(f"-> {out}")
     print(f"-> {png_path}  (toolpath preview)")
     print(
-        "read: for each (ring=feed, sector=power) cell, compare the ring's "
-        "own arc (long-line read) against its tick cluster (short-segment "
-        "read, worst case for wiggle-overlap darkening). Pick the cell "
-        "where they're closest to each other AND both look right."
+        "read: for each feed (ring pair), compare the outer ring (continuous, "
+        "steady-state) against the inner ring (cold-start every sector) at "
+        "the same power. Pick the feed/power where the cold-start ring isn't "
+        "visibly worse than the continuous one."
     )
     return 0
 
