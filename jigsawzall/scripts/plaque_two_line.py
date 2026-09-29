@@ -260,6 +260,14 @@ def main():
         tab_circle_r_px=15, tab_stem_w_px=30.0,
         letter_clearance_mm=2.0, corner_radius_mm=0.0,
         snap_letters_to_grid=False,
+        # Plain straight-line tabs left long flat stretches between tab
+        # bulges -- especially along the single row-0/row-1 boundary
+        # seam, which read as "two puzzles glued together" even with
+        # every tab successfully placed. The wavy-edge option (each
+        # straight segment gets a perpendicular half-sine bow) breaks
+        # that up into a continuously interlocking edge throughout.
+        wave_amplitude_px=10.0,
+        wave_steps=12,
     )
     pieces, stats = generate_two_line_puzzle(line1, line2, seed=1, cfg=cfg)
     content_w = cfg.puzzle_w_px / cfg.px_per_mm
