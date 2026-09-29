@@ -29,17 +29,21 @@ feed/60. Comparing the two rings at the same radius band (same feed) is
 the actual test: a good setting is one where the cold-start ring isn't
 visibly worse than the continuous one.
 
-Each sector's arc is not a plain radial line but a tight DIAGONAL ZIGZAG
-(see `_zigzag_arc_points`): a small triangle-wave radial wobble (a couple
-mm) ridden across the sector's full angular sweep, a few back-and-forth
-cycles. Motion stays predominantly tangential -- arc length remains a
-legible proxy for elapsed time against the known feed rate, so timing can
-still be read off a photo with a ruler. A plain radial in-out jog at a
-near-fixed angle was tried and rejected for this: it has no angle/arc-length
-to measure against feed, so it can't be used to time the warmup from a
-photo. The zigzag rides on top of each ring's existing cold-start wiggle
-(the continuous ring's one real wiggle at its true start; the cold-start
-ring's fresh wiggle at the head of every sector) -- it doesn't replace it.
+Each sector's arc is not a single pass but a tight ZIGZAG of REPEAT COVERAGE
+(see `_zigzag_arc_points`): the beam sweeps forward across the sector's full
+angular span, then reverses and sweeps back, ~3 laps total (boustrophedon/
+ping-pong), so it dwells several times longer in that one sector -- long
+enough for the warmup and steady-state behavior to both be fully evident.
+Each lap gets a tiny (cosmetic, ~0.25mm) radial nudge purely so the laps are
+visually distinguishable as separate passes; it is NOT a deliberate radial
+wobble, and it must not turn the sector's silhouette into a star -- a radial
+oscillation shape was tried and rejected here because it has no angle/arc-
+length to measure against the known feed rate, so timing can't be read off a
+photo. Motion stays predominantly ANGULAR/diagonal: each sector should read
+in a photo as one band traced several times, not a star. The zigzag rides on
+top of each ring's existing cold-start wiggle (the continuous ring's one
+real wiggle at its true start; the cold-start ring's fresh wiggle at the
+head of every sector) -- it doesn't replace it.
 
 The whole plate is centered on (0, 0) (`ellipse_pt` is polar about the
 origin; the job opens and closes at G0 X0 Y0), and toolpath order is
@@ -84,29 +88,46 @@ DEFAULT_FEEDS = [1250, 2000, 3200, 5000]  # ring pairs, inner -> outer, mm/min
 DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
-ZIGZAG_AMP_MM = 1.5  # radial wobble amplitude, each side of the sector's nominal r
-ZIGZAG_N_CYCLES = 3  # back-and-forth cycles across each sector's angular span
+ZIGZAG_N_LAPS = 3  # forward/reverse sweeps of the sector's full angular span
+ZIGZAG_LAP_STEP_MM = 0.25  # tiny cosmetic radial nudge between laps, NOT a wobble
 
 
-def _zigzag_arc_points(r_center, amp, th0, th1, n_cycles, step_deg):
-    """Dense point list sweeping CCW from th0 to th1 around r_center, riding a
-    triangle-wave radial wobble of +/-amp with n_cycles full back-and-forth
-    cycles across the span. Starts and ends exactly at r_center (th0 and th1),
-    so it splices cleanly onto neighboring sectors/wiggles. Motion is mostly
-    TANGENTIAL (diagonal) with a slight radial component -- unlike a radial
-    in-out jog at a near-fixed angle, arc length stays a legible proxy for
-    elapsed time against the known feed rate, so warmup/steady-state timing
-    can still be read off a photo."""
+def _zigzag_arc_points(r_center, th0, th1, n_laps, lap_step_mm, step_deg):
+    """Dense point list covering the SAME sector (th0 to th1 around r_center)
+    repeatedly: sweep forward th0->th1, reverse th1->th0, sweep forward again,
+    etc., n_laps laps total (a boustrophedon/ping-pong repeat-coverage pass,
+    not a single sweep) -- so the beam dwells several times longer in this one
+    sector, long enough for warmup and steady-state to both show up in a
+    photo. Motion stays predominantly ANGULAR (diagonal): each lap gets only a
+    tiny, purely cosmetic radial nudge of lap_step_mm so successive laps are
+    visually distinguishable, centered on r_center so the sector reads as one
+    repeated band, NOT a star -- this is deliberately NOT a radial-oscillation
+    shape (that has no angle/arc-length to measure timing against the known
+    feed rate from a photo)."""
     span = th1 - th0
     n_steps = max(2, int(round(abs(span) / step_deg)))
-    pts = []
-    for j in range(n_steps + 1):
-        frac = j / n_steps
-        th = th0 + span * frac
-        cyc = frac * n_cycles
-        tri = 4 * abs((cyc - 0.25) % 1.0 - 0.5) - 1  # triangle wave, tri(0)=0
-        r = r_center + amp * tri
-        pts.append(ellipse_pt(r, r, th))
+    n_full_laps = max(1, int(math.floor(n_laps)))
+    frac_last = n_laps - n_full_laps
+
+    def lap_radius(lap_idx):
+        return r_center + lap_step_mm * (lap_idx - (n_laps - 1) / 2.0)
+
+    pts = [ellipse_pt(r_center, r_center, th0)]
+    for lap_idx in range(n_full_laps):
+        forward = lap_idx % 2 == 0
+        r = lap_radius(lap_idx)
+        for j in range(1, n_steps + 1):
+            frac = j / n_steps
+            th = th0 + span * (frac if forward else (1 - frac))
+            pts.append(ellipse_pt(r, r, th))
+    if frac_last > 1e-9:
+        forward = n_full_laps % 2 == 0
+        r = lap_radius(n_full_laps)
+        n_partial = max(1, int(round(n_steps * frac_last)))
+        for j in range(1, n_partial + 1):
+            frac = frac_last * j / n_partial
+            th = th0 + span * (frac if forward else (1 - frac))
+            pts.append(ellipse_pt(r, r, th))
     return pts
 
 
@@ -117,8 +138,8 @@ def generate(
     max_r=36.5,
     ring_gap_mm=4.0,
     ring_step_deg=2.0,
-    zigzag_amp_mm=ZIGZAG_AMP_MM,
-    zigzag_cycles=ZIGZAG_N_CYCLES,
+    zigzag_n_laps=ZIGZAG_N_LAPS,
+    zigzag_lap_step_mm=ZIGZAG_LAP_STEP_MM,
     engrave_power=ENGRAVE_POWER_PCT,
     engrave_feed=ENGRAVE_FEED,
 ):
@@ -198,7 +219,7 @@ def generate(
         lines.append("")
 
         # -- outer ring: ONE continuous path, wiggle only at the very start,
-        # then each sector zigzags (diagonal wobble) across its own span --
+        # then each sector zigzags forward/reverse (repeat coverage) --
         ramp_ms0 = WARMUP_MS * (p0 / 100.0)
         lead_in_mm0 = ramp_ms0 / 1000.0 * feed / 60.0
         warmup_span_deg = min(
@@ -224,7 +245,7 @@ def generate(
             lines.append(f"; sector {k + 1}/{n_sectors} power={power}%")
             lines.append(f"M3 S{power_s[power]}")
             zpts = _zigzag_arc_points(
-                r_outer, zigzag_amp_mm, th0, th1, zigzag_cycles, ring_step_deg
+                r_outer, th0, th1, zigzag_n_laps, zigzag_lap_step_mm, ring_step_deg
             )
             for x, y in zpts[1:]:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
@@ -232,7 +253,7 @@ def generate(
         lines.append("")
 
         # -- inner ring: laser OFF between sectors, each its own cold start,
-        # each sector zigzagging (diagonal wobble) across its own span --
+        # each sector zigzagging forward/reverse (repeat coverage) --
         lines.append(
             f"; --- feed={feed}mm/min inner ring r={r_inner:.1f}mm COLD-START "
             "PER SECTOR ---"
@@ -240,7 +261,7 @@ def generate(
         for k, power in enumerate(powers):
             th0, th1 = k * sec, (k + 1) * sec
             pts = _zigzag_arc_points(
-                r_inner, zigzag_amp_mm, th0, th1, zigzag_cycles, ring_step_deg
+                r_inner, th0, th1, zigzag_n_laps, zigzag_lap_step_mm, ring_step_deg
             )
             ramp_ms = WARMUP_MS * (power / 100.0)
             lead_in_mm = ramp_ms / 1000.0 * feed / 60.0
