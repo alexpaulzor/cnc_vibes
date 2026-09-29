@@ -1094,3 +1094,71 @@ number) -- the residual-heat-bias hypothesis itself and the half-lead-in
 floor size are both unverified assumptions, same status the original
 `etch_matrix_cal.py` version's `1.5x` margin had before it was corrected
 here.
+
+## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
+
+A colleague's name for a full-size (300mm default) ring puzzle: "PRINCIPAL"
+reading across the top, "CAVAGNOLO" across the bottom (upside-down relative
+to the top, by design -- the two lines of a coin/medallion inscription), a
+rocket and a satellite as the two decorative separators, one E one W. Etch
+design explicitly deferred -- this spike is only about whether the geometry
+holds up with this many letters (18 + 2 ornaments = 20 ring slots, more than
+triple PLANET's 6+1).
+
+**New ornaments** (`ornament_local()` in `ring_prototype.py`): `"rocket"`
+(nose pointing outward/away from the hub, flared fin skirt toward the hub,
+no window cutout -- a hole here would be a fragile separate ring at
+ornament scale, purely decorative anyway, left for an etch pass later) and
+`"satellite"` (body + two fused solar-panel wings, symmetric so it reads
+the same regardless of which way the ring rotation flips it). Both are
+solid single-piece silhouettes in the same style as the existing
+heart/star, no interior holes.
+
+**Per-word ornament lists**: `RingParams.ornament` now also accepts a
+list/tuple (`["rocket", "satellite"]`), one kind per word in `words`
+(cycled if shorter than `words`), consumed by `fit_ring()`'s per-word
+ornament slot -- previously every slot reused the same single
+`rp.ornament` regardless of word count.
+
+**Word-order gotcha (non-obvious, worth recording)**: `fit_ring()` centers
+the join -- the LAST element in the full locs sequence (letters + trailing
+ornament, word by word) -- at th=π (bottom, via `(x - join + π) % 2π`).
+Since `place()` is the identity rotation at th=0 (top) and a 180° rotation
+at th=π (bottom), whichever word's letters land immediately before that
+final join ends up spanning the arc into the bottom (upside-down), and the
+word that comes first in the `words` list -- which end up on the far side
+of the circle after the rotation wrap -- reads upright across the top.
+Confirmed empirically (not derived from first-principles reasoning alone):
+`words=["PRINCIPAL","CAVAGNOLO"]` put CAVAGNOLO on top and PRINCIPAL on the
+bottom, backwards from what was wanted; `words=["CAVAGNOLO","PRINCIPAL"]`
+(ornament `["satellite","rocket"]` to match) put PRINCIPAL on top and
+CAVAGNOLO on the bottom as intended. **For a top/bottom two-word ring,
+the word that should read upright across the top must be LAST in
+`words`.**
+
+**Fit sweep results** (8 seeds, `words=["CAVAGNOLO","PRINCIPAL"]`,
+`ornament=["satellite","rocket"]`, otherwise-default 300mm `RingParams`):
+every seed converges at the SAME `cap_mm=23.0` (auto-shrunk from the
+46mm max -- the fit loop keeps lowering cap height 1mm at a time until
+`min_gap_mm` clears the 14mm floor, and 20 slots vs. PLANET's 7 needs
+about half the letter height to do that) with `min_gap_mm=14.56` (just
+above the floor) and `hw_safe=True` on all 8. Piece counts range 76-80.
+The real cost of "so many letters" shows up as `no_tab` findings (a seam
+where no tab fit, so the two pieces merge into one instead of
+interlocking) -- 19 to 25 per seed out of roughly 97 possible internal
+seams (roughly a quarter), plus an incidental `elongated` piece on most
+seeds. This is `ring_lint`'s existing, already-tracked graceful-degrade
+path (the same "dropped seam" mechanism every prior ring puzzle in this
+project already uses when a tab doesn't fit), not a new failure mode --
+just proportionally more of it than a shorter name sees, since a smaller
+cap height leaves less room for full tab geometry at many more seams.
+Picked seed 6 (`no_tab=20`, no `elongated`, 77 pieces) as the cleanest of
+the 8 for the delivered preview render.
+
+**Not yet**: no G-code emitted (cut-only was explicitly requested but not
+yet generated for this spike), no etch design (explicitly deferred), no
+attempt at a larger diameter to reduce the `no_tab` fraction (an option
+if the merge rate turns out to matter once seen physically -- the fit
+loop's floor is a hard physical constraint, but the STARTING diameter
+before that floor kicks in is a free parameter this spike left at the
+300mm default).
