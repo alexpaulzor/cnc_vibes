@@ -2646,6 +2646,21 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins, densities=(1, 2, 
     solids = [Polygon(g.exterior) for g in glyphs]
     letters_solid = unary_union(solids)
     verts = [_vg_anchors(g, ppm) for g in glyphs]
+    for gi, (g, vs) in enumerate(zip(glyphs, verts)):
+        if not vs:
+            # Letter is small/cramped enough that every candidate failed the
+            # launch-clearance check (e.g. a squeezed word forced tiny caps) --
+            # fall back to its 4 bbox-extreme boundary points so gap/cap/end
+            # seam construction still has somewhere to attach, rather than
+            # crashing outright. These points skip the normal clearance floor,
+            # so a seam through one may sit tighter than usual.
+            ext = list(g.exterior.coords)[:-1]
+            verts[gi] = [
+                min(ext, key=lambda p: p[0]),
+                max(ext, key=lambda p: p[0]),
+                min(ext, key=lambda p: p[1]),
+                max(ext, key=lambda p: p[1]),
+            ]
     norms = [[_vg_normal(g, v, ppm) for v in vs] for g, vs in zip(glyphs, verts)]
     def obstacles(attach):
         return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
