@@ -24,16 +24,17 @@ from plaque_two_line import (  # noqa: E402
     build_frame_and_backboard,
     build_two_row_pieces,
 )
+from shapely.geometry import Polygon  # noqa: E402
 
 WORD1, WORD2 = "PRINCIPAL", "CAVAGNOLO"
 
 
-def _make_cfg(row_h_mm=34.0, row_gap_mm=30.0, margin_top_mm=24.0, margin_bottom_mm=24.0,
+def _make_cfg(row_h_mm=26.0, row_gap_mm=30.0, margin_top_mm=24.0, margin_bottom_mm=24.0,
               panel_w_mm=280.0, ppm=5):
     panel_h_mm = margin_top_mm + row_h_mm + row_gap_mm + row_h_mm + margin_bottom_mm
     return G.PuzzleConfig(
         panel_mm=panel_w_mm, panel_h_mm=panel_h_mm,
-        tab_circle_r_px=15, tab_stem_w_px=30.0,
+        piece_mm=25.0, tab_circle_r_px=15, tab_stem_w_px=30.0,
         letter_clearance_mm=4.0, corner_radius_mm=0.0,
         panel_w_px_fit=int(panel_w_mm * ppm), panel_h_px_fit=int(panel_h_mm * ppm),
     )
@@ -152,8 +153,12 @@ def test_no_oversized_pieces(built):
 # edge" + "an outer edge of at least 5 or 10mm."
 # ---------------------------------------------------------------------------
 def test_frame_and_backboard_share_outer_profile():
+    """Same OUTER shape -- geometric (topological) equality, not vertex-
+    for-vertex order equality: GEOS's difference() op can return the same
+    ring starting at a different vertex / winding direction, which is
+    still "identical profile, flush all around" as specified."""
     frame, backboard = build_frame_and_backboard(280.0, 146.0, border_mm=10.0, corner_mm=5.0)
-    assert frame.exterior.equals_exact(backboard.exterior, tolerance=1e-6)
+    assert frame.exterior.equals(backboard.exterior)
 
 
 def test_frame_border_is_at_least_the_requested_width():
