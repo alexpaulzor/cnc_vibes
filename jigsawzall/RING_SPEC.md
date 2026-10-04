@@ -1162,3 +1162,51 @@ if the merge rate turns out to matter once seen physically -- the fit
 loop's floor is a hard physical constraint, but the STARTING diameter
 before that floor kicks in is a free parameter this spike left at the
 300mm default).
+
+## 16. Family ring: ERIC / MARIA / JULIAN + loose "THE MICHELS" center (accepted)
+
+**Delivered:** `ring_prototype.py ERIC+MARIA+JULIAN --seed 1 --font round
+--center-text THE+MICHELS --center-style flat --outline-etch-mm 0.75
+--gcode ...` -- 300mm disc, 83 pieces, score (thin, oversized, sliver,
+nub, dropped) = (0, 0, 0, 0, 16), center text auto-sized to 15mm.
+
+**Center text, loose letters (`center_style`).** Alex rejected the fused
+medallion (§11.7): the support bars "don't look good" and the undivided
+hub piece is "a dealbreaker". `flat` (two horizontal lines) and `ring`
+(arced, bottom word flipped to read upright) cut each center letter as its
+own loose piece out of the normally sliced hub. Center letters keep >=5mm
+of wood between them (`center_min_gap_mm`, Alex's 5mm floor for short
+spans; the flat line gap gets the same floor), and the cap auto-maximizes
+(`center_loose_cap_max_mm`, 0.5mm steps) to fill the hub. Alex picked `flat`.
+
+**Hub spokes around loose letters (`plan_center_pinwheel`).** The plain
+pinwheel meets at the hub's exact centre -- for flat text that's the gap
+between the lines, so spokes graze letters (Alex spotted a sliver inside
+the C and a near-miss neck at the E). Accepted fix: converge inside a
+central letter and nudge each spoke's landing angle (+-12 deg) until no
+spoke passes a letter within 5mm without touching it (`spoke_near_misses`).
+Known residual: a spoke can cross a letter and then run alongside it (here,
+down between THE's H legs, ~3.5mm strips) -- Alex reviewed it and accepted.
+
+**Tried and rejected (don't retry without a new idea):**
+1. Bending a spoke into the nearest letter at each near miss -> left a
+   dead-end slit and new tangent strips.
+2. Handing thin strips to the neighbouring piece after polygonizing ->
+   ping-ponged between pieces, created 2 new slivers.
+3. Stricter per-spoke rule (no long run alongside a letter) + per-spoke
+   twist/curvature -> spokes clean, but two left the same letter <5mm
+   apart, the tab placer dropped one, two wedges merged (oversized).
+4. Adding a 5mm spoke-to-spoke rule with one convergence letter -> 0 of
+   108 layouts satisfiable (7 spokes can't leave one ~10mm letter 5mm apart).
+5. Each spoke starting from any nearby letter -> every spoke clean, but
+   the hub became ONE piece: a cut from a letter to the rim only separates
+   pieces if the letters it starts from are connected by other cuts.
+   Untried idea if this is revisited: two convergence letters (THE's H and
+   MICHELS' H are vertically aligned) joined by one short untabbed cut.
+
+**Etched letter outlines (`--outline-etch-mm`, `letter_outline_etch.py`).**
+One line inside and one outside every letter cut (counters included),
+etched first in the same file via `combine_passes`. 0.75mm chosen because
+center-letter strokes are ~2.6-3.2mm and a 1.1mm inset already splits
+them. Etch power/feed is the baltic-birch calibration (§13.10) -- the
+current veneered 3-ply stock is untested; scrap-test first.
