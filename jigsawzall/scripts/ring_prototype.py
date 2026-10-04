@@ -1487,7 +1487,7 @@ def main():
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")
     ap.add_argument("--etch-feed", type=int, default=None, help="outline etch feed mm/min (default: material etch profile)")
     ap.add_argument(
-        "--max-backtrack-ms", type=float, default=5000.0,
+        "--max-backtrack-ms", type=float, default=2000.0,
         help="re-trace already-cut line up to this many ms to avoid a restart+warmup",
     )
     ap.add_argument(

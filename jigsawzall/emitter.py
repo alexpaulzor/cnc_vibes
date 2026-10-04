@@ -979,10 +979,16 @@ def emit_cut_gcode_full(
         mode=mode,
     )
 
+    cut_segs = _CutIndex()
     for idx, path_mm in enumerate(chains, start=1):
         coords_mm = _collapse_shuttles(decimate(path_mm, min_segment_mm))
+        # A backtrack only earns its keep BETWEEN two new cuts. Re-cut line at
+        # the start or end of a path connects to nothing -- the laser restarts
+        # (full warmup) anyway -- so strip it.
+        coords_mm = _trim_recut_ends(coords_mm, cut_segs)
         if len(coords_mm) < 2:
             continue
+        cut_segs.add(coords_mm)
         warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
         path_len = sum(
             math.hypot(b[0] - a[0], b[1] - a[1])
@@ -1020,6 +1026,50 @@ def emit_cut_gcode_full(
         lines.append("")
     lines += ["G0 X0 Y0", ""]
     return "\n".join(lines)
+
+
+class _CutIndex:
+    """Already-cut line, for spotting re-cut segments geometrically (vertex
+    keys miss them: the same edge decimates to different points in different
+    chains)."""
+
+    def __init__(self, tol_mm=0.05):
+        self.tol = tol_mm
+        self.segs = []
+        self.tree = None
+        self.dirty = False
+
+    def add(self, coords):
+        from shapely.geometry import LineString as _LS
+
+        self.segs += [_LS([a, b]) for a, b in zip(coords, coords[1:]) if a != b]
+        self.dirty = True
+
+    def covered(self, a, b):
+        from shapely.geometry import LineString as _LS
+        from shapely.strtree import STRtree
+
+        if not self.segs:
+            return False
+        if self.dirty:
+            self.tree, self.dirty = STRtree(self.segs), False
+        seg = _LS([a, b])
+        near = [self.segs[i] for i in self.tree.query(seg.buffer(self.tol))]
+        if not near:
+            return False
+        from shapely.ops import unary_union
+
+        return seg.difference(unary_union(near).buffer(self.tol)).length < self.tol
+
+
+def _trim_recut_ends(coords, cut):
+    """Drop leading/trailing segments an earlier path already cut."""
+    i, j = 0, len(coords) - 1
+    while i < j and cut.covered(coords[i], coords[i + 1]):
+        i += 1
+    while j > i and cut.covered(coords[j - 1], coords[j]):
+        j -= 1
+    return list(coords[i : j + 1])
 
 
 # ---------------------------------------------------------------------------
