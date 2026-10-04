@@ -177,6 +177,10 @@ class RingParams:
     # floor for short spans on the 3-ply veneer stock). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
     center_min_gap_mm: float = 5.0
+    # Loose center text (flat/ring) searches DOWN from this cap height in
+    # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
+    # instead of stopping at center_text_cap_mm (the medallion's fixed start).
+    center_loose_cap_max_mm: float = 30.0
 
 
 # --------------------------------------------------------------------------
@@ -350,7 +354,7 @@ def center_letters(rp, ppm, r_h, C):
     Returns (list of letter polygons, cap_mm) or (None, None) if nothing
     fits down to center_text_cap_min_mm."""
     min_gap = rp.center_min_gap_mm * ppm
-    cap_mm = rp.center_text_cap_mm
+    cap_mm = rp.center_loose_cap_max_mm
     while cap_mm >= rp.center_text_cap_min_mm:
         track_mm = rp.center_track_mm
         while track_mm <= rp.center_track_mm + 10:
@@ -364,7 +368,7 @@ def center_letters(rp, ppm, r_h, C):
             if min(gaps) >= min_gap:
                 return out, cap_mm
             track_mm += 0.5
-        cap_mm -= 1
+        cap_mm -= 0.5
     return None, None
 
 
@@ -1355,6 +1359,11 @@ def main():
         help="medallion = fused words + undivided hub (original); flat / ring = "
         "loose letters cut out of the normal pie-sliced hub",
     )
+    ap.add_argument(
+        "--outline-etch-mm", type=float, default=0.0,
+        help="etch an outline this far inside AND outside every letter cut "
+        "(0 = off). Shows which side is up, and reads before painting",
+    )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
@@ -1394,6 +1403,17 @@ def main():
     J.render_preview(pieces, cfg, title, out)
     if a.debug:
         render_debug_overlay(out, st["seams"])
+    strokes = []
+    if a.outline_etch_mm > 0:
+        from letter_outline_etch import draw_strokes, letter_outline_strokes
+
+        strokes, warns = letter_outline_strokes(
+            [p["polygon"] for p in pieces if p["kind"] == "letter"],
+            _panel, cfg.px_per_mm, a.outline_etch_mm, a.outline_etch_mm,
+        )
+        for w in warns:
+            print("WARNING outline etch:", w)
+        draw_strokes(out, strokes)
     if a.gcode:
         from emitter import load_material
 
@@ -1406,6 +1426,11 @@ def main():
             min_segment_mm=a.min_segment_mm,
             max_backtrack_ms=a.max_backtrack_ms,
         )
+        if strokes:
+            from emitter import combine_passes, emit_etch_gcode
+
+            etch = emit_etch_gcode(strokes, material, cfg, f"{tag} letter outlines")
+            gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
         Path(a.gcode).write_text(gcode)
         png, _svg = J.render_gcode_previews(
             gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{tag} ring cut"
