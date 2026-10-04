@@ -122,6 +122,8 @@ class RingParams:
     # tabbed piece, same as any other word) -- like text arcing under the
     # bottom of a circular badge/seal, not a coin's inverted second line.
     mirror_words: tuple[int, ...] = ()
+    # index of the word to centre at 12 o'clock (None: last ornament at 6 o'clock)
+    center_word: int | None = None
     variants: int = 12
     font: str | None = None  # geometry.find_font path/alias; None = repo default
     outline_smooth_px: float = 1.2
@@ -621,7 +623,7 @@ def fit_ring(words, rp: RingParams, ppm):
             if isinstance(rp.ornament, (list, tuple))
             else [rp.ornament]
         )
-        locs, labels = [], []
+        locs, labels, word_of = [], [], []
         for i, w in enumerate(words):
             mirrored = i in rp.mirror_words
             # Reversed iteration order + a 180 local pre-rotation together
@@ -643,10 +645,12 @@ def fit_ring(words, rp: RingParams, ppm):
                     g = affinity.rotate(g, 180, origin=(0, 0))
                 locs.append(g)
                 labels.append(c)
+                word_of.append(i)
             orn = orn_kinds[i % len(orn_kinds)]
             if orn:
                 locs.append(ornament_local(orn, cap))
                 labels.append("*")
+                word_of.append(None)
         n = len(locs)
         ext = [ang_extent(solid_of(g), Rin) for g in locs]
         span = sum(l + r for l, r in ext)
@@ -662,6 +666,14 @@ def fit_ring(words, rp: RingParams, ppm):
         # rotate so the ornament (or the join) is at the bottom, text centred on top
         join = ths[-1] if rp.ornament else ths[-1] + ext[-1][1] + beta / 2
         ths = [(x - join + math.pi) % (2 * math.pi) for x in ths]
+        if rp.center_word is not None:
+            # centre that word's angular span (first letter's leading edge to
+            # last letter's trailing edge) on 12 o'clock
+            ks = [k for k, w in enumerate(word_of) if w == rp.center_word]
+            a0 = ths[ks[0]] - ext[ks[0]][0]
+            a1 = a0 + ((ths[ks[-1]] + ext[ks[-1]][1]) - a0) % (2 * math.pi)
+            mid = (a0 + a1) / 2
+            ths = [(x - mid) % (2 * math.pi) for x in ths]
         C = (0.0, 0.0)
         world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
         gaps = [
@@ -1451,6 +1463,8 @@ def main():
         "each word gets one --ornament slot after it",
     )
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--center-word", default=None,
+                    help="name (or 0-based index) of the ring word to centre at 12 o'clock")
     ap.add_argument("--variants", type=int, default=12)
     ap.add_argument("--shape", choices=("disc", "square"), default="disc")
     ap.add_argument("--diameter-mm", type=float, default=290.0,
@@ -1496,6 +1510,7 @@ def main():
     )
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    words = [w.upper() for w in a.word.split("+") if w.strip()]
     rp = RingParams(
         diameter_mm=a.diameter_mm,
         shape=a.shape,
@@ -1506,8 +1521,8 @@ def main():
         distinct_tabs=not a.no_distinct_tabs,
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
         center_style=a.center_style,
+        center_word=_center_word_index(a.center_word, words),
     )
-    words = [w.upper() for w in a.word.split("+") if w.strip()]
     tag = "-".join(words)
     pieces, cfg, L, st, _panel, _C = generate(words, a.seed, rp)
     out = Path(
@@ -1563,6 +1578,16 @@ def main():
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "
         f"score (thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
+
+
+def _center_word_index(spec, words):
+    if spec is None:
+        return None
+    if spec.isdigit():
+        return int(spec)
+    if spec.upper() not in words:
+        raise SystemExit(f"--center-word {spec!r} is not one of {words}")
+    return words.index(spec.upper())
 
 
 def _check_xy_envelope(gcode, max_xy_mm):
