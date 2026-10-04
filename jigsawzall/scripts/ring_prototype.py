@@ -159,6 +159,24 @@ class RingParams:
     center_text_gap_mm: float = 3.0  # vertical gap between the two lines
     center_text_baseline_mm: float = 5.0  # support bar height, below each line
     center_text_fit_frac: float = 0.82  # block must fit within r_h * this
+    # How center_text is cut:
+    #   "medallion" -- the original: each word fused with a support bar,
+    #                  hub disc left as one undivided piece around it.
+    #   "flat"      -- two horizontal lines of loose individual letters (no
+    #                  bar), cut straight out of the normal pinwheel-sliced
+    #                  hub; spokes run wherever they run, letters just become
+    #                  pockets in whichever wedge(s) they land in.
+    #   "ring"      -- same loose letters, but arced around an inner circle:
+    #                  word 1 across the top, word 2 across the bottom
+    #                  flipped (reversed + rotated 180) so both read upright,
+    #                  with both words' midlines on the same circle.
+    center_style: str = "medallion"
+    center_track_mm: float = 2.0  # starting extra spacing between loose center letters
+    # Wood between two adjacent loose center letters is a short finger
+    # attached only at its ends -- must be at least this wide (Alex: 5mm
+    # floor for short spans on the 3-ply veneer stock). Tracking widens until
+    # it holds, then cap height shrinks if it can't fit.
+    center_min_gap_mm: float = 5.0
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +322,92 @@ def center_text_block(rp, ppm):
         r = max(math.hypot(x, y) for x, y in block.convex_hull.exterior.coords)
         yield cap_mm, r, block
         cap_mm -= 1
+
+
+def _center_font(rp, cap_mm, ppm):
+    ref = G.find_font(1000, rp.font)
+    cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
+    return G.find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
+
+
+def _word_advances(word, font, track_px):
+    """Per-letter local glyphs plus each letter's centre offset along the
+    word (x=0 at the word's centre), using the font's own advances plus
+    `track_px` extra between letters."""
+    glyphs = [glyph_local(ch, font) for ch in word]
+    adv = [font.getlength(ch) for ch in word]
+    pos, x = [], 0.0
+    for a in adv:
+        pos.append(x + a / 2)
+        x += a + track_px
+    total = x - track_px
+    return glyphs, [p - total / 2 for p in pos], total
+
+
+def center_letters(rp, ppm, r_h, C):
+    """Loose individual center letters (center_style "flat" or "ring"),
+    placed in world coords around hub centre C, largest cap that fits.
+    Returns (list of letter polygons, cap_mm) or (None, None) if nothing
+    fits down to center_text_cap_min_mm."""
+    min_gap = rp.center_min_gap_mm * ppm
+    cap_mm = rp.center_text_cap_mm
+    while cap_mm >= rp.center_text_cap_min_mm:
+        track_mm = rp.center_track_mm
+        while track_mm <= rp.center_track_mm + 10:
+            out = _center_layout(rp, ppm, r_h, C, cap_mm, track_mm * ppm)
+            if out is None:
+                break  # doesn't fit at this cap -- widening won't help
+            gaps = [
+                min(a.distance(b) for j, b in enumerate(out) if j != i)
+                for i, a in enumerate(out)
+            ]
+            if min(gaps) >= min_gap:
+                return out, cap_mm
+            track_mm += 0.5
+        cap_mm -= 1
+    return None, None
+
+
+def _center_layout(rp, ppm, r_h, C, cap_mm, track):
+    """One layout attempt at a given cap height and tracking; None if it
+    doesn't fit the hub."""
+    w1, w2 = rp.center_text
+    limit = r_h * rp.center_text_fit_frac
+    font = _center_font(rp, cap_mm, ppm)
+    cap = cap_mm * ppm
+    out = []
+    if rp.center_style == "flat":
+        # the strip between the two lines is wood too -- same floor applies
+        gap = max(rp.center_text_gap_mm, rp.center_min_gap_mm) * ppm + 1
+        g1, x1, _t1 = _word_advances(w1, font, track)
+        g2, x2, _t2 = _word_advances(w2, font, track)
+        # line 1 baseline above centre, line 2 baseline below
+        y1 = -gap / 2
+        y2 = gap / 2 + cap
+        out = [affinity.translate(g, C[0] + x, C[1] + y1) for g, x in zip(g1, x1)]
+        out += [affinity.translate(g, C[0] + x, C[1] + y2) for g, x in zip(g2, x2)]
+        r = max(
+            math.hypot(px - C[0], py - C[1])
+            for g in out for px, py in g.convex_hull.exterior.coords
+        )
+        return out if r <= limit else None
+    else:  # "ring"
+        r_m = limit - cap / 2  # shared midline, as far out as fits
+        ok = True
+        for wi, word in enumerate((w1, w2)):
+            flip = wi == 1
+            seq = word[::-1] if flip else word
+            gl, xs, total = _word_advances(seq, font, track)
+            if total / r_m > math.radians(160):
+                ok = False
+                break
+            th0 = 0.0 if not flip else math.pi
+            r_base = r_m - cap / 2 if not flip else r_m + cap / 2
+            for g, x in zip(gl, xs):
+                if flip:
+                    g = affinity.rotate(g, 180, origin=(0, 0))
+                out.append(place(g, th0 + x / r_m, r_base, C))
+        return out if ok and r_m - cap / 2 > 0 else None
 
 
 def solid_of(g):
@@ -572,7 +676,24 @@ def build_ring(words, seed, rp: RingParams, cfg):
     world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
     global _center_medallion
     _center_medallion = None
-    if rp.center_text:
+    center_solids = []
+    L["center_cap_mm"] = None
+    if rp.center_text and rp.center_style in ("flat", "ring"):
+        # Loose letters cut straight out of the ordinary pinwheel hub: no
+        # medallion, no exemption, spokes stay. They join letter_union (so
+        # they become pockets/pieces like any letter) but NOT the outer
+        # letters' seam-routing obstacles -- only tab clearance sees them.
+        cl, ccap = center_letters(rp, ppm, r_h, C)
+        if cl is None:
+            warnings.warn(
+                f"center_text {rp.center_text!r} ({rp.center_style}) doesn't fit "
+                f"hub radius {r_h / ppm:.0f}mm -- skipping"
+            )
+        else:
+            world.extend(cl)
+            center_solids = [solid_of(g) for g in cl]
+            L["center_cap_mm"] = ccap
+    elif rp.center_text:
         found = None
         for cap_mm, r, block in center_text_block(rp, ppm):
             if r <= r_h * rp.center_text_fit_frac:
@@ -592,6 +713,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
     solids_l = [solid_of(g) for g in locs]
     solids = [solid_of(w) for w in world[:n]]
     letters_solid = unary_union(solids)
+    # tabs/face classification must also keep clear of loose center letters
+    tab_solids = unary_union(solids + center_solids) if center_solids else letters_solid
     background = panel.difference(letter_union)
     far = 2 * D
     # Square stock: a circle of radius Rc (inscribed + corner_ring_mm) clipped by
@@ -878,7 +1001,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
 
         with _oriented_oversized():
             surround, counters, st = assemble(
-                seams, letter_union, letters_solid, background, panel, cfg, C,
+                seams, letter_union, tab_solids, background, panel, cfg, C,
                 distinct_tabs=rp.distinct_tabs,
             )
         sc = score(surround, panel, cfg) + (st["dropped"],)
@@ -1227,6 +1350,11 @@ def main():
         help="two words for the hub medallion, e.g. 'THE+PAULS' (forces the hub disc undivided)",
     )
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
+    ap.add_argument(
+        "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
+        help="medallion = fused words + undivided hub (original); flat / ring = "
+        "loose letters cut out of the normal pie-sliced hub",
+    )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
@@ -1250,6 +1378,7 @@ def main():
         font=a.font,
         distinct_tabs=not a.no_distinct_tabs,
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
+        center_style=a.center_style,
     )
     words = [w.upper() for w in a.word.split("+") if w.strip()]
     tag = "-".join(words)
