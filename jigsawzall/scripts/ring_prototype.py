@@ -1480,6 +1480,8 @@ def main():
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
+    ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")
+    ap.add_argument("--etch-feed", type=int, default=None, help="outline etch feed mm/min (default: material etch profile)")
     ap.add_argument(
         "--max-backtrack-ms", type=float, default=5000.0,
         help="re-trace already-cut line up to this many ms to avoid a restart+warmup",
@@ -1541,7 +1543,10 @@ def main():
         if strokes:
             from emitter import combine_passes, emit_etch_gcode
 
-            etch = emit_etch_gcode(strokes, material, cfg, f"{tag} letter outlines")
+            etch = emit_etch_gcode(
+                strokes, material, cfg, f"{tag} letter outlines",
+                feed_override=a.etch_feed, power_percent=a.etch_power,
+            )
             gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
         Path(a.gcode).write_text(gcode)
         png, _svg = J.render_gcode_previews(
