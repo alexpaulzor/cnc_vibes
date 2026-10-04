@@ -374,7 +374,7 @@ def _emit_cut_for(
 _WOOD_LIGHT = (228, 204, 168)
 _LETTER_FILL = (200, 90, 90)
 _CELL_FILL_BASE = (210, 215, 230)
-_CUT_LINE = (40, 30, 20)
+_CUT_LINE = (230, 0, 0)  # bright red: cut lines; etch overlays draw black
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -521,6 +521,22 @@ def _parse_gcode_paths(gcode: str) -> list[list[tuple[float, float]]]:
     return paths
 
 
+def _parse_gcode_paths_power(gcode: str) -> list[tuple[list[tuple[float, float]], int]]:
+    """Like _parse_gcode_paths, but each path carries the S value it was
+    fired at (the last M3/M4 S before it), so etch and cut can be told apart."""
+    import re
+
+    # split before each G0: a path's own M3/M4 follows its G0 in that block
+    res, s = [], 0
+    for b in re.split(r"(?m)^(?=G0 X)", gcode):
+        m = re.search(r"(?m)^M[34] S(\d+)", b)
+        if m:
+            s = int(m.group(1))
+        for p in _parse_gcode_paths(b):
+            res.append((p, s))
+    return res
+
+
 def render_gcode_previews(
     gcode: str, cfg, out_stem: Path, title: str, write_svg: bool = False
 ) -> tuple[Path, Path | None]:
@@ -529,7 +545,11 @@ def render_gcode_previews(
 
     Returns (png_path, svg_path_or_None). Lines are the cut paths; G0 rapids
     between paths are drawn faintly so re-positioning is visible."""
-    paths = _parse_gcode_paths(gcode)
+    pw_paths = _parse_gcode_paths_power(gcode)
+    paths = [p for p, _s in pw_paths]
+    s_max = max((sv for _p, sv in pw_paths), default=0)
+    # cuts (full power) red; lower-power etch passes black
+    is_etch = [0 < sv < s_max for _p, sv in pw_paths]
     pad = 10.0
     # Use the FITTED panel size (what the gcode actually spans), not the
     # panel_mm/panel_h_mm bounds — else a fit_to_text banner is drawn short and
@@ -563,9 +583,11 @@ def render_gcode_previews(
                     f'stroke="#e0e0e0" stroke-width="0.1" stroke-dasharray="0.5,0.5"/>'
                 )
             pts = " ".join(f"{x + pad:.3f},{fy(y):.3f}" for x, y in p)
+            etch = is_etch[paths.index(p)]
             svg.append(
-                f'<polyline points="{pts}" fill="none" stroke="#b03020" '
-                f'stroke-width="0.3"/>'
+                f'<polyline points="{pts}" fill="none" '
+                f'stroke="{"#141414" if etch else "#e60000"}" '
+                f'stroke-width="{0.15 if etch else 0.3}"/>'
             )
             prev_end = p[-1]
         svg.append("</svg>")
@@ -583,10 +605,14 @@ def render_gcode_previews(
 
     d.rectangle([px(0, ph), px(pw, 0)], outline=(200, 200, 200), width=1)
     prev_end = None
-    for p in paths:
+    for p, etch in zip(paths, is_etch):
         if prev_end is not None:
             d.line([px(*prev_end), px(*p[0])], fill=(225, 225, 225), width=1)
-        d.line([px(x, y) for x, y in p], fill=(176, 48, 32), width=2)
+        d.line(
+            [px(x, y) for x, y in p],
+            fill=(20, 20, 20) if etch else (230, 0, 0),
+            width=1 if etch else 2,
+        )
         prev_end = p[-1]
     title_font = _load_font(max(12, scale * 3))
     d.text((pad * scale, 2), title, fill=(20, 20, 20), font=title_font)
