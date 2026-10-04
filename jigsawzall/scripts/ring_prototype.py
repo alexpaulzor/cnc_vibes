@@ -414,6 +414,121 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
         return out if ok and r_m - cap / 2 > 0 else None
 
 
+def cut_letter_violations(pts, letters_union, letters_prep, ppm, min_gap_mm, max_run_mm=7.0):
+    """How many places a cut leaves wood thinner than min_gap_mm against a
+    loose center letter. Walks the cut at 0.5mm steps and looks at every
+    stretch that is OUTSIDE all letters but within min_gap_mm of one:
+
+      * a stretch that never touches a letter at either end but dips close
+        (a near miss) -> a sliver, or a pinched neck at a letter corner;
+      * any stretch longer than max_run_mm -> the cut is running ALONGSIDE
+        a letter (e.g. down between an H's legs after crossing its bar),
+        not just crossing into/out of it.
+
+    A plain crossing only spends ~min_gap/sin(angle) inside that band on
+    each side, so it doesn't count."""
+    T = min_gap_mm * ppm
+    ln = LineString(pts)
+    n = max(2, int(ln.length / (0.5 * ppm)) + 1)
+    sp = [ln.interpolate(i * ln.length / (n - 1)) for i in range(n)]
+    ins = [letters_prep.contains(q) for q in sp]
+    d = [0.0 if ins[i] else letters_union.distance(sp[i]) for i in range(n)]
+    v, i = 0, 0
+    while i < n:
+        if ins[i] or d[i] >= T:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and not ins[j + 1] and d[j + 1] < T:
+            j += 1
+        run = (j - i) * ln.length / (n - 1)
+        touches = (i > 0 and ins[i - 1]) or (j < n - 1 and ins[j + 1])
+        interior = i > 0 and j < n - 1
+        if run > max_run_mm * ppm or (interior and not touches):
+            v += 1
+        i = j + 1
+    return v
+
+
+def _pinwheel_spoke(P, phi, b, twist, tw_deg, r_h, h=0.45):
+    na = out_vec(phi + twist * math.radians(tw_deg))
+    return G._vg_bez(P, na, b, out_vec(phi + math.pi), h * r_h)
+
+
+def plan_center_pinwheel(letters, C, r_h, k_hub, ppm, min_gap_mm, rng, jitter_deg=15):
+    """Hub spokes for loose center text, chosen so no cut leaves wood
+    thinner than min_gap_mm against a center letter (cut_letter_violations).
+
+    Why not the plain pinwheel: its spokes meet at the hub's exact centre,
+    which for flat two-line text sits in the gap BETWEEN the lines -- every
+    spoke threads along that gap grazing letters, and no rotation of the
+    pinwheel avoids it (measured: 0 of 720). So:
+      * the spokes meet INSIDE a center letter near the middle (each one
+        then starts on that letter's edge; the bit inside is cut away);
+      * each spoke independently picks its landing angle (+-jitter_deg),
+        launch twist and curvature to come out violation-free;
+      * layouts whose spokes cross each other are rejected.
+    Returns (P, twist, [(phi, tw_deg, h), ...]) -- the first fully clean
+    layout found, else the one with the fewest violations."""
+    from shapely.prepared import prep
+
+    lu = unary_union(letters)
+    lp = prep(lu)
+    viol = lambda pts: cut_letter_violations(pts, lu, lp, ppm, min_gap_mm)
+    cands = sorted(
+        (g for g in letters if g.distance(Point(C)) < 0.4 * r_h),
+        key=lambda g: g.distance(Point(C)),
+    ) or [min(letters, key=lambda g: g.distance(Point(C)))]
+    opts = [
+        (dd, tw, h)
+        for dd in range(-jitter_deg, jitter_deg + 1)
+        for tw in (20, 35, 50, 65, 80)
+        for h in (0.25, 0.45, 0.65)
+    ]
+    opts.sort(key=lambda o: (abs(o[0]), abs(o[1] - 50), abs(o[2] - 0.45)))
+    layouts = [(g, twist, a) for g in cands for twist in (-1, 1)
+               for a in range(0, 360 // k_hub, 6)]
+    rng.shuffle(layouts)
+    T = min_gap_mm * ppm
+    best = None
+    for g, twist, a_deg in layouts:
+        rpt = g.representative_point()
+        P = (rpt.x, rpt.y)
+        chosen, bad, outside = [], 0, []
+        for s_ in range(k_hub):
+            nom = math.radians(a_deg) + 2 * math.pi * s_ / k_hub
+            bn = None
+            for dd, tw, h in opts:
+                phi = nom + math.radians(dd)
+                b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
+                pts = _pinwheel_spoke(P, phi, b, twist, tw, r_h, h)
+                v = viol(pts)
+                # spokes all leave the same letter -- outside the letters
+                # they must stay a full min_gap apart, or the tab placer's
+                # own spacing rule drops one and two wedges merge
+                out = LineString(pts).difference(lu)
+                v += sum(1 for o in outside if out.distance(o) < T)
+                if bn is None or v < bn[0]:
+                    bn = (v, (phi, tw, h), out)
+                if v == 0:
+                    break
+            bad += bn[0]
+            chosen.append(bn[1])
+            outside.append(bn[2])
+        lines = [
+            LineString(_pinwheel_spoke(
+                P, ph, (C[0] + r_h * math.sin(ph), C[1] - r_h * math.cos(ph)), twist, tw, r_h, h))
+            for ph, tw, h in chosen
+        ]
+        if any(lines[i].crosses(lines[j]) for i in range(k_hub) for j in range(i + 1, k_hub)):
+            continue
+        if best is None or bad < best[0]:
+            best = (bad, (P, twist, chosen))
+        if bad == 0:
+            break
+    return best[1]
+
+
 def solid_of(g):
     if isinstance(g, MultiPolygon):
         g = max(g.geoms, key=lambda q: q.area)
@@ -681,6 +796,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
     global _center_medallion
     _center_medallion = None
     center_solids = []
+    center_polys = []
     L["center_cap_mm"] = None
     if rp.center_text and rp.center_style in ("flat", "ring"):
         # Loose letters cut straight out of the ordinary pinwheel hub: no
@@ -695,6 +811,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
             )
         else:
             world.extend(cl)
+            center_polys = list(cl)
             center_solids = [solid_of(g) for g in cl]
             L["center_cap_mm"] = ccap
     elif rp.center_text:
@@ -932,7 +1049,18 @@ def build_ring(words, seed, rp: RingParams, cfg):
             k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
-        if k_hub > 1:
+        if k_hub > 1 and center_polys:
+            # Loose center text: pick a pinwheel whose spokes never pass a
+            # center letter without touching it (see plan_center_pinwheel).
+            P, twist, chosen = plan_center_pinwheel(
+                center_polys, C, r_h, k_hub, ppm, rp.center_min_gap_mm, rng
+            )
+            for phi, tw, h in chosen:
+                b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
+                split.append(phi % (2 * math.pi))
+                pts = _pinwheel_spoke(P, phi, b, twist, tw, r_h, h)
+                seams.append(dict(pts=pts, kind="spoke", ends=("J", "J")))
+        elif k_hub > 1:
             twist = rng.choice((-1, 1))
             for s_ in range(k_hub):
                 phi = a0 + 2 * math.pi * s_ / k_hub
