@@ -90,7 +90,7 @@ def planet_logo_ornament_artwork(cap_h):
 
 @dataclass
 class RingParams:
-    diameter_mm: float = 300.0  # disc diameter (or square side)
+    diameter_mm: float = 290.0  # disc diameter (or square side); 290 = 300mm stock minus 5mm each side (RING_SPEC)
     shape: str = "disc"  # "disc" | "square"
     rim_mm: float = 24.0  # letter tops -> rim (== banner_margin_mm)
     corner_ring_mm: float = 20.0  # square only: corner arc radius = inscribed r + this
@@ -1453,7 +1453,11 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--variants", type=int, default=12)
     ap.add_argument("--shape", choices=("disc", "square"), default="disc")
-    ap.add_argument("--diameter-mm", type=float, default=300.0)
+    ap.add_argument("--diameter-mm", type=float, default=290.0,
+                    help="disc diameter; default 290 fits 300mm stock with 5mm spare (RING_SPEC)")
+    ap.add_argument("--max-xy-mm", type=float, default=290.0,
+                    help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
+                         "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
     ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
     ap.add_argument("--font", default=None)
@@ -1548,6 +1552,7 @@ def main():
                 feed_override=a.etch_feed, power_percent=a.etch_power,
             )
             gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
+        _check_xy_envelope(gcode, a.max_xy_mm)
         Path(a.gcode).write_text(gcode)
         png, _svg = J.render_gcode_previews(
             gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{tag} ring cut"
@@ -1558,6 +1563,24 @@ def main():
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "
         f"score (thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
+
+
+def _check_xy_envelope(gcode, max_xy_mm):
+    """Hard stop before writing: every X/Y word (G0 travel included) must lie
+    in [0, max_xy_mm]. A 300mm job ran into the Y hard stop at ~297mm."""
+    import re
+
+    bad = []
+    for n, line in enumerate(gcode.splitlines(), 1):
+        code = line.split(";")[0]
+        for ax, v in re.findall(r"([XY])(-?[\d.]+)", code):
+            if not (0.0 <= float(v) <= max_xy_mm):
+                bad.append(f"line {n}: {ax}{v}")
+    if bad:
+        raise SystemExit(
+            f"REFUSING to write GCode: {len(bad)} coordinate(s) outside 0..{max_xy_mm}mm "
+            f"(first: {bad[0]}). Use a smaller --diameter-mm."
+        )
 
 
 if __name__ == "__main__":
