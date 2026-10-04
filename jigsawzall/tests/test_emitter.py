@@ -513,3 +513,21 @@ def test_render_gcode_previews_writes_png_and_svg(tmp_path):
     body = svg.read_text()
     assert body.startswith("<svg") and "</svg>" in body
     assert "<polyline" in body  # at least one cut path drawn
+
+
+def test_trim_recut_ends_strips_dead_end_recut_only():
+    """Re-cut line at a path's start/end connects to nothing and is dropped;
+    a re-cut stretch BETWEEN two new cuts (a useful backtrack) is kept."""
+    from emitter import _CutIndex, _trim_recut_ends
+
+    cut = _CutIndex()
+    cut.add([(0.0, 0.0), (10.0, 0.0)])  # already cut by an earlier path
+    # starts on old line, then new cut
+    assert _trim_recut_ends([(0.0, 0.0), (5.0, 0.0), (5.0, 5.0)], cut) == [(5.0, 0.0), (5.0, 5.0)]
+    # new cut, then dead-ends back along old line
+    assert _trim_recut_ends([(5.0, 5.0), (5.0, 0.0), (0.0, 0.0)], cut) == [(5.0, 5.0), (5.0, 0.0)]
+    # new -> old connector -> new: kept whole
+    p = [(2.0, 5.0), (2.0, 0.0), (8.0, 0.0), (8.0, 5.0)]
+    assert _trim_recut_ends(p, cut) == p
+    # entirely old: nothing left to cut
+    assert len(_trim_recut_ends([(0.0, 0.0), (10.0, 0.0)], cut)) < 2
