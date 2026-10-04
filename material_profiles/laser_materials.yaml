@@ -70,6 +70,29 @@
       at 25% that's a ~250ms / ~2mm lead-in, not the full 1s/8.3mm a 100%
       cut needs.
 
+- id: plywood_veneer_3ply_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 350
+    passes: 1
+    notes: |
+      Stiffer 3-ply cross-grain veneered stock (the stock the relaxed
+      tab/bend/clearance floors in jigsawzall/geometry.py are tuned for).
+      350mm/min SINGLE pass at static M3 100%, confirmed in use by Alex
+      ("1 pass works well at 350"). Same 1s out-and-back warmup lead-in as
+      every other cut (5.8mm at F350).
+  etch:
+    power_percent: 30
+    feed_mm_per_min: 2500
+    passes: 1
+    notes: |
+      30%/2500mm/min chosen by Alex for this stock (a touch more power than
+      baltic birch's calibrated 25%, for contrast through the veneer face).
+      Not yet run through scripts/etch_calibration.py's power x feed grid.
+      Warmup scales linearly with power: 300ms / 12.5mm lead-in at F2500.
+
 - id: plywood_baltic_birch_6mm
   family: wood
   thickness_mm: 6.0
