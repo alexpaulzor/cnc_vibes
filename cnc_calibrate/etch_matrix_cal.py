@@ -91,6 +91,10 @@ DEFAULT_MODES = ["M3", "M4"]  # static vs dynamic (power follows real speed)
 DEFAULT_LEAD_IN_MM = 3.0  # fixed warmup lead-in (matches the veneer etch profile); None = linear model
 ANNOT_R_MM = 5.0  # 1cm annotation circle around every test laser start
 ANNOT_GAP_MM = 1.5  # gap in that circle where the started path EXITS it
+LETTERS = "RSBAGKMOPWEXNDYZ"  # one per (ring pair, power sector); curves, corners, counters
+LETTER_CAP_MM = 8.0  # letter height; each is etched as outline + 1mm outset, like the puzzles
+LETTER_OUTSET_MM = 1.0
+LETTER_BAND_MM = 9.0  # radial band between ring pairs that holds the letters
 DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
@@ -167,12 +171,61 @@ def _annotation_arc(path, r=None, gap=None, step_deg=6.0):
     ]
 
 
+_GLYPHS = {}
+
+
+def _letter_strokes(ch, r, th_deg, cap_mm=None, outset_mm=None):
+    """Closed strokes (mm) for letter `ch` centred at polar (r, th), upright
+    with its top pointing outward: the glyph outline (+ counters) and a
+    `outset_mm` outset of it -- the same two-sided outline geometry the puzzle
+    etch uses -- simplified 0.05mm and decimated to >=0.3mm moves, as
+    emitter.emit_etch_gcode() does."""
+    from shapely import affinity
+    from shapely.geometry import LineString
+
+    cap_mm = LETTER_CAP_MM if cap_mm is None else cap_mm
+    outset_mm = LETTER_OUTSET_MM if outset_mm is None else outset_mm
+    if ch not in _GLYPHS:
+        jz = DIR.parent / "jigsawzall"
+        for d in (jz, jz / "scripts", DIR.parent / "quickcut"):
+            if str(d) not in sys.path:
+                sys.path.insert(0, str(d))
+        import geometry as G
+        from ring_prototype import glyph_local
+
+        ppm = 10.0
+        ref = G.find_font(1000, "round")
+        cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
+        font = G.find_font(int(round(cap_mm * ppm / cap_ratio)), "round")
+        g = glyph_local(ch, font)  # px, y down, baseline at y=0
+        g = affinity.scale(g, 1 / ppm, -1 / ppm, origin=(0, 0))  # mm, y up
+        g = affinity.translate(g, 0, -cap_mm / 2)  # centre vertically
+        _GLYPHS[ch] = g
+    from motion import decimate
+
+    g = _GLYPHS[ch]
+    shapes = [g, g.buffer(outset_mm, join_style=1)]
+    strokes = []
+    for shp in shapes:
+        for poly in getattr(shp, "geoms", [shp]):
+            for ring in [poly.exterior, *poly.interiors]:
+                ring = affinity.rotate(ring, th_deg - 90.0, origin=(0, 0))
+                x0, y0 = ellipse_pt(r, r, th_deg)
+                ring = affinity.translate(ring, x0, y0)
+                pts = list(LineString(ring.coords).simplify(0.05).coords)
+                pts = decimate(pts, 0.3)
+                if len(pts) >= 2:
+                    strokes.append(pts)
+    return strokes
+
+
 def generate(
     feeds=DEFAULT_FEEDS,
     powers=DEFAULT_POWERS,
     modes=DEFAULT_MODES,
     lead_in_mm=DEFAULT_LEAD_IN_MM,
     annotate=True,
+    letters=True,
     min_r=13.0,
     max_r=None,
     ring_gap_mm=6.0,
@@ -186,9 +239,10 @@ def generate(
     combos = [(m, f) for f in feeds for m in modes]  # M3/M4 side by side per feed
     n_rings, n_sectors = len(combos), len(powers)
     starts = []  # (start_pt, path_pts) of every TEST laser start, for annotation
-    if max_r is None:  # every ring ring_gap_mm apart, so a start's annotation
+    pair_pitch = ring_gap_mm + (LETTER_BAND_MM if letters else ring_gap_mm)
+    if max_r is None:  # rings >= ring_gap_mm apart, so a start's annotation
         # circle (ANNOT_R_MM < ring_gap_mm) never crosses a neighbouring ring
-        max_r = min_r + 2 * ring_gap_mm * (n_rings - 1)
+        max_r = min_r + pair_pitch * (n_rings - 1)
     centers = [
         min_r + (max_r - min_r) * i / max(1, n_rings - 1) for i in range(n_rings)
     ]
@@ -235,7 +289,7 @@ def generate(
         "",
     ]
 
-    label_r = max_r + ring_gap_mm * 2.5
+    label_r = max_r + ring_gap_mm * 2.5 + (LETTER_BAND_MM if letters else 0.0)
     label_th = -135.0  # ring-pair labels: mid-sector, clear of every sector start (0/90/180/270)
 
     # ---- ring pairs: STRICT INSIDE-OUT. Each ring pair's own feed label is
@@ -342,6 +396,32 @@ def generate(
             lines.append("M5")
         lines.append("")
 
+        # -- one LETTER per power sector, in the band just outside this pair,
+        # etched at this pair's mode/feed and the sector's power: outline +
+        # 1mm outset (the puzzles' outline etch), simplified/decimated and
+        # with the same fixed lead-in as the puzzle etch emitter --
+        if letters:
+            r_letter = r_outer + LETTER_BAND_MM / 2.0
+            for k, power in enumerate(powers):
+                ch = LETTERS[(i * n_sectors + k) % len(LETTERS)]
+                th_mid = (k + 0.5) * sec
+                lead = lead_in_mm if lead_in_mm is not None else (
+                    WARMUP_MS * power / 100.0 / 1000.0 * feed / 60.0)
+                lines.append(
+                    f"; --- letter {ch}: {mode} feed={feed} power={power}% "
+                    f"(sector {k + 1}, r={r_letter:.1f}mm) ---"
+                )
+                for stroke in _letter_strokes(ch, r_letter, th_mid):
+                    lines.append(f"G0 X{stroke[0][0]:.3f} Y{stroke[0][1]:.3f}")
+                    lines.append(f"{mode} S{power_s[power]}")
+                    lines.append(f"F{feed}")
+                    for x, y in _warmup_points(stroke, lead):
+                        lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+                    for x, y in stroke[1:]:
+                        lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+                    lines.append("M5")
+            lines.append("")
+
     # ---- shared sector/power rim labels: LAST, at the outermost radius,
     # after every ring pair is already cut, to keep the whole toolpath
     # strictly inside-out. If the job is aborted before this block, each
@@ -420,6 +500,7 @@ def main(argv=None) -> int:
     p.add_argument("--lead-in-mm", dest="lead_in_mm", type=float, default=DEFAULT_LEAD_IN_MM,
                    help="fixed warmup lead-in mm; negative = linear model")
     p.add_argument("--no-annotate", dest="annotate", action="store_false")
+    p.add_argument("--no-letters", dest="letters", action="store_false")
     p.add_argument("--laps", type=float, default=ZIGZAG_N_LAPS)
     p.add_argument("--min-r", dest="min_r", type=float, default=13.0)
     p.add_argument("--max-r", dest="max_r", type=float, default=None)
@@ -434,6 +515,7 @@ def main(argv=None) -> int:
         modes=args.modes,
         lead_in_mm=None if args.lead_in_mm < 0 else args.lead_in_mm,
         annotate=args.annotate,
+        letters=args.letters,
         zigzag_n_laps=args.laps,
         min_r=args.min_r,
         max_r=args.max_r,
