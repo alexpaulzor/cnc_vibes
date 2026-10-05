@@ -86,11 +86,15 @@ from spiral_cal import (  # noqa: E402
     ellipse_pt,
 )
 
-DEFAULT_FEEDS = [1250, 2000, 3200, 5000]  # ring pairs, inner -> outer, mm/min
+DEFAULT_FEEDS = [3200, 5000]  # mm/min; ring pairs = every (mode, feed), inner -> outer
+DEFAULT_MODES = ["M3", "M4"]  # static vs dynamic (power follows real speed)
+DEFAULT_LEAD_IN_MM = 3.0  # fixed warmup lead-in (matches the veneer etch profile); None = linear model
+ANNOT_R_MM = 5.0  # 1cm annotation circle around every test laser start
+ANNOT_GAP_MM = 1.5  # gap in that circle where the started path EXITS it
 DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
-ZIGZAG_N_LAPS = 3  # forward/reverse sweeps of the sector's full angular span
+ZIGZAG_N_LAPS = 1  # one pass per sector: multi-lap zigzags crossed themselves and confused the read
 ZIGZAG_LAP_STEP_MM = 1.0  # radial spacing between laps: each lap reads as its OWN
 # single-pass line (at 0.25mm the laps merged into one ~3-pass line, which read
 # far darker than the 1-pass puzzle etch it was meant to calibrate)
@@ -135,12 +139,43 @@ def _zigzag_arc_points(r_center, th0, th1, n_laps, lap_step_mm, step_deg):
     return pts
 
 
+def _annotation_arc(path, r=None, gap=None, step_deg=6.0):
+    """Circle of radius r around path[0], open by `gap` mm (arc length) where
+    the path first EXITS the circle; the arc starts and ends at the gap edges
+    so it is one laser-on stroke. Edges merely entering are not gapped."""
+    r = ANNOT_R_MM if r is None else r
+    gap = ANNOT_GAP_MM if gap is None else gap
+    cx, cy = path[0]
+    exit_ang = None
+    for a, b in zip(path, path[1:]):
+        da = math.hypot(a[0] - cx, a[1] - cy)
+        db = math.hypot(b[0] - cx, b[1] - cy)
+        if da < r <= db:
+            t = (r - da) / (db - da) if db != da else 0.0
+            ex, ey = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+            exit_ang = math.degrees(math.atan2(ey - cy, ex - cx))
+            break
+    if exit_ang is None:
+        exit_ang = 0.0
+    half_gap_deg = math.degrees(gap / r) / 2.0
+    a0, a1 = exit_ang + half_gap_deg, exit_ang + 360.0 - half_gap_deg
+    n = max(8, int((a1 - a0) / step_deg))
+    return [
+        (cx + r * math.cos(math.radians(a0 + (a1 - a0) * k / n)),
+         cy + r * math.sin(math.radians(a0 + (a1 - a0) * k / n)))
+        for k in range(n + 1)
+    ]
+
+
 def generate(
     feeds=DEFAULT_FEEDS,
     powers=DEFAULT_POWERS,
+    modes=DEFAULT_MODES,
+    lead_in_mm=DEFAULT_LEAD_IN_MM,
+    annotate=True,
     min_r=13.0,
-    max_r=36.5,
-    ring_gap_mm=4.0,
+    max_r=None,
+    ring_gap_mm=6.0,
     ring_step_deg=2.0,
     zigzag_n_laps=ZIGZAG_N_LAPS,
     zigzag_lap_step_mm=ZIGZAG_LAP_STEP_MM,
@@ -148,7 +183,12 @@ def generate(
     engrave_feed=ENGRAVE_FEED,
 ):
     """Build the etch calibration gcode. Returns (lines, meta)."""
-    n_rings, n_sectors = len(feeds), len(powers)
+    combos = [(m, f) for f in feeds for m in modes]  # M3/M4 side by side per feed
+    n_rings, n_sectors = len(combos), len(powers)
+    starts = []  # (start_pt, path_pts) of every TEST laser start, for annotation
+    if max_r is None:  # every ring ring_gap_mm apart, so a start's annotation
+        # circle (ANNOT_R_MM < ring_gap_mm) never crosses a neighbouring ring
+        max_r = min_r + 2 * ring_gap_mm * (n_rings - 1)
     centers = [
         min_r + (max_r - min_r) * i / max(1, n_rings - 1) for i in range(n_rings)
     ]
@@ -160,11 +200,16 @@ def generate(
 
     lines = [
         "; ETCH calibration -- concentric ring PAIRS (feed) x sectors (power)",
-        f"; feeds (mm/min, inner->outer pair): {feeds}",
+        f"; ring pairs (mode, feed mm/min), inner->outer: {combos}",
+        f"; warmup lead-in: {'linear model' if lead_in_mm is None else f'fixed {lead_in_mm}mm'}",
+        "; ring-pair labels read M/F: 3/5000 = M3 at F5000, 4/5000 = M4 at F5000",
+        f"; every test laser start is ringed by a {2 * ANNOT_R_MM:g}mm annotation circle (low power),",
+        ";  with a gap where the started path EXITS it",
         f"; sectors (power %%, per ring, CCW from angle 0): {powers}",
-        f"; warmup model: ramp_ms = WARMUP_MS({WARMUP_MS:.0f}) * power_pct/100 "
-        "-- SAME formula as emitter.emit_etch_gcode(), not independently "
-        "re-measured here; this plate is what re-measures it.",
+        (f"; warmup model: ramp_ms = WARMUP_MS({WARMUP_MS:.0f}) * power_pct/100 "
+         "-- SAME formula as emitter.emit_etch_gcode()" if lead_in_mm is None else
+         f"; warmup: fixed {lead_in_mm}mm out-and-back lead-in on every start "
+         "(as emitter.emit_etch_gcode() with an etch lead_in_mm)"),
         ";",
         "; Each feed gets a nested ring PAIR:",
         ";  - outer ring: ONE continuous laser-on path, only sector 0 is a",
@@ -191,7 +236,7 @@ def generate(
     ]
 
     label_r = max_r + ring_gap_mm * 2.5
-    label_th = -90.0  # feed labels sit at a fixed angle (south), tangentially
+    label_th = -135.0  # ring-pair labels: mid-sector, clear of every sector start (0/90/180/270)
 
     # ---- ring pairs: STRICT INSIDE-OUT. Each ring pair's own feed label is
     # engraved immediately alongside that pair (not in one upfront block that
@@ -200,15 +245,15 @@ def generate(
     # sector/power rim labels go in a final block after every pair is cut;
     # see the note above that block for why an abort before it still leaves
     # the sector powers knowable. ----
-    for i, (c, feed) in enumerate(zip(centers, feeds)):
+    for i, (c, (mode, feed)) in enumerate(zip(centers, combos)):
         r_outer = c + ring_gap_mm / 2.0
         r_inner = c - ring_gap_mm / 2.0
 
         # -- this ring pair's own feed label, at its own radius band --
         x, y = ellipse_pt(c, c, label_th)
-        feed_strokes = _label_strokes(str(feed), x, y, 1.6, angle_deg=label_th + 90.0)
+        feed_strokes = _label_strokes(f"{mode[1]}/{feed}", x, y, 1.6, angle_deg=label_th + 90.0)
         ordered = _order_strokes(feed_strokes)
-        lines.append(f"; --- feed={feed}mm/min ring-pair label (r={c:.1f}mm) ---")
+        lines.append(f"; --- {mode} feed={feed}mm/min ring-pair label (r={c:.1f}mm) ---")
         pts = [(ordered[0][0], ordered[0][1])]
         for x1, y1, x2, y2 in ordered:
             if (x1, y1) != pts[-1]:
@@ -226,8 +271,12 @@ def generate(
 
         # -- outer ring: ONE continuous path, wiggle only at the very start,
         # then each sector zigzags forward/reverse (repeat coverage) --
-        ramp_ms0 = WARMUP_MS * (p0 / 100.0)
-        lead_in_mm0 = ramp_ms0 / 1000.0 * feed / 60.0
+        if lead_in_mm is None:
+            ramp_ms0 = WARMUP_MS * (p0 / 100.0)
+            lead_in_mm0 = ramp_ms0 / 1000.0 * feed / 60.0
+        else:
+            lead_in_mm0 = lead_in_mm
+            ramp_ms0 = lead_in_mm0 / (feed / 60.0) * 1000.0
         warmup_span_deg = min(
             360.0, 360.0 * lead_in_mm0 / max(1e-6, 2 * math.pi * r_outer)
         )
@@ -237,31 +286,34 @@ def generate(
             for k in range(n_warm_pts)
         ]
         lines.append(
-            f"; --- feed={feed}mm/min outer ring r={r_outer:.1f}mm CONTINUOUS "
+            f"; --- {mode} feed={feed}mm/min outer ring r={r_outer:.1f}mm CONTINUOUS "
             f"(cold-start sector power={p0}%, wiggle {ramp_ms0:.0f}ms = "
             f"{lead_in_mm0:.2f}mm) ---"
         )
         lines.append(f"G0 X{warm_pts[0][0]:.3f} Y{warm_pts[0][1]:.3f}")
-        lines.append(f"M3 S{power_s[p0]}")
+        lines.append(f"{mode} S{power_s[p0]}")
         lines.append(f"F{feed}")
         for x, y in _warmup_points(warm_pts, lead_in_mm0):
             lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        ring_pts = [warm_pts[0]]
         for k, power in enumerate(powers):
             th0, th1 = k * sec, (k + 1) * sec
             lines.append(f"; sector {k + 1}/{n_sectors} power={power}%")
-            lines.append(f"M3 S{power_s[power]}")
+            lines.append(f"{mode} S{power_s[power]}")
             zpts = _zigzag_arc_points(
                 r_outer, th0, th1, zigzag_n_laps, zigzag_lap_step_mm, ring_step_deg
             )
+            ring_pts += zpts[1:]
             for x, y in zpts[1:]:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        starts.append(ring_pts)
         lines.append("M5")
         lines.append("")
 
         # -- inner ring: laser OFF between sectors, each its own cold start,
         # each sector zigzagging forward/reverse (repeat coverage) --
         lines.append(
-            f"; --- feed={feed}mm/min inner ring r={r_inner:.1f}mm COLD-START "
+            f"; --- {mode} feed={feed}mm/min inner ring r={r_inner:.1f}mm COLD-START "
             "PER SECTOR ---"
         )
         for k, power in enumerate(powers):
@@ -269,16 +321,21 @@ def generate(
             pts = _zigzag_arc_points(
                 r_inner, th0, th1, zigzag_n_laps, zigzag_lap_step_mm, ring_step_deg
             )
-            ramp_ms = WARMUP_MS * (power / 100.0)
-            lead_in_mm = ramp_ms / 1000.0 * feed / 60.0
+            if lead_in_mm is None:
+                ramp_ms = WARMUP_MS * (power / 100.0)
+                lead = ramp_ms / 1000.0 * feed / 60.0
+            else:
+                lead = lead_in_mm
+                ramp_ms = lead / (feed / 60.0) * 1000.0
             lines.append(
                 f"; sector {k + 1}/{n_sectors} power={power}% wiggle "
-                f"{ramp_ms:.0f}ms = {lead_in_mm:.2f}mm"
+                f"{ramp_ms:.0f}ms = {lead:.2f}mm"
             )
             lines.append(f"G0 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}")
-            lines.append(f"M3 S{power_s[power]}")
+            lines.append(f"{mode} S{power_s[power]}")
             lines.append(f"F{feed}")
-            for x, y in _warmup_points(pts, lead_in_mm):
+            starts.append(pts)
+            for x, y in _warmup_points(pts, lead):
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
             for x, y in pts[1:]:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
@@ -292,6 +349,21 @@ def generate(
     # the same fixed CCW order from the same starting angle on every ring,
     # and every sector's power (and every ring pair's feed) is also right
     # there in the gcode's own comments above, regardless. ----
+    if annotate:
+        lines.append(
+            f"; --- annotation: {2 * ANNOT_R_MM:g}mm circles around every test laser "
+            "start, gap where the path exits (NOT part of the test) ---"
+        )
+        for path in starts:
+            arc = _annotation_arc(path)
+            lines.append(f"G0 X{arc[0][0]:.3f} Y{arc[0][1]:.3f}")
+            lines.append(f"M3 S{eng_s}")
+            lines.append(f"F{engrave_feed}")
+            for x, y in arc[1:]:
+                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+            lines.append("M5")
+        lines.append("")
+
     label_strokes = []
     for k, power in enumerate(powers):
         th = (k + 0.5) * sec
@@ -319,7 +391,7 @@ def generate(
         lines.append("")
 
     lines += ["G0 X0 Y0", ""]
-    meta = {"feeds": feeds, "powers": powers, "centers": centers}
+    meta = {"combos": combos, "powers": powers, "centers": centers, "n_starts": len(starts)}
     return lines, meta
 
 
@@ -343,9 +415,15 @@ def main(argv=None) -> int:
         help=f"comma-separated power percents, per-ring sectors "
         f"(default {DEFAULT_POWERS})",
     )
+    p.add_argument("--modes", type=lambda s: [m.strip().upper() for m in s.split(",")],
+                   default=DEFAULT_MODES, help="M3 (static) and/or M4 (dynamic)")
+    p.add_argument("--lead-in-mm", dest="lead_in_mm", type=float, default=DEFAULT_LEAD_IN_MM,
+                   help="fixed warmup lead-in mm; negative = linear model")
+    p.add_argument("--no-annotate", dest="annotate", action="store_false")
+    p.add_argument("--laps", type=float, default=ZIGZAG_N_LAPS)
     p.add_argument("--min-r", dest="min_r", type=float, default=13.0)
-    p.add_argument("--max-r", dest="max_r", type=float, default=36.5)
-    p.add_argument("--ring-gap", dest="ring_gap", type=float, default=4.0)
+    p.add_argument("--max-r", dest="max_r", type=float, default=None)
+    p.add_argument("--ring-gap", dest="ring_gap", type=float, default=6.0)
     p.add_argument("--lap-step", dest="lap_step", type=float, default=ZIGZAG_LAP_STEP_MM,
                    help="radial mm between zigzag laps (each lap = one single-pass line)")
     args = p.parse_args(argv)
@@ -353,6 +431,10 @@ def main(argv=None) -> int:
     lines, meta = generate(
         feeds=args.feeds,
         powers=args.powers,
+        modes=args.modes,
+        lead_in_mm=None if args.lead_in_mm < 0 else args.lead_in_mm,
+        annotate=args.annotate,
+        zigzag_n_laps=args.laps,
         min_r=args.min_r,
         max_r=args.max_r,
         ring_gap_mm=args.ring_gap,
@@ -362,7 +444,8 @@ def main(argv=None) -> int:
     out = BUILD_DIR / "etch_matrix_cal.gcode"
     out.write_text("\n".join(lines))
     png_path = _render_gcode_png(lines, BUILD_DIR / "etch_matrix_cal.png")
-    print(f"feeds (ring pairs): {meta['feeds']}")
+    print(f"ring pairs (mode, feed), inner->outer: {meta['combos']}")
+    print(f"annotated laser starts: {meta['n_starts']}")
     print(f"powers (sectors): {meta['powers']}")
     print(f"ring-pair center radii mm: {[round(r, 1) for r in meta['centers']]}")
     print(f"-> {out}")
