@@ -84,14 +84,16 @@
       ("1 pass works well at 350"). Same 1s out-and-back warmup lead-in as
       every other cut (5.8mm at F350).
   etch:
-    power_percent: 30
-    feed_mm_per_min: 2500
+    power_percent: 100
+    feed_mm_per_min: 5000
     passes: 1
     notes: |
-      30%/2500mm/min chosen by Alex for this stock (a touch more power than
-      baltic birch's calibrated 25%, for contrast through the veneer face).
-      Not yet run through scripts/etch_calibration.py's power x feed grid.
-      Warmup scales linearly with power: 300ms / 12.5mm lead-in at F2500.
+      CALIBRATED on this stock with cnc_calibrate/etch_matrix_cal.py (laps
+      1.0mm apart so each reads as one single-pass line): Alex picked
+      100% / F5000. 30%/2500 was too faint on a real cut, and the earlier
+      plate's 0.25mm-spaced laps had merged into ~3x-dose lines (misleading).
+      Warmup scales linearly with power: 1000ms = 83.3mm lead-in at F5000,
+      so each stroke wiggles 41.7mm out and back before etching.
 
 - id: plywood_baltic_birch_6mm
   family: wood
