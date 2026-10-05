@@ -34,8 +34,10 @@ Each sector's arc is not a single pass but a tight ZIGZAG of REPEAT COVERAGE
 angular span, then reverses and sweeps back, ~3 laps total (boustrophedon/
 ping-pong), so it dwells several times longer in that one sector -- long
 enough for the warmup and steady-state behavior to both be fully evident.
-Each lap gets a tiny (cosmetic, ~0.25mm) radial nudge purely so the laps are
-visually distinguishable as separate passes; it is NOT a deliberate radial
+Laps are spaced 1.0mm apart radially so each one reads as its own
+SINGLE-PASS line -- the darkness to judge is one lap's line, which is what a
+1-pass puzzle etch looks like (at the old 0.25mm the laps merged into one
+~3x-dose line and read far darker than a real etch); it is NOT a deliberate radial
 wobble, and it must not turn the sector's silhouette into a star -- a radial
 oscillation shape was tried and rejected here because it has no angle/arc-
 length to measure against the known feed rate, so timing can't be read off a
@@ -89,7 +91,9 @@ DEFAULT_POWERS = [25, 50, 70, 100]  # sectors per ring, percent
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
 ZIGZAG_N_LAPS = 3  # forward/reverse sweeps of the sector's full angular span
-ZIGZAG_LAP_STEP_MM = 0.25  # tiny cosmetic radial nudge between laps, NOT a wobble
+ZIGZAG_LAP_STEP_MM = 1.0  # radial spacing between laps: each lap reads as its OWN
+# single-pass line (at 0.25mm the laps merged into one ~3-pass line, which read
+# far darker than the 1-pass puzzle etch it was meant to calibrate)
 
 
 def _zigzag_arc_points(r_center, th0, th1, n_laps, lap_step_mm, step_deg):
@@ -171,6 +175,8 @@ def generate(
         ";    read, as one clean arc per cell (not a tick too small to photo).",
         "; Compare inner vs outer at the same radius band (= same feed): a",
         "; good setting is one where the cold-start ring isn't visibly worse.",
+        f"; each sector = {zigzag_n_laps} laps {zigzag_lap_step_mm}mm apart: judge ONE",
+        ";  lap's line -- that's the darkness of a single-pass etch.",
         ";",
         ";HEAD: laser",
         ";MATERIAL: plywood_baltic_birch_3mm (scrap)",
@@ -340,6 +346,8 @@ def main(argv=None) -> int:
     p.add_argument("--min-r", dest="min_r", type=float, default=13.0)
     p.add_argument("--max-r", dest="max_r", type=float, default=36.5)
     p.add_argument("--ring-gap", dest="ring_gap", type=float, default=4.0)
+    p.add_argument("--lap-step", dest="lap_step", type=float, default=ZIGZAG_LAP_STEP_MM,
+                   help="radial mm between zigzag laps (each lap = one single-pass line)")
     args = p.parse_args(argv)
 
     lines, meta = generate(
@@ -348,6 +356,7 @@ def main(argv=None) -> int:
         min_r=args.min_r,
         max_r=args.max_r,
         ring_gap_mm=args.ring_gap,
+        zigzag_lap_step_mm=args.lap_step,
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "etch_matrix_cal.gcode"
