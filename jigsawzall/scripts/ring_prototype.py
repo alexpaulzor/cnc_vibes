@@ -1565,6 +1565,7 @@ def main():
             etch = emit_etch_gcode(
                 strokes, material, cfg, f"{tag} letter outlines",
                 feed_override=a.etch_feed, power_percent=a.etch_power,
+                min_segment_mm=a.min_segment_mm,
             )
             gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
         _check_xy_envelope(gcode, a.max_xy_mm)

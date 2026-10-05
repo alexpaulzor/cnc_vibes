@@ -279,10 +279,11 @@ def emit_etch_gcode(
     material: dict,
     cfg: PuzzleConfig,
     title: str,
-    mode: str = "static",
+    mode: str | None = None,
     feed_override: int | None = None,
     power_percent: float | None = None,
     min_segment_mm: float = 0.0,
+    simplify_mm: float = 0.05,
 ) -> str:
     """A shallow, non-cutting score pass tracing `strokes_px` (open
     polylines, image px, e.g. from scripts/globe_etch.py) -- NOT piece
@@ -301,7 +302,15 @@ def emit_etch_gcode(
     Chains are ordered by nearest-neighbor and fused where they already
     touch (a fused chain has one true start, so it gets one wiggle, not one
     per original stroke), same as the cut emitters, to cut down on
-    lift/re-fire count."""
+    lift/re-fire count.
+
+    Optional etch-profile keys: `mode` ("static" M3 / "dynamic" M4 -- M4
+    scales power with actual speed, so a stall or slowdown can't burn
+    through), `lead_in_mm` (a fixed warmup distance replacing the linear
+    model, which at full power/fast feed grows to tens of mm and re-traces
+    whole short strokes). Strokes are simplified (`simplify_mm`) before
+    decimation: raw outline strokes are ~0.1mm staircase segments that GRBL
+    can't stream at etch feeds, so the head stalls between them."""
     if "etch" not in material:
         raise SystemExit(
             f"material {material.get('id')!r} has no etch: profile -- "
@@ -313,15 +322,22 @@ def emit_etch_gcode(
     power_s = int(round(pct * 10))
     feed = feed_override if feed_override is not None else etch["feed_mm_per_min"]
     passes = etch.get("passes", 1)
+    mode = mode or etch.get("mode", "static")
     on = "M3" if mode == "static" else "M4"
-    # Linear warmup model: ramp time scales with power, so a shallow etch's
-    # cold-start lead-in is proportionally shorter than a full-power cut's.
-    ramp_ms = WARMUP_MS * (pct / 100.0)
-    lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
+    if "lead_in_mm" in etch:
+        lead_in_mm = float(etch["lead_in_mm"])
+        ramp_ms = lead_in_mm / (feed / 60.0) * 1000.0
+    else:
+        # Linear warmup model: ramp time scales with power, so a shallow
+        # etch's cold-start lead-in is proportionally shorter than a cut's.
+        ramp_ms = WARMUP_MS * (pct / 100.0)
+        lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
 
     chains = [
         [img_to_machine_mm(x, y, cfg) for x, y in s] for s in strokes_px if len(s) >= 2
     ]
+    if simplify_mm > 0:
+        chains = [list(LineString(c).simplify(simplify_mm).coords) for c in chains]
     chains = [decimate(c, min_segment_mm) for c in chains]
     chains = [c for c in chains if len(c) >= 2]
     start = (0.0, 0.0)
@@ -346,7 +362,16 @@ def emit_etch_gcode(
         "laser-off/on events apart enough to avoid residual-heat bias, "
         "without a farthest-first travel penalty",
     ]
-    if lead_in_mm > 0:
+    extra.append(
+        f"power mode: {on} ({mode}); strokes simplified {simplify_mm}mm, "
+        f"min segment {min_segment_mm}mm"
+    )
+    if "lead_in_mm" in etch:
+        extra.append(
+            f"warmup: fixed {lead_in_mm:.2f}mm lead-in (~{ramp_ms:.0f}ms at F{feed}) "
+            "-- every stroke wiggles fwd half / back to start first"
+        )
+    elif lead_in_mm > 0:
         extra.append(
             f"warmup: linear model, {ramp_ms:.0f}ms = {lead_in_mm:.2f}mm at "
             f"F{feed} ({pct}% of the {WARMUP_MS:.0f}ms full-power ramp) -- "
