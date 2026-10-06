@@ -87,7 +87,7 @@
     power_percent: 100
     feed_mm_per_min: 5000
     passes: 1
-    mode: dynamic      # M4: power follows actual speed, so stalls can't burn through
+    mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a) on the etch plate
     lead_in_mm: 3.0    # fixed short warmup (linear model gave 83mm at 100%/F5000)
     notes: |
       First real cuts at 100%/F5000 (M3, unsimplified 0.1mm segments, 83mm
