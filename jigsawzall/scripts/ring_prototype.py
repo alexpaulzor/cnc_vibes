@@ -1119,18 +1119,19 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ),
             )
 
+        _snap_notch_ends(seams, tab_solids, ppm)
         with _oriented_oversized():
-            surround, counters, st = assemble(
+            surround, counters, st = assemble_qa(
                 seams, letter_union, tab_solids, background, panel, cfg, C,
                 distinct_tabs=rp.distinct_tabs,
             )
-        sc = score(surround, panel, cfg) + (st["dropped"],)
+        sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
             eta = el / (variant + 1) * (rp.variants - variant - 1)
             print(
-                f"  variant {variant + 1}/{rp.variants}: score (thin, oversized, sliver, "
-                f"nub, dropped) = {sc}  [{el:.0f}s elapsed, ~{eta:.0f}s left]",
+                f"  variant {variant + 1}/{rp.variants}: score (QA defects, thin, oversized, "
+                f"sliver, nub, dropped) = {sc}  [{el:.0f}s elapsed, ~{eta:.0f}s left]",
                 flush=True,
             )
         if best is None or sc < best[0]:
@@ -1185,9 +1186,125 @@ def _tab_size_class(pts):
     return TAB_SIZE_CLASSES[h[0] % len(TAB_SIZE_CLASSES)]
 
 
-def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True):
+def _snap_notch_ends(seams, letters_solid, ppm, min_notch_mm=1.0):
+    """A seam ending on a letter must not route INTO the letter's open notch
+    (between E/F fingers, into a C/S/U mouth) to reach an inner stroke -- that
+    leaves a long, finger-thin strip of wood on each side of it. Cut such a
+    seam where it first enters the letter's convex hull and end it on the
+    nearest point of the letter outline there (the finger tip / mouth edge),
+    so the notch fill stays whole in one piece."""
+    comps = list(letters_solid.geoms) if isinstance(letters_solid, MultiPolygon) else [letters_solid]
+    snapped = 0
+    for s in seams:
+        for e in (0, 1):
+            if s["ends"][e] != "L":
+                continue
+            pts = [tuple(p) for p in s["pts"]]
+            if len(pts) < 3:
+                continue
+            tip = Point(pts[0] if e == 0 else pts[-1])
+            letter = min(comps, key=lambda g: g.distance(tip))
+            if letter.distance(tip) > 2 * ppm:
+                continue
+            hull = letter.convex_hull
+            notch = hull.difference(letter.buffer(0.5))
+            if LineString(pts).intersection(notch).length < min_notch_mm * ppm:
+                continue
+            seq = pts if e == 1 else pts[::-1]  # walk from the free end toward the letter
+            k = next((i for i, q in enumerate(seq) if hull.contains(Point(q))), None)
+            if not k:
+                continue
+            hit = LineString(seq[k - 1:k + 1]).intersection(hull.exterior)
+            entry = hit if hit.geom_type == "Point" else Point(seq[k - 1])
+            end = nearest_points(letter.exterior, entry)[0]
+            new = seq[:k] + [(entry.x, entry.y), (end.x, end.y)]
+            s["pts"] = new if e == 1 else new[::-1]
+            snapped += 1
+    return snapped
+
+
+QA_NECK_MM = 3.0     # no material neck narrower than this (Alex: ~3mm material floor)
+QA_STRIP_W_MM = 3.0  # strips narrower than this ...
+QA_STRIP_L_MM = 6.0  # ... may not be longer than this
+
+
+def qa_defects(pieces, bulbs, ppm):
+    """Breakable features on background pieces: (kind, Point, piece_idx).
+    'bridge': eroding by QA_NECK_MM/2 splits off a chunk (a neck under
+    QA_NECK_MM) that is not a tab bulb. 'strip': material an opening of width
+    QA_STRIP_W_MM removes, longer than QA_STRIP_L_MM, not part of a tab."""
+    def parts(g):
+        return [q for q in getattr(g, "geoms", [g]) if not q.is_empty and q.area > 0]
+    tabs = unary_union([b.buffer(1.5 * ppm) for b in bulbs]) if bulbs else None
+    out = []
+    for i, g in enumerate(pieces):
+        lobes = sorted(parts(g.buffer(-QA_NECK_MM / 2 * ppm)), key=lambda q: -q.area)
+        for q in lobes[1:]:
+            if q.area < 2.0 * ppm ** 2:
+                continue
+            if tabs is not None and tabs.contains(q):
+                continue
+            out.append(("bridge", q.centroid, i))
+        r = QA_STRIP_W_MM / 2 * ppm
+        lost = g.difference(g.buffer(-r).buffer(r).buffer(0.05 * ppm))
+        for q in parts(lost.buffer(-0.2 * ppm).buffer(0.2 * ppm)):
+            if q.length / 2 / ppm <= QA_STRIP_L_MM or q.area < 2.0 * ppm ** 2:
+                continue
+            if tabs is not None and tabs.buffer(1.0 * ppm).contains(q):
+                continue
+            out.append(("strip", q.centroid, i))
+    return out
+
+
+def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
+                distinct_tabs=True, rounds=8):
+    """assemble(), then repair breakable features: ban the tab choice of every
+    seam near a defect (so it moves / flips sides), and after a seam's tab
+    options run out, drop the seam. Returns the best (fewest defects) result;
+    st["defects"] lists what could not be repaired."""
     ppm = cfg.px_per_mm
-    st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0}
+    bans = {}
+    best = None
+    for _round in range(rounds):
+        surround, counters, st = assemble(seams, letter_union, letters_solid, background,
+                                          panel, cfg, C, distinct_tabs, bans=bans)
+        defects = qa_defects(surround, st["bulbs"], ppm)
+        if best is None or len(defects) < len(best[3]):
+            best = (surround, counters, st, defects, {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
+        if not defects:
+            break
+        changed = False
+        for _kind, pt, _pi in defects:
+            near = [(si, sm) for si, sm in enumerate(seams)
+                    if sm.get("final") is not None and sm["final"].distance(pt) < 8 * ppm]
+            near.sort(key=lambda t: t[1]["final"].distance(pt))
+            for si, sm in near[:2]:
+                if bans.get(si) == "drop":
+                    continue
+                ch = sm.get("tab_choice")
+                if ch is not None and ch not in bans.setdefault(si, set()):
+                    bans[si].add(ch)
+                    changed = True
+                elif sm.get("plain_ok") or sm["ends"] == ("J", "J"):
+                    continue  # structural seam: never force-drop
+                else:
+                    bans[si] = "drop"
+                    changed = True
+        if not changed:
+            break
+    surround, counters, st, defects, _b = best
+    st["defects"] = [(k, (p.x, p.y)) for k, p, _i in defects]
+    return surround, counters, st
+
+
+def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True,
+             bans=None):
+    """bans: {seam index: set of tab choices (fallback, i, side) to skip, or
+    the string "drop" to force the seam out} -- used by the QA repair loop to
+    make a seam pick its next tab position / the other side."""
+    ppm = cfg.px_per_mm
+    bans = bans or {}
+    st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0, "bulbs": []}
     min_gap = cfg.letter_clearance_px
     jr = 7 * ppm  # tab bulbs keep this far from any junction point
     # junction points = every non-letter/non-border endpoint (and T hosts' feet)
@@ -1218,7 +1335,13 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
                 return True
         return False
 
-    for s in seams:
+    for si, s in enumerate(seams):
+        s.pop("tab_choice", None)
+        s.pop("final", None)
+        ban = bans.get(si, set())
+        if ban == "drop":
+            s["status"] = "banned"
+            continue
         pts = [tuple(p) for p in s["pts"]]
         ea, eb = s["ends"]
         # Overshoot every letter/border/T end by 2px so the union NODES the
@@ -1255,6 +1378,8 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
                 )
             )
             for pi, ps in G._vg_tab_candidates(rs, letters_solid, c2, panel, placed):
+                if (fallback, pi, ps) in ban:
+                    continue
                 res = G._vg_splice(rs, pi, ps, c2)
                 if res is None:
                     continue
@@ -1265,6 +1390,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
                     s["nconf"] += 1
                     continue
                 chosen = (spliced, bulb, cand)
+                s["tab_choice"] = (fallback, pi, ps)
                 break
             if chosen:
                 break
@@ -1272,6 +1398,8 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             tabbed.append(chosen[0])
             placed.append(chosen[1])
             accepted.append(chosen[2])
+            st["bulbs"].append(chosen[1])
+            s["final"] = chosen[2]
             st["centered"] += 1
             s["status"] = "ok"
         else:
@@ -1282,6 +1410,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             if ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand):
                 tabbed.append(rs)
                 accepted.append(cand)
+                s["final"] = cand
                 s["status"] = "plain"
             st["dropped"] += 1
 
@@ -1432,6 +1561,15 @@ def generate(words, seed, rp):
         p["polygon"] = shapely.set_precision(p["polygon"], 0.01 * cfg.px_per_mm)
     for i, p in enumerate(pieces, 1):
         p["serial"] = i
+    # QA again on the FINAL pieces (after pocket carving / counter fusing /
+    # sliver absorption), so nothing breakable slips in after the search.
+    st["defects_final"] = [
+        (k, (q.x, q.y))
+        for k, q, _i in qa_defects(
+            [p["polygon"] for p in pieces if p["kind"] != "letter"],
+            st.get("bulbs", []), cfg.px_per_mm,
+        )
+    ]
     return pieces, cfg, L, st, panel, C
 
 
@@ -1547,6 +1685,11 @@ def main():
         for w in warns:
             print("WARNING outline etch:", w)
         draw_strokes(out, strokes)
+    if st.get("defects") or st.get("defects_final"):
+        bad = st.get("defects", []) + st.get("defects_final", [])
+        print(f"QA FAILED: {len(bad)} breakable feature(s) no variant could repair: "
+              + ", ".join(f"{k} near image ({x / cfg.px_per_mm:.0f},{y / cfg.px_per_mm:.0f})mm"
+                          for k, (x, y) in bad))
     if a.gcode:
         from emitter import load_material
 
@@ -1577,7 +1720,7 @@ def main():
     print(
         f"{tag}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "
-        f"score (thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
+        f"score (QA defects, thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
 
 
