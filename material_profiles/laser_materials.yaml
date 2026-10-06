@@ -84,7 +84,7 @@
       ("1 pass works well at 350"). Same 1s out-and-back warmup lead-in as
       every other cut (5.8mm at F350).
   etch:
-    power_percent: 70
+    power_percent: 100
     feed_mm_per_min: 5000
     passes: 1
     mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a)
@@ -92,7 +92,8 @@
     # loop follow-through / open-stroke ping-pong instead of a pile-up at the start
     notes: |
       CALIBRATED with cnc_calibrate/etch_matrix_cal.py v4 (single-pass sectors,
-      real letter outlines per cell): Alex picked 70% / F5000, M3. On the plate
+      real letter outlines per cell): Alex picked 70% / F5000, M3, then moved to 100% / F5000 after a real cut:
+      70% read light in spots; 100%'s darker, wider lines give better contrast. On the plate
       F3200 lines read heavier/wider than F5000 at every power, 100% scorched a
       halo, 25%/F5000 went dashed on long arcs.
       Earlier failures: 30%/F2500 too faint on a real cut; 100%/F5000 with raw
