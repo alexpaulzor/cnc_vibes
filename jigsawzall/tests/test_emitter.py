@@ -531,3 +531,32 @@ def test_trim_recut_ends_strips_dead_end_recut_only():
     assert _trim_recut_ends(p, cut) == p
     # entirely old: nothing left to cut
     assert len(_trim_recut_ends([(0.0, 0.0), (10.0, 0.0)], cut)) < 2
+
+
+def test_loop_follow_through_wraps_until_lead_covered():
+    from emitter import _loop_follow_through
+
+    sq = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]  # 40mm loop
+    tail = _loop_follow_through(sq, 15.0)
+    assert tail[-1] == pytest.approx((10.0, 5.0))  # 10 along x, 5 up: 15mm past start
+    long_tail = _loop_follow_through(sq, 100.0)  # 2.5 laps: no one-lap cap
+    walked = sum(math.dist(a, b) for a, b in zip([sq[0]] + long_tail, long_tail))
+    assert walked == pytest.approx(100.0)
+
+
+def test_reconcile_letter_pockets_makes_shared_edge_single():
+    from shapely.geometry import box
+
+    from emitter import extract_unique_edges, reconcile_letter_pockets
+
+    panel = box(0, 0, 100, 100)
+    pocket = box(40, 40, 60, 60)
+    cell = panel.difference(pocket)
+    letter = box(40.1, 40.1, 60.1, 60.05)  # ~0.1px off its pocket
+    pieces = [dict(polygon=cell, kind="cell", serial=1), dict(polygon=letter, kind="letter", serial=2)]
+    raw = sum(e.length for e in extract_unique_edges(pieces))
+    fixed = reconcile_letter_pockets(pieces, px_per_mm=5)
+    assert fixed[1]["polygon"].symmetric_difference(pocket).area < 1e-6
+    once = sum(e.length for e in extract_unique_edges(fixed))
+    assert once == pytest.approx(400 + 80)  # panel + pocket, each cut once
+    assert raw > once + 70  # before: the letter ring was cut as a second line

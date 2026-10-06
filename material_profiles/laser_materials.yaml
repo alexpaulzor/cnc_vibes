@@ -88,13 +88,13 @@
     feed_mm_per_min: 5000
     passes: 1
     mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a)
-    lead_in_mm: 3.0    # fixed short warmup (linear model gave 83mm at 100%/F5000)
+    # no lead_in_mm: linear warmup model (700ms at 70% = 58.3mm at F5000), spread by
+    # loop follow-through / open-stroke ping-pong instead of a pile-up at the start
     notes: |
       CALIBRATED with cnc_calibrate/etch_matrix_cal.py v4 (single-pass sectors,
       real letter outlines per cell): Alex picked 70% / F5000, M3. On the plate
       F3200 lines read heavier/wider than F5000 at every power, 100% scorched a
-      halo, 25%/F5000 went dashed on long arcs. Stroke starts read slightly
-      darker (warmup wiggle triple-traces the first 1.5mm while accelerating).
+      halo, 25%/F5000 went dashed on long arcs.
       Earlier failures: 30%/F2500 too faint on a real cut; 100%/F5000 with raw
       0.1mm segments + 83mm warmup stalled and burned through -- fixed by
       0.05mm simplify + 0.3mm min segment + 3mm fixed lead-in (emit_etch_gcode).

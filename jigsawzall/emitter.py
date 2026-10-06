@@ -274,6 +274,29 @@ def emit_cut_gcode_simple(
 # ---------------------------------------------------------------------------
 
 
+def _loop_follow_through(pts, lead_mm):
+    """Closed loop pts[0]==pts[-1]: the points to keep tracing after the loop
+    closes, for lead_mm of extra travel -- wrapping round as many laps as it
+    takes (no one-lap cap: a short loop keeps circling until warm)."""
+    if lead_mm <= 0 or len(pts) < 3:
+        return []
+    out, left = [], lead_mm
+    ring = list(pts)
+    while left > 1e-9:
+        for a, b in zip(ring, ring[1:]):
+            d = math.dist(a, b)
+            if d <= 1e-9:
+                continue
+            if d >= left:
+                t = left / d
+                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+                left = 0.0
+                break
+            out.append(b)
+            left -= d
+    return out
+
+
 def emit_etch_gcode(
     strokes_px: list[list[tuple[float, float]]],
     material: dict,
@@ -369,27 +392,39 @@ def emit_etch_gcode(
     if "lead_in_mm" in etch:
         extra.append(
             f"warmup: fixed {lead_in_mm:.2f}mm lead-in (~{ramp_ms:.0f}ms at F{feed}) "
-            "-- every stroke wiggles fwd half / back to start first"
+            "-- loops follow through past the start, open strokes ping-pong"
         )
     elif lead_in_mm > 0:
         extra.append(
             f"warmup: linear model, {ramp_ms:.0f}ms = {lead_in_mm:.2f}mm at "
             f"F{feed} ({pct}% of the {WARMUP_MS:.0f}ms full-power ramp) -- "
-            "EVERY stroke wiggles fwd half / back to start first, no "
-            "backtrack/follow-through re-tracing (would double-etch)"
+            "closed loops follow through past the start (laps until warm), "
+            "open strokes ping-pong over themselves first"
         )
     lines = _header(
         title=f"ETCH: {title}", material_id=material["id"], extra=extra, mode=mode
     )
     for i, pts in enumerate(chains, start=1):
-        warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
         path_len = sum(
             math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])
         )
-        if path_len < lead_in_mm / 2:
-            warm = list(pts[1:]) + list(reversed(pts))[1:]
+        closed = len(pts) > 3 and math.dist(pts[0], pts[-1]) <= 0.05
+        # Warmup that SPREADS the cold-start energy instead of piling it up:
+        #  * closed loop: etch it, then keep going round past the start until
+        #    lead_in_mm extra has been covered (several laps if the loop is
+        #    shorter) -- the cold-traced start gets ONE hot re-pass, no
+        #    out-and-back pile-up at the start point;
+        #  * open stroke: ping-pong over the stroke itself first (warmup_wiggle,
+        #    full trips when the stroke is shorter than the lead-in).
+        warm, tail = [], []
+        if closed:
+            tail = _loop_follow_through(pts, lead_in_mm)
+        else:
+            warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
+            if path_len < 1.0:  # sub-mm stub: one trip, not a stall-y shuttle
+                warm = list(pts[1:]) + list(reversed(pts))[1:]
         x0, y0 = pts[0]
-        lines.append(f"; --- etch stroke {i} ---")
+        lines.append(f"; --- etch stroke {i} ({'loop' if closed else 'open'}) ---")
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")
@@ -400,6 +435,8 @@ def emit_etch_gcode(
             seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
             for x, y in seq:
                 lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+        for x, y in tail:
+            lines.append(f"G1 X{x:.3f} Y{y:.3f}")
         lines.append("M5")
         lines.append("")
     lines += ["G0 X0 Y0", ""]
@@ -861,6 +898,38 @@ def _collapse_shuttles(pts, max_leg_mm: float = 1.0, eps: float = 1e-3):
     return out
 
 
+def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
+    """Make every letter's outline IDENTICAL to the pocket the surrounding
+    pieces leave for it. Upstream, a letter's ring and its pocket's ring can
+    disagree by up to ~0.5mm over long stretches; unary_union then keeps BOTH
+    near-parallel lines and the cutter traces the letter twice (measured:
+    ~20% of a ring puzzle's cut length doubled). The pocket -- the area
+    within tol of the letter that no other piece covers -- is bounded by the
+    neighbours' real edges, so using it as the letter makes the shared edges
+    coincide exactly and dedupe. Skipped (letter kept) if the pocket differs
+    from the letter by more than a thin tol-wide band."""
+    letters = [p for p in pieces if p.get("kind") == "letter"]
+    if not letters:
+        return pieces
+    others = unary_union([p["polygon"] for p in pieces if p.get("kind") != "letter"])
+    tol = tol_mm * px_per_mm
+    out = []
+    for p in pieces:
+        if p.get("kind") != "letter":
+            out.append(p)
+            continue
+        g = p["polygon"]
+        pocket = g.buffer(tol).difference(others).buffer(0)
+        if isinstance(pocket, MultiPolygon):  # drop slivers from other letters' fringes
+            pocket = max(pocket.geoms, key=lambda q: q.intersection(g).area)
+        band = g.length * tol  # max plausible area of a tol-wide mismatch band
+        if pocket.is_empty or g.symmetric_difference(pocket).area > band:
+            out.append(p)
+        else:
+            out.append({**p, "polygon": pocket})
+    return out
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -902,6 +971,7 @@ def emit_cut_gcode_full(
     bt_ms = ramp_ms if max_backtrack_ms is None else max_backtrack_ms
     max_dup_px = max(0.0, bt_ms) / 1000.0 * (feed / 60.0) * cfg.px_per_mm
 
+    pieces = reconcile_letter_pockets(pieces, cfg.px_per_mm)
     edges = extract_unique_edges(pieces)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
     letters, interior, panel = [], [], []
