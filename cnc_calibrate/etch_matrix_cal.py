@@ -353,13 +353,16 @@ def generate(
         for k, power in enumerate(powers):
             th0, th1 = k * sec, (k + 1) * sec
             lines.append(f"; sector {k + 1}/{n_sectors} power={power}%")
-            lines.append(f"{mode} S{power_s[power]}")
             zpts = _zigzag_arc_points(
                 r_outer, th0, th1, zigzag_n_laps, zigzag_lap_step_mm, ring_step_deg
             )
             ring_pts += zpts[1:]
-            for x, y in zpts[1:]:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+            for j, (x, y) in enumerate(zpts[1:]):
+                # power change rides on the motion line: a bare M3/M4 S line
+                # mid-path is a sync point -- the head stops dead with the
+                # beam on (burned a pinhole at the 70->100% boundary)
+                s_word = f" S{power_s[power]}" if j == 0 and k > 0 else ""
+                lines.append(f"G1 X{x:.3f} Y{y:.3f}{s_word}")
         starts.append(ring_pts)
         lines.append("M5")
         lines.append("")
