@@ -84,22 +84,20 @@
       ("1 pass works well at 350"). Same 1s out-and-back warmup lead-in as
       every other cut (5.8mm at F350).
   etch:
-    power_percent: 100
+    power_percent: 70
     feed_mm_per_min: 5000
     passes: 1
-    mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a) on the etch plate
+    mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a)
     lead_in_mm: 3.0    # fixed short warmup (linear model gave 83mm at 100%/F5000)
     notes: |
-      First real cuts at 100%/F5000 (M3, unsimplified 0.1mm segments, 83mm
-      warmup) burned through at stalls and triple-traced short strokes --
-      fixed by M4 + simplify/0.3mm decimation + 3mm lead-in; re-test with
-      cnc_calibrate letter-outline plate before trusting.
-      CALIBRATED on this stock with cnc_calibrate/etch_matrix_cal.py (laps
-      1.0mm apart so each reads as one single-pass line): Alex picked
-      100% / F5000. 30%/2500 was too faint on a real cut, and the earlier
-      plate's 0.25mm-spaced laps had merged into ~3x-dose lines (misleading).
-      Warmup scales linearly with power: 1000ms = 83.3mm lead-in at F5000,
-      so each stroke wiggles 41.7mm out and back before etching.
+      CALIBRATED with cnc_calibrate/etch_matrix_cal.py v4 (single-pass sectors,
+      real letter outlines per cell): Alex picked 70% / F5000, M3. On the plate
+      F3200 lines read heavier/wider than F5000 at every power, 100% scorched a
+      halo, 25%/F5000 went dashed on long arcs. Stroke starts read slightly
+      darker (warmup wiggle triple-traces the first 1.5mm while accelerating).
+      Earlier failures: 30%/F2500 too faint on a real cut; 100%/F5000 with raw
+      0.1mm segments + 83mm warmup stalled and burned through -- fixed by
+      0.05mm simplify + 0.3mm min segment + 3mm fixed lead-in (emit_etch_gcode).
 
 - id: plywood_baltic_birch_6mm
   family: wood
