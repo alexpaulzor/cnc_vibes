@@ -515,12 +515,19 @@ def plan_center_pinwheel(letters, C, r_h, k_hub, ppm, min_gap_mm, rng,
     of rotations/twists; returns the first fully clean layout, else the
     one with the fewest near-misses. Returns (P, phis, twist, tw_deg).
 
-    Known limit (see RING_SPEC 16): a spoke that CROSSES a letter and then
-    runs alongside it (e.g. down between an H's legs) isn't a near miss and
-    can still leave a ~3.5mm strip. Stricter rules were tried and rejected
-    in review -- they either merged hub pieces or broke the hub topology.
-    This version (review iteration #4) was accepted as-is."""
+    A spoke that runs through another letter's open notch (e.g. down between
+    an H's legs) also counts as a miss -- it leaves finger-thin strips (seen
+    as unrepairable QA failures with the symmetric glyphs). The convergence
+    letter's own notches are handled by _snap_notch_ends instead."""
     thresh = min_gap_mm * ppm
+    # open notches (between E/H/M legs, inside C/S/U mouths): a spoke running
+    # through one leaves finger-thin strips either side, so it counts as a miss
+    notches = [(g, g.convex_hull.difference(g.buffer(0.5 * ppm))) for g in letters]
+
+    def notch_hits(line, conv):
+        return sum(1 for g, n in notches
+                   if g is not conv and line.intersection(n).length > 1.0 * ppm)
+
     cands = sorted(
         (g for g in letters if g.distance(Point(C)) < 0.4 * r_h),
         key=lambda g: g.distance(Point(C)),
@@ -540,8 +547,8 @@ def plan_center_pinwheel(letters, C, r_h, k_hub, ppm, min_gap_mm, rng,
                 for dd in sorted(range(-jitter_deg, jitter_deg + 1), key=abs):
                     phi = nom + math.radians(dd)
                     b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
-                    n = len(spoke_near_misses(
-                        _pinwheel_spoke(P, phi, b, twist, tw, r_h), letters, thresh))
+                    sp = _pinwheel_spoke(P, phi, b, twist, tw, r_h)
+                    n = len(spoke_near_misses(sp, letters, thresh)) + notch_hits(LineString(sp), g)
                     if pick_n is None or n < pick_n:
                         pick, pick_n = phi, n
                     if n == 0:
