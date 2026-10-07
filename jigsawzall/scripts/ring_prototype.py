@@ -197,6 +197,58 @@ class RingParams:
 # --------------------------------------------------------------------------
 
 
+# Exact symmetry per letter, so a letter piece still drops into its pocket
+# (and any same-size copy's pocket) when flipped or turned: "v" = left-right
+# mirror, "h" = top-bottom mirror, "r" = 180-degree turn. Letters not listed
+# have no natural symmetry and fit one way only.
+GLYPH_SYMMETRY = {
+    **{c: "v" for c in "AMTUVWY"},
+    **{c: "h" for c in "BCDEK"},
+    **{c: "vh" for c in "HIOX"},
+    **{c: "r" for c in "NSZ"},
+}
+SYMMETRIC_GLYPHS = True
+
+
+def _sym_copy(g, op, c):
+    if op == "v":
+        return affinity.scale(g, -1, 1, origin=(c[0], c[1]))
+    if op == "h":
+        return affinity.scale(g, 1, -1, origin=(c[0], c[1]))
+    return affinity.rotate(g, 180, origin=(c[0], c[1]))
+
+
+def _best_centre(g, op, steps=24):
+    """Axis (v/h) or centre (r) that best matches g to its own mirror/turn:
+    a coarse-to-fine search around the bbox centre."""
+    x0, y0, x1, y1 = g.bounds
+    c = [(x0 + x1) / 2, (y0 + y1) / 2]
+    span = [0.08 * (x1 - x0), 0.08 * (y1 - y0)]
+    axes = {"v": [0], "h": [1], "r": [0, 1]}[op]
+    for _ in range(3):
+        for ax in axes:
+            best = None
+            for k in range(-steps, steps + 1):
+                t = list(c)
+                t[ax] = c[ax] + span[ax] * k / steps
+                e = g.symmetric_difference(_sym_copy(g, op, t)).area
+                if best is None or e < best[0]:
+                    best = (e, t[ax])
+            c[ax] = best[1]
+            span[ax] /= steps / 2
+    return c
+
+
+def symmetrize_glyph(ch, g):
+    """Make g exactly symmetric under its letter's natural symmetry: find the
+    best-matching axis/centre, then UNION g with its mirror/turn (union, not
+    intersection, so no stroke gets thinner)."""
+    for op in GLYPH_SYMMETRY.get(ch, ""):
+        c = _best_centre(g, op)
+        g = unary_union([g, _sym_copy(g, op, c)]).buffer(0)
+    return g
+
+
 def glyph_local(ch, font):
     gl, gt, gr, gb = font.getbbox(ch)
     pad = 6
@@ -207,6 +259,8 @@ def glyph_local(ch, font):
     ascent = font.getmetrics()[0]
     base_y = ascent - gt + pad
     cx = (gl + gr) / 2 - gl + pad
+    if SYMMETRIC_GLYPHS and len(ch) == 1:
+        poly = symmetrize_glyph(ch, poly)
     return affinity.translate(poly, -cx, -base_y)
 
 
