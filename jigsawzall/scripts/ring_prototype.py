@@ -522,11 +522,18 @@ def plan_center_pinwheel(letters, C, r_h, k_hub, ppm, min_gap_mm, rng,
     thresh = min_gap_mm * ppm
     # open notches (between E/H/M legs, inside C/S/U mouths): a spoke running
     # through one leaves finger-thin strips either side, so it counts as a miss
-    notches = [(g, g.convex_hull.difference(g.buffer(0.5 * ppm))) for g in letters]
+    notches = [(g, g.convex_hull, g.convex_hull.difference(g.buffer(0.5 * ppm)))
+               for g in letters]
+    notches = [(g, h, n) for g, h, n in notches if not n.is_empty]
 
     def notch_hits(line, conv):
-        return sum(1 for g, n in notches
-                   if g is not conv and line.intersection(n).length > 1.0 * ppm)
+        # cheap hull test first; the exact notch overlap only where it can hit
+        return sum(1 for g, h, n in notches
+                   if g is not conv and line.intersects(h)
+                   and line.intersection(n).length > 1.0 * ppm)
+
+    import time as _t
+    t_end = _t.monotonic() + 20.0  # search budget: keep the best layout found
 
     cands = sorted(
         (g for g in letters if g.distance(Point(C)) < 0.4 * r_h),
@@ -565,6 +572,8 @@ def plan_center_pinwheel(letters, C, r_h, k_hub, ppm, min_gap_mm, rng,
             if best is None or bad < best[0]:
                 best = (bad, (P, phis, twist, tw))
             if bad == 0:
+                return best[1]
+            if best is not None and _t.monotonic() > t_end:
                 return best[1]
     return best[1]
 
