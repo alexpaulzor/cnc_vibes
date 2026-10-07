@@ -1256,14 +1256,16 @@ def _snap_notch_ends(seams, letters_solid, ppm, min_notch_mm=1.0):
     snapped = 0
     for s in seams:
         for e in (0, 1):
-            if s["ends"][e] != "L":
-                continue
             pts = [tuple(p) for p in s["pts"]]
             if len(pts) < 3:
                 continue
             tip = Point(pts[0] if e == 0 else pts[-1])
             letter = min(comps, key=lambda g: g.distance(tip))
-            if letter.distance(tip) > 2 * ppm:
+            # an "L" end lands on a letter; a hub spoke's "J" end can sit
+            # INSIDE the letter its pinwheel converges in -- that letter is
+            # its own piece, so the spoke may leave it from any outline point
+            near = 2 * ppm if s["ends"][e] == "L" else 0.0
+            if letter.distance(tip) > near:
                 continue
             hull = letter.convex_hull
             notch = hull.difference(letter.buffer(0.5))
