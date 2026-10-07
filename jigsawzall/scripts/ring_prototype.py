@@ -173,6 +173,10 @@ class RingParams:
     #                  flipped (reversed + rotated 180) so both read upright,
     #                  with both words' midlines on the same circle.
     center_style: str = "medallion"
+    # Leave the hub circle (centre disc <-> ring) as a plain, tab-free circular
+    # cut so the assembled centre disc turns freely: nobody's name is favoured
+    # as "up". The disc's own spokes keep their tabs and hold it together.
+    hub_rotates: bool = True
     center_track_mm: float = 2.0  # starting extra spacing between loose center letters
     # Wood between two adjacent loose center letters is a short finger
     # attached only at its ends -- must be at least this wide (Alex: 5mm
@@ -1124,6 +1128,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
             surround, counters, st = assemble_qa(
                 seams, letter_union, tab_solids, background, panel, cfg, C,
                 distinct_tabs=rp.distinct_tabs,
+                untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
@@ -1257,7 +1262,7 @@ def qa_defects(pieces, bulbs, ppm):
 
 
 def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
-                distinct_tabs=True, rounds=8):
+                distinct_tabs=True, rounds=8, untabbed_kinds=()):
     """assemble(), then repair breakable features: ban the tab choice of every
     seam near a defect (so it moves / flips sides), and after a seam's tab
     options run out, drop the seam. Returns the best (fewest defects) result;
@@ -1267,7 +1272,8 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
     best = None
     for _round in range(rounds):
         surround, counters, st = assemble(seams, letter_union, letters_solid, background,
-                                          panel, cfg, C, distinct_tabs, bans=bans)
+                                          panel, cfg, C, distinct_tabs, bans=bans,
+                                          untabbed_kinds=untabbed_kinds)
         defects = qa_defects(surround, st["bulbs"], ppm)
         if best is None or len(defects) < len(best[3]):
             best = (surround, counters, st, defects, {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
@@ -1298,7 +1304,7 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
 
 
 def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True,
-             bans=None):
+             bans=None, untabbed_kinds=()):
     """bans: {seam index: set of tab choices (fallback, i, side) to skip, or
     the string "drop" to force the seam out} -- used by the QA repair loop to
     make a seam pick its next tab position / the other side."""
@@ -1364,7 +1370,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
         s["nconf"] = 0
         base_class = _tab_size_class(s["pts"]) if distinct_tabs else 1.0
         s["tab_class"] = base_class
-        for fallback in (1.0, 0.85, 0.7):
+        for fallback in (() if s.get("kind") in untabbed_kinds else (1.0, 0.85, 0.7)):
             scale = base_class * fallback
             c2 = (
                 cfg
@@ -1402,6 +1408,14 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             s["final"] = chosen[2]
             st["centered"] += 1
             s["status"] = "ok"
+        elif s.get("kind") in untabbed_kinds:
+            # deliberately tab-free (the free-turning hub circle): always cut,
+            # plain, regardless of neighbours -- it is the disc's outline
+            cand = LineString(rs)
+            tabbed.append(rs)
+            accepted.append(cand)
+            s["final"] = cand
+            s["status"] = "plain"
         else:
             s["status"] = "drop"
             # keep the seam untabbed only if it's needed for structure (hub
