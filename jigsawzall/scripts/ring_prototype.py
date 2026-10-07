@@ -1636,6 +1636,8 @@ def generate(words, seed, rp):
     # float-noise insurance without any visible effect.
     for p in pieces:
         p["polygon"] = shapely.set_precision(p["polygon"], 0.01 * cfg.px_per_mm)
+        if isinstance(p["polygon"], MultiPolygon) and len(p["polygon"].geoms) == 1:
+            p["polygon"] = p["polygon"].geoms[0]  # 1-part Multi: plain Polygon for consumers
     for i, p in enumerate(pieces, 1):
         p["serial"] = i
     # QA again on the FINAL pieces (after pocket carving / counter fusing /
