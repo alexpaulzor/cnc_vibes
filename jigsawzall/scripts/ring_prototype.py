@@ -467,7 +467,8 @@ def _center_hub_r_needed_mm(rp, ppm):
         if min(gaps) >= rp.center_min_gap_mm * ppm:
             r = max(math.hypot(px, py) for g in out
                     for px, py in g.convex_hull.exterior.coords)
-            return r / ppm / rp.center_text_fit_frac
+            # +0.5mm: the fit check downstream is r <= r_h*frac; float ties fail it
+            return r / ppm / rp.center_text_fit_frac + 0.5
         track_mm += 0.5
     raise SystemExit(
         f"center text {rp.center_text!r} can't reach {rp.center_min_gap_mm}mm letter gaps "

@@ -1,0 +1,1 @@
+center_text ('PRINCIPALS', 'CAVAGNOLO') (flat) doesn't fit hub radius 75mm -- try --center-cap-mm to grow the hub
