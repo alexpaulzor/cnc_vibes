@@ -40,6 +40,8 @@ from shapely.ops import linemerge, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
 from motion import decimate, warmup_wiggle  # noqa: E402
+import arcfit  # noqa: E402
+import grbl_model  # noqa: E402
 
 from geometry import PuzzleConfig
 
@@ -307,6 +309,10 @@ def emit_etch_gcode(
     power_percent: float | None = None,
     min_segment_mm: float = 0.0,
     simplify_mm: float = 0.05,
+    arc_tolerance_mm: float | None = None,
+    motion_report: bool = True,
+    machine: "grbl_model.MachineProfile | None" = None,
+    sender: "grbl_model.SenderProfile | None" = None,
 ) -> str:
     """A shallow, non-cutting score pass tracing `strokes_px` (open
     polylines, image px, e.g. from scripts/globe_etch.py) -- NOT piece
@@ -333,7 +339,16 @@ def emit_etch_gcode(
     model, which at full power/fast feed grows to tens of mm and re-traces
     whole short strokes). Strokes are simplified (`simplify_mm`) before
     decimation: raw outline strokes are ~0.1mm staircase segments that GRBL
-    can't stream at etch feeds, so the head stalls between them."""
+    can't stream at etch feeds, so the head stalls between them.
+
+    `arc_tolerance_mm` (default None = off, plain G1 polylines): fit each
+    stroke's moves to G2/G3 arcs + G1 lines within that chord tolerance
+    (quickcut/arcfit.py). GRBL re-chops an arc into fine $12 chords whose
+    small junction angles keep the head near F on curves; long G1 chords on
+    tight curves force a slowdown at every junction ($11), which under M3
+    raises energy/mm. `motion_report` appends the quickcut/grbl_model.py
+    prediction (per-stroke energy factor, hotspots) to the header comments
+    -- using `machine`/`sender` profiles, UNVERIFIED defaults if None."""
     if "etch" not in material:
         raise SystemExit(
             f"material {material.get('id')!r} has no etch: profile -- "
@@ -428,19 +443,36 @@ def emit_etch_gcode(
         lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
         lines.append(f"{on} S{power_s}")
         lines.append(f"F{feed}")
+        moves = []
         for pass_n in range(passes):
             if pass_n == 0 and warm:
-                for x, y in warm:
-                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-        for x, y in tail:
-            lines.append(f"G1 X{x:.3f} Y{y:.3f}")
+                moves += warm
+            moves += pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
+        moves += tail
+        if arc_tolerance_mm:
+            prims = arcfit.fit_arcs([pts[0], *moves], arc_tolerance_mm)
+            lines += arcfit.prims_to_gcode(prims)
+        else:
+            lines += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in moves]
         lines.append("M5")
         lines.append("")
     lines += ["G0 X0 Y0", ""]
+    if arc_tolerance_mm:
+        at = lines.index(";HEAD: laser") - 1
+        lines.insert(at, f"; strokes fitted to G2/G3 arcs within {arc_tolerance_mm}mm "
+                     "(quickcut/arcfit.py)")
+    if motion_report:
+        _insert_motion_report(lines, machine, sender)
     return "\n".join(lines)
+
+
+def _insert_motion_report(lines, machine=None, sender=None):
+    """Simulate `lines` through quickcut/grbl_model.py and put the predicted
+    per-stroke speed / energy-factor summary into the header comments."""
+    res = grbl_model.simulate("\n".join(lines), machine, sender)
+    rep = grbl_model.report_lines(res, hotspots=5)
+    at = lines.index(";HEAD: laser") - 1
+    lines[at:at] = [f"; {r}" for r in rep]
 
 
 # ---------------------------------------------------------------------------

@@ -488,6 +488,19 @@ def render_preview(pieces, cfg, title: str, out_path: Path, origins=None):
 # ---------------------------------------------------------------------------
 
 
+def _arc_pts(start, line: str) -> list[tuple[float, float]]:
+    """Points along a `G2/G3 X Y I J` move from `start` (quickcut/arcfit.py
+    re-sampling), so previews and lint see arcs as the path they trace."""
+    import re
+
+    from arcfit import primitives_to_points
+
+    w = dict(re.findall(r"([XYIJ])(-?\d+\.?\d*)", line))
+    prim = (line[:2], (float(w["X"]), float(w["Y"])),
+            (float(w.get("I", 0)), float(w.get("J", 0))))
+    return primitives_to_points(start, [prim], step_mm=0.2)[1:]
+
+
 def _parse_gcode_paths(gcode: str) -> list[list[tuple[float, float]]]:
     """Extract continuous cut paths (in machine mm) from emitted GCode.
 
@@ -512,6 +525,8 @@ def _parse_gcode_paths(gcode: str) -> list[list[tuple[float, float]]]:
             cur = [_xy(ln)]
         elif ln.startswith("G1 X"):
             cur.append(_xy(ln))
+        elif ln.startswith(("G2 X", "G3 X")) and cur:
+            cur.extend(_arc_pts(cur[-1], ln))
         elif ln.startswith("M5"):
             if len(cur) > 1:
                 paths.append(cur)

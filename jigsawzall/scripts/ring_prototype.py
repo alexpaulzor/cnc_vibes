@@ -1726,6 +1726,9 @@ def main():
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")
     ap.add_argument("--etch-feed", type=int, default=None, help="outline etch feed mm/min (default: material etch profile)")
+    ap.add_argument("--etch-arc-tol", type=float, default=None,
+                    help="fit outline etch strokes to G2/G3 arcs within this many mm "
+                         "(default off: G1 polylines; see quickcut/arcfit.py)")
     ap.add_argument(
         "--max-backtrack-ms", type=float, default=2000.0,
         help="re-trace already-cut line up to this many ms to avoid a restart+warmup",
@@ -1797,10 +1800,18 @@ def main():
                 strokes, material, cfg, f"{tag} letter outlines",
                 feed_override=a.etch_feed, power_percent=a.etch_power,
                 min_segment_mm=a.min_segment_mm,
+                arc_tolerance_mm=a.etch_arc_tol,
             )
             gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
         _check_xy_envelope(gcode, a.max_xy_mm)
         Path(a.gcode).write_text(gcode)
+        from ring_lint import lint_motion
+
+        slow = lint_motion(gcode)
+        if slow:
+            print(f"MOTION QA ({slow[0].severity}, quickcut/grbl_model.py, UNVERIFIED "
+                  f"machine profile): {len(slow)} stroke(s) predicted > x1.3 energy/mm "
+                  "under M3; worst: " + "; ".join(f.detail for f in slow[:3]))
         png, _svg = J.render_gcode_previews(
             gcode, cfg, Path(a.gcode).with_suffix(""), title=f"{tag} ring cut"
         )
