@@ -1,0 +1,17 @@
+WARNING outline etch: letter at (197,176)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (225,176)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (126,177)mm: 1.0mm inset splits it into 3 part(s) -- stroke too thin
+WARNING outline etch: letter at (153,177)mm: 1.0mm inset splits it into 3 part(s) -- stroke too thin
+WARNING outline etch: letter at (199,162)mm: 1.0mm inset splits it into 3 part(s) -- stroke too thin
+WARNING outline etch: letter at (150,161)mm: 1.0mm inset splits it into 2 part(s) -- stroke too thin
+WARNING outline etch: letter at (138,161)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (164,161)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (167,177)mm: 1.0mm inset splits it into 2 part(s) -- stroke too thin
+WARNING outline etch: letter at (112,177)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (175,161)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (211,162)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (225,161)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+WARNING outline etch: letter at (182,176)mm: 1.0mm inset splits it into 3 part(s) -- stroke too thin
+WARNING outline etch: letter at (210,178)mm: 1.0mm inset splits it into 0 part(s) -- stroke too thin
+QA FAILED: 8 breakable feature(s) no variant could repair: strip near image (131,162)mm, strip near image (225,159)mm, strip near image (224,163)mm, strip near image (168,176)mm, strip near image (225,159)mm, strip near image (224,163)mm, strip near image (168,176)mm, strip near image (131,162)mm
+BRIAN-GILLIAN: cap 19.0mm, min letter gap 34.2mm, hub r 75mm, center cap 10.0mm, 99 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (4, 1, 1, 1, 0, 4) -> out/principals2/g5_s3.png
