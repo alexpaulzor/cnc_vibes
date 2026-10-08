@@ -1,0 +1,2 @@
+QA FAILED: 1 breakable feature(s) no variant could repair: strip near image (133,80)mm
+BRIAN-GILLIAN: cap 39.2mm, min letter gap 14.2mm, hub r 56mm, 64 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 10) -> out/principals/s4.png
