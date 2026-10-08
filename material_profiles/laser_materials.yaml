@@ -28,6 +28,16 @@
 #                      cut-through control (slower = deeper)
 #     passes           cut-through passes (1 = single pass; more = deeper)
 #     notes            free-form safety / quality / technique notes
+#   etch (optional):   a SHALLOW, non-cutting score pass (e.g. an orientation
+#                      mark or decorative line design) -- much lower power
+#                      and/or higher feed than `laser`, same static-M3 /
+#                      single-pass conventions. Verify on a fresh material
+#                      with scripts/etch_calibration.py (a self-labeled
+#                      power x feed grid) before trusting an entry's
+#                      numbers on a real part -- plywood_baltic_birch_3mm's
+#                      is calibrated this way; any other material's etch:
+#                      block is still an unverified starting guess until
+#                      it gets the same treatment (jigsawzall/RING_SPEC.md).
 
 - id: plywood_baltic_birch_3mm
   family: wood
@@ -44,6 +54,51 @@
       default is 500 for margin. Static M3 at 100% with the 1s out-and-back warmup
       lead-in handles the cold-start zone. Springier than MDF — may flex/curl more
       readily. Drop feed or add a pass only for stubborn/thicker stock.
+  etch:
+    power_percent: 25
+    feed_mm_per_min: 2500
+    passes: 1
+    notes: |
+      CALIBRATED on a real scrap test (scripts/etch_calibration.py, a 5
+      power x 4 feed grid self-labeled on the wood). 25%/2500mm/min was
+      picked by inspection as the sweet spot: clearly visible medium-brown
+      contrast, no smoke, not approaching cut depth. 30% showed diminishing
+      returns over 25% (not meaningfully darker, just more energy spent),
+      10-15% too faint to rely on once painted over. Every etch stroke gets
+      its own warmup wiggle, scaled linearly from the 1s full-power ramp
+      (jigsawzall/emitter.py WARMUP_MS) by this profile's power_percent --
+      at 25% that's a ~250ms / ~2mm lead-in, not the full 1s/8.3mm a 100%
+      cut needs.
+
+- id: plywood_veneer_3ply_3mm
+  family: wood
+  thickness_mm: 3.0
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 350
+    passes: 1
+    notes: |
+      Stiffer 3-ply cross-grain veneered stock (the stock the relaxed
+      tab/bend/clearance floors in jigsawzall/geometry.py are tuned for).
+      350mm/min SINGLE pass at static M3 100%, confirmed in use by Alex
+      ("1 pass works well at 350"). Same 1s out-and-back warmup lead-in as
+      every other cut (5.8mm at F350).
+  etch:
+    power_percent: 100
+    feed_mm_per_min: 5000
+    passes: 1
+    mode: static       # M3. M4 (dynamic) did not fire at all on this controller (Grbl_ESP32 1.3a)
+    # no lead_in_mm: linear warmup model (700ms at 70% = 58.3mm at F5000), spread by
+    # loop follow-through / open-stroke ping-pong instead of a pile-up at the start
+    notes: |
+      CALIBRATED with cnc_calibrate/etch_matrix_cal.py v4 (single-pass sectors,
+      real letter outlines per cell): Alex picked 70% / F5000, M3, then moved to 100% / F5000 after a real cut:
+      70% read light in spots; 100%'s darker, wider lines give better contrast. On the plate
+      F3200 lines read heavier/wider than F5000 at every power, 100% scorched a
+      halo, 25%/F5000 went dashed on long arcs.
+      Earlier failures: 30%/F2500 too faint on a real cut; 100%/F5000 with raw
+      0.1mm segments + 83mm warmup stalled and burned through -- fixed by
+      0.05mm simplify + 0.3mm min segment + 3mm fixed lead-in (emit_etch_gcode).
 
 - id: plywood_baltic_birch_6mm
   family: wood

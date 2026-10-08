@@ -654,11 +654,15 @@ def test_letter_aligned_holds_together(word):
 
 
 def test_fat_capsule_tab_is_banner_default():
-    """The banner preset defaults to the fat capsule tab: a wide (~5mm) neck and
-    a stadium bulb wider than the neck (so it still locks). Verifies the neck
-    width, the capsule bulb width, and that the bulb overhangs the neck."""
+    """The banner preset defaults to the fat capsule tab: a neck and a stadium
+    bulb wider than the neck (so it still locks). Verifies the neck width, the
+    capsule bulb width, and that the bulb overhangs the neck.
+
+    Neck was 30px/6mm, sized for thin single-ply raw-board durability; the
+    current 3-ply cross-grain veneer stock is stiffer and cuts a 15px/3mm
+    neck instead (see banner_puzzle_config's docstring)."""
     cfg = banner_puzzle_config()
-    assert cfg.tab_stem_w_px == 30  # 6mm neck at 5px/mm
+    assert cfg.tab_stem_w_px == 15  # 3mm neck at 5px/mm
     L, H = cfg.tab_len_px, cfg.tab_height_px
     pts = tab_outline(direction=+1, cfg=cfg)
     # Every corner is rounded (base fillet + neck->bulb cove), so the neck has no
@@ -670,7 +674,7 @@ def test_fat_capsule_tab_is_banner_default():
         if abs(u1 - u0) < 1e-9 and abs(v1 - v0) > 1e-9
     ]
     neck_px = (max(walls) - min(walls)) * L
-    assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 30px == 6mm
+    assert neck_px == pytest.approx(cfg.tab_stem_w_px, abs=1)  # 15px == 3mm
     # the base fillet flares the root: the edge (v == 0) is wider than the neck
     on_edge = [u for u, v in pts if abs(v) < 1e-9 and 0.0 < u < 1.0]
     base_px = (max(on_edge) - min(on_edge)) * L
@@ -767,3 +771,64 @@ def test_vertex_grid_density_scales_with_crowding():
     _, stats = generate_pieces("KARSON", 7, _vgrid_cfg())
     assert stats.get("density", 0) >= 1
     assert stats.get("thin", 0) == 0  # durability always satisfied
+
+
+# ---------------------------------------------------------------------------
+# CP-SAT gap-seam selection: replaces the old "8 random variants, keep the
+# best" picker with an exact assignment solve. These use small synthetic
+# candidate lists (no font tracing) so they run in milliseconds.
+# ---------------------------------------------------------------------------
+from geometry import _vg_select_gap_seams_cpsat, _vg_select_gap_seams_greedy  # noqa: E402
+
+
+def test_cpsat_gap_seams_respects_vertex_exclusivity():
+    """Two letter-pairs that happen to share a vertex index on the middle
+    letter (gi=1) must not both claim it -- exactly the rule the old greedy
+    `used` set enforced by construction; CP-SAT must enforce it as a hard
+    constraint instead."""
+    # pair 0 = (glyph 0, glyph 1); pair 1 = (glyph 1, glyph 2). Both offer a
+    # candidate that uses glyph 1's vertex index 0 -- only one can be picked.
+    gap_allowed = [
+        [(50.0, [(0, 50), (10, 50)], 0, 0)],
+        [(50.0, [(20, 50), (30, 50)], 0, 0)],
+    ]
+    seams, used = _vg_select_gap_seams_cpsat(gap_allowed, density=1, py=0, ph=100, min_sep=5)
+    assert len(seams) == 1, "both candidates claim glyph-1 vertex 0 -- only one can be accepted"
+    assert (1, 0) in used
+
+
+def test_cpsat_gap_seams_picks_one_per_pair_when_independent():
+    """Two independent pairs (no shared vertices) should both get a seam."""
+    gap_allowed = [
+        [(50.0, [(0, 50), (10, 50)], 0, 1)],
+        [(50.0, [(20, 50), (30, 50)], 2, 3)],
+    ]
+    seams, used = _vg_select_gap_seams_cpsat(gap_allowed, density=1, py=0, ph=100, min_sep=5)
+    assert len(seams) == 2
+    assert used == {(0, 0), (1, 1), (1, 2), (2, 3)}
+
+
+def test_cpsat_gap_seams_enforces_min_separation():
+    """Two candidates on the SAME pair, closer together than min_sep, must
+    not both be selected even though density allows up to 2 picks."""
+    gap_allowed = [
+        [
+            (40.0, [(0, 40), (10, 40)], 0, 0),
+            (42.0, [(0, 42), (10, 42)], 1, 1),  # only 2px from the first -- too close
+        ],
+    ]
+    seams, used = _vg_select_gap_seams_cpsat(gap_allowed, density=2, py=0, ph=100, min_sep=5)
+    assert len(seams) == 1, "candidates 2px apart must not both be picked with min_sep=5"
+
+
+def test_cpsat_and_greedy_fallback_agree_on_a_simple_case():
+    """The OR-Tools-absent greedy fallback should produce the same picks as
+    CP-SAT on an unambiguous case (one clear-best candidate per pair)."""
+    gap_allowed = [
+        [(45.0, "near", 0, 1), (90.0, "far", 10, 11)],
+    ]
+    cp_seams, cp_used = _vg_select_gap_seams_cpsat(gap_allowed, density=1, py=0, ph=100, min_sep=5)
+    gr_seams, gr_used = _vg_select_gap_seams_greedy(gap_allowed, density=1, py=0, ph=100, min_sep=5)
+    # target is at py + ph*0.5 = 50: "near" (y=45, dist 5) beats "far" (y=90, dist 40).
+    assert cp_seams == gr_seams == ["near"]
+    assert cp_used == gr_used == {(0, 0), (1, 1)}

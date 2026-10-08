@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CAVAGNOLO 300mm constraint analysis</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.5; color: #1a1a1a; }
+  h1, h2 { border-bottom: 2px solid #ddd; padding-bottom: 0.3rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: 0.92rem; }
+  th, td { border: 1px solid #ccc; padding: 0.5rem 0.7rem; text-align: left; vertical-align: top; }
+  th { background: #2c3e50; color: white; }
+  tr:nth-child(even) { background: #f6f6f6; }
+  code { background: #eee; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+  strong { color: #b03; }
+</style>
+</head>
+<body>
+<h1>Why CAVAGNOLO can't cut cleanly in a 300mm-wide panel</h1>
+<p>This documents every rule in the vertex-grid puzzle generator (<code>geometry.py</code>)
+that combines to force a 9-letter word's cap height down to ~7mm inside a
+300mm panel — and, at that size, to make several letters (G, C, N) end up
+with zero safe places left to cut a seam from at all. Every number below is
+quoted or computed directly from the source cited in "Where", not from
+memory.</p>
+<h2>The arithmetic that shrinks the letters</h2>
+<p>For a 9-letter word there are 8 inter-letter gaps and 2 outer side margins.
+Two independent floors stack on top of each other:</p>
+<table>
+<thead>
+<tr>
+<th>Quantity</th>
+<th>Formula</th>
+<th>Value</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Side margin (both ends)</td>
+<td><code>banner_margin_mm</code> × 2</td>
+<td>24mm × 2 = <strong>48mm</strong></td>
+<td><code>jigsaw.py:143</code> sets <code>banner_margin_mm=24.0</code>; consumed as <code>_end_side_margin_px</code> in <code>geometry.py:1483-1485</code></td>
+</tr>
+<tr>
+<td>Per-gap mandatory floor</td>
+<td><code>tab_height_px + 2×tab_circle_r_px + letter_gap_extra_mm×px_per_mm</code></td>
+<td>9mm + 6mm + 10mm = <strong>25mm</strong></td>
+<td><code>geometry.py:1495-1499</code> (<code>_measure_text</code>'s <code>min_gap</code>)</td>
+</tr>
+<tr>
+<td>Total gap floor (8 gaps)</td>
+<td>25mm × 8</td>
+<td><strong>200mm</strong></td>
+<td>same formula, applied per adjacent pair in <code>_measure_text</code>'s shrink loop</td>
+</tr>
+<tr>
+<td>Fixed floor total</td>
+<td>48 + 200</td>
+<td><strong>248mm</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>Left for actual letter ink (9 letters)</td>
+<td>300 − 248</td>
+<td><strong>52mm ÷ 9 ≈ 5.8mm/letter</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The font-shrink loop in <code>_measure_text</code> (<code>geometry.py:1515-1533</code>) keeps
+halving the font size toward that ~52mm ink budget instead of the intended
+46mm cap height, which is why the measured result comes out around 7mm
+cap height, not 46mm.</p>
+<h2>Constraint table</h2>
+<table>
+<thead>
+<tr>
+<th>Constraint</th>
+<th>Value</th>
+<th>Where (file:line)</th>
+<th>Derived from</th>
+<th>Why it exists</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stock width</td>
+<td>300mm</td>
+<td>user's physical material, not code</td>
+<td>the plywood sheet you actually have</td>
+<td>hard physical boundary — not a code limit at all</td>
+</tr>
+<tr>
+<td><code>banner_letter_h_mm</code> (target cap height)</td>
+<td>46.0mm</td>
+<td><code>jigsaw.py:151</code></td>
+<td>comment: "Keep letters a consistent, readable size across names"</td>
+<td>so every name-plate reads at the same, tested-legible size regardless of word length</td>
+</tr>
+<tr>
+<td><code>banner_margin_mm</code> (top/bottom/end margin)</td>
+<td>24.0mm</td>
+<td><code>jigsaw.py:143</code>; consumed in <code>geometry.py:1483</code></td>
+<td>comment: "~98% of tabs place at full size... while the panel stays compact (~87mm tall for NORA)" — empirically tuned against real cut tests</td>
+<td>tabs placed too close to the panel edge get rejected by the border-clearance floor (see <code>tab_border_floor_v/h_mm</code> below); this margin keeps the majority of tabs valid</td>
+</tr>
+<tr>
+<td><code>letter_gap_extra_mm</code> (extra inter-letter tracking, vertex-grid)</td>
+<td>10.0mm</td>
+<td><code>jigsaw.py:124</code></td>
+<td>comment: "so there's real background between glyphs to seam through... tight words leave gaps so narrow that any split makes a sub-4mm thin bridge" (<code>jigsaw.py:113-116</code>)</td>
+<td>leaves enough open background between letters for a structurally-sound (≥4mm) wood bridge next to a tab</td>
+</tr>
+<tr>
+<td><code>tab_height_px</code> = 3 × <code>tab_circle_r_px</code></td>
+<td>3 × 15px = 45px = <strong>9mm</strong></td>
+<td><code>geometry.py:240</code> (<code>__post_init__</code>)</td>
+<td>geometric definition of the lollipop/capsule tab's own footprint</td>
+<td>a tab physically needs this much material depth to exist at all</td>
+</tr>
+<tr>
+<td><code>tab_circle_r_px</code> (tab bulb radius)</td>
+<td>15px = 3mm</td>
+<td><code>banner_puzzle_config</code>, <code>geometry.py:336</code></td>
+<td>comment: "sized for 3mm-stock durability (the first NORA cut snapped at thin 11px knobs)" — i.e. a <strong>real prior cut failure</strong>, not arbitrary</td>
+<td>undersized tabs literally snapped off during a real test cut; this is the empirically-recovered minimum</td>
+</tr>
+<tr>
+<td><code>tab_stem_w_px</code> (tab neck width)</td>
+<td>30px = 6mm</td>
+<td><code>banner_puzzle_config</code>, <code>geometry.py:345</code></td>
+<td>comment: "6mm neck (~2x a 3mm stock, so pieces don't snap at the stem)"</td>
+<td>same snapped-cut failure; neck needs to be ~2x stock thickness to survive</td>
+</tr>
+<tr>
+<td>Minimum seam length to carry a tab</td>
+<td><code>1.5 × tab_len_px</code> where <code>tab_len_px = max(0.4×piece_mm×px_per_mm, 5×tab_circle_r_px)</code> = max(20mm, 15mm) = 20mm → <strong>30mm min seam length</strong></td>
+<td><code>geometry.py:241</code> (<code>tab_len_px</code> def), used at <code>geometry.py:2698, 2713</code> etc.</td>
+<td>a tab (with its lock geometry) has to physically fit somewhere along the seam with room to spare</td>
+<td>a seam shorter than this can't fit a full tab at all; the whole seam gets dropped (pieces stay merged) instead of getting a tiny/unsafe tab</td>
+</tr>
+<tr>
+<td>Anchor "nook" rejection: reflex-corner clearance</td>
+<td>4.0mm</td>
+<td><code>geometry.py:2159, 2180</code> (<code>_vg_anchors</code>, <code>near</code>/<code>clear</code>)</td>
+<td>comment: "within 4mm of a concave (reflex) corner"</td>
+<td>a cut launched right next to a concave notch leaves a wedge of wood too thin to survive</td>
+</tr>
+<tr>
+<td>Anchor "nook" rejection: launch-probe clearance</td>
+<td>7.0mm</td>
+<td><code>geometry.py:2181</code> (<code>_vg_anchors</code>, <code>launch</code>)</td>
+<td>comment: "a short outward-normal probe can't stay ≥4mm clear of the glyph... a nook: between the fingers of an E, inside the crooks of a W/R/S"</td>
+<td>confirms the point can actually launch a cut outward without immediately running back into the letter's own body</td>
+</tr>
+<tr>
+<td>Minimum curve bend radius</td>
+<td>5.0mm</td>
+<td><code>geometry.py:2252</code> (<code>_vg_curve</code>, <code>min_r_mm</code>)</td>
+<td>comment: "bends no tighter than min_r_mm"</td>
+<td>a tighter bend in laser-cut wood is a stress-concentration point that's prone to snapping</td>
+</tr>
+<tr>
+<td>Minimum obstacle clearance along a curve</td>
+<td>4.0mm</td>
+<td><code>geometry.py:2252</code> (<code>_vg_curve</code>, <code>clear_mm</code>)</td>
+<td>same file, curve construction</td>
+<td>keeps a seam's curve from grazing a neighboring letter's edge</td>
+</tr>
+<tr>
+<td>Border tab clearance (top/bottom)</td>
+<td>7.0mm</td>
+<td><code>geometry.py:90</code> (<code>tab_border_floor_v_mm</code>)</td>
+<td>field comment: "top/bottom clearance"</td>
+<td>a tab cut too close to the panel's outer edge blows out the edge instead of interlocking</td>
+</tr>
+<tr>
+<td>Border tab clearance (left/right)</td>
+<td>3.0mm</td>
+<td><code>geometry.py:91</code> (<code>tab_border_floor_h_mm</code>)</td>
+<td>field comment: "left/right clearance"</td>
+<td>same reasoning, smaller floor since the long edge has more natural clearance</td>
+</tr>
+<tr>
+<td>Letter-to-tab minimum wood bridge</td>
+<td>4.0mm</td>
+<td><code>geometry.py:164</code> field def; <code>jigsaw.py:154</code> override</td>
+<td>field comment: "the minimum material bridge left beside a tab (raise it to stop brittle thin bridges)"</td>
+<td>prevents a tab from being placed so close to a letter that the sliver of wood between them snaps</td>
+</tr>
+<tr>
+<td><code>px_per_mm</code> (render/geometry resolution)</td>
+<td>5</td>
+<td><code>geometry.py:76</code> (<code>PuzzleConfig</code> default)</td>
+<td>fixed conversion constant</td>
+<td>not a physical limit — just the pixel scale every mm-based rule above is computed in</td>
+</tr>
+</tbody>
+</table>
+<h2>The compounding failure at 300mm</h2>
+<ol>
+<li>The two floors above (<code>banner_margin_mm</code> × 2 + 8 × per-gap floor = 248mm)
+   leave only ~52mm of your 300mm for actual letter ink across 9 letters.</li>
+<li><code>_measure_text</code>'s shrink loop (<code>geometry.py:1515-1533</code>) has no lower
+   bound tied to legibility — it shrinks the font until the ink fits that
+   52mm, landing around 7mm cap height (measured this session).</li>
+<li>At 7mm cap height, a letter's own concave features (G's opening, C's
+   opening, N's inner notch) are smaller than the fixed 4mm/7mm nook-clearance
+   floors in <code>_vg_anchors</code> — so every candidate point on that side gets
+   rejected, sometimes leaving a letter with <strong>zero</strong> anchors on its open
+   side, and in one case (this session, before a fix) zero anchors at all
+   (a crash in <code>geometry.py</code>'s <code>gen_seams</code>, <code>max()</code>/<code>min()</code> of an empty list).</li>
+<li>Even where an anchor survives, a seam between two 7mm-tall letters that
+   are 25mm apart can't always reach the 30mm minimum tab-carrying length
+   (<code>1.5 × tab_len_px</code>), so it gets dropped and the two letters/background
+   regions stay merged into one piece.</li>
+</ol>
+<p>None of the individual numbers above are large — they're all tuned against
+real prior cut failures (the "first NORA cut snapped" comments) or basic
+tab geometry. The problem is that they're all <strong>fixed mm values</strong>, so they
+don't scale down with the letters; at 46mm cap height they're a small
+fraction of the letter and barely noticed, but at 7mm cap height several of
+them exceed the letter itself.</p>
+</body>
+</html>

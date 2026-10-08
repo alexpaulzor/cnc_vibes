@@ -34,6 +34,7 @@ happens in the emitter.
 from __future__ import annotations
 
 import math
+import pathlib
 import random
 import warnings
 from dataclasses import dataclass, field
@@ -81,13 +82,13 @@ class PuzzleConfig:
     # even with a thick neck, so pieces don't snap at the stem. None (default) =>
     # the original thin lollipop, byte-identical.
     tab_stem_w_px: float | None = None  # neck width px; None => R (old behavior)
-    # Minimum clear distance a tab (bulb + neck) must keep from the panel border,
-    # split by direction so the short banner dimension can demand more room: the
-    # full-height vertical dividers otherwise centre their above/below-letter tabs
-    # into the thin top/bottom margin, landing them near the edge where they snap.
-    # Vertical (top/bottom) is the larger default; horizontal (left/right) stays tight.
-    tab_border_floor_v_mm: float = 7.0  # top/bottom clearance
-    tab_border_floor_h_mm: float = 3.0  # left/right clearance
+    # Minimum clear distance a tab (bulb + neck) must keep from the panel border.
+    # Was split 7mm/3mm (vertical demanded more room) for thin, flexible single-
+    # ply raw board where an edge-tab could snap; unified to 5mm/5mm for the
+    # current stiffer 3-ply cross-grain veneer stock, which no longer needs the
+    # directional asymmetry.
+    tab_border_floor_v_mm: float = 5.0  # top/bottom clearance
+    tab_border_floor_h_mm: float = 5.0  # left/right clearance
     margin_px: int = 120  # canvas inset around the panel for rendering
     legend_h_px: int = (
         0  # extra canvas height below the panel; unused (no legend is drawn)
@@ -181,6 +182,20 @@ class PuzzleConfig:
     # letter before it starts to curve, so the seam meets the letter at a clean
     # 90 deg with no sharp point / cusp. Effectively a minimum launch curve radius.
     min_launch_radius_mm: float = 5.0
+
+    # Letter softening (spaced-layout names only). letter_bold_mm grows every
+    # stroke outward by this much (a heavier face without changing the font);
+    # letter_round_mm fillets the glyph corners, inside and out, to this radius
+    # so no sharp tips snap or char. 0/0 (default) = the traced glyph, unchanged.
+    # Outer panel outline: "rect" (default, rounded by corner_radius_mm) or
+    # "disc" (a circle inscribed in the fitted panel box — the ring layout). The
+    # emitter uses this to recognise the outside profile so it is cut LAST.
+    panel_shape: str = "rect"
+    letter_bold_mm: float = 0.0
+    letter_round_mm: float = 0.0
+    # Fill any letter counter (hole) narrower than this (mm): a sliver of an A's
+    # triangle becomes a crumb of a piece that won't survive cutting. 0 = keep all.
+    letter_min_hole_mm: float = 0.0
 
     # Wavy-edge support. wave_amplitude_px = 0 (default) → straight edges,
     # matches the original grid-puzzle behavior and keeps all existing
@@ -319,15 +334,18 @@ def banner_puzzle_config() -> PuzzleConfig:
         piece_mm=25,
         piece_h_mm=37.5,
         tab_circle_r_px=15,
-        # Fat capsule tabs, sized for 3mm-stock durability (the first NORA cut
-        # snapped at thin 11px knobs): 6mm neck (~2x a 3mm stock, so pieces don't
-        # snap at the stem) rising into a 12mm-wide stadium bulb (neck + 2*R)
-        # that keeps 3mm of undercut lock each side. This is the SINGLE SOURCE OF
-        # TRUTH for name-plate tab size; _apply_size_overrides mirrors these onto
-        # every --size preset so a name cuts the same tabs regardless of preset.
-        # Needs a real-size banner (see cut cmd panel overrides); the 150mm
-        # calibration default is too short for them and will drop tabs.
-        tab_stem_w_px=30,
+        # Fat capsule tabs. Originally sized for thin single-ply raw-board
+        # durability (the first NORA cut snapped at thin 11px knobs): 6mm neck
+        # rising into a 12mm-wide stadium bulb (neck + 2*R), 3mm undercut lock
+        # each side. The current stock is stiffer 3-ply cross-grain veneer, so
+        # the neck has shrunk to 3mm (~1x stock thickness instead of ~2x) —
+        # bulb is now 3mm neck + 2*R(3mm) = 9mm wide, same 3mm undercut lock.
+        # This is the SINGLE SOURCE OF TRUTH for name-plate tab size;
+        # _apply_size_overrides mirrors these onto every --size preset so a
+        # name cuts the same tabs regardless of preset. Needs a real-size
+        # banner (see cut cmd panel overrides); the 150mm calibration default
+        # is too short for them and will drop tabs.
+        tab_stem_w_px=15,
         wave_amplitude_px=0,
         corner_radius_mm=5.0,
         letter_aligned_grid=True,
@@ -606,11 +624,17 @@ def find_clear_tab_offset(
 # ---------------------------------------------------------------------------
 
 
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+
 _FONT_ALIASES = {
     "bold": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "black": "/System/Library/Fonts/Supplemental/Arial Black.ttf",
     "impact": "/System/Library/Fonts/Supplemental/Impact.ttf",
     "narrow": "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+    # Bundled in fonts/ (OFL-1.1, see fonts/Quicksand-OFL-LICENSE.txt) so a
+    # genuinely rounded face is available on every checkout, not just
+    # machines that happen to have it installed system-wide.
+    "round": str(_REPO_ROOT / "fonts" / "Quicksand-Bold.ttf"),
 }
 
 
@@ -1561,6 +1585,41 @@ def fit_config(word: str, cfg: PuzzleConfig) -> PuzzleConfig:
     return cfg
 
 
+def soften_letters(union, cfg: PuzzleConfig):
+    """Embolden and round the letter outlines (letter_bold_mm / letter_round_mm).
+
+    Closing (grow by bold+round, shrink by round) thickens strokes by `bold` and
+    fillets the concave corners (stroke joins, counters); opening (shrink then
+    grow by round) then fillets the convex tips. Applied before any seam or tab
+    is placed, so every clearance rule sees the final letter shape."""
+    b = cfg.letter_bold_mm * cfg.px_per_mm
+    r = cfg.letter_round_mm * cfg.px_per_mm
+    h = cfg.letter_min_hole_mm * cfg.px_per_mm
+    if union is None or (b <= 0 and r <= 0 and h <= 0):
+        return union
+    u = union
+    if b > 0 or r > 0:
+        u = u.buffer(b + r, join_style=1).buffer(-r, join_style=1)
+    if r > 0:
+        u = u.buffer(-r, join_style=1).buffer(r, join_style=1)
+    if h > 0:
+        polys = list(u.geoms) if isinstance(u, MultiPolygon) else [u]
+        u = unary_union(
+            [
+                Polygon(
+                    p.exterior,
+                    [
+                        ring
+                        for ring in p.interiors
+                        if not Polygon(ring).buffer(-h / 2).is_empty
+                    ],
+                )
+                for p in polys
+            ]
+        )
+    return u.simplify(0.25)
+
+
 def letter_layout_spaced(word: str, cfg: PuzzleConfig):
     """Lay out `word` for the letter-aligned grid with a guaranteed tab-width
     gap between every adjacent letter, using CONSISTENT tracking relative to
@@ -1609,7 +1668,7 @@ def letter_layout_spaced(word: str, cfg: PuzzleConfig):
         seam_nx.append(nx)
         through_ok.append(ok)
         hcut_ny.append(glyph_hcut_y(ink))
-    union = _trace_mask_polygons(mask)
+    union = soften_letters(_trace_mask_polygons(mask), cfg)
 
     # --- Vertical seam selection (general; works for arbitrary text) ---
     # DEFAULT: one seam per letter, through a SOLID part of the glyph (its center
@@ -2107,7 +2166,9 @@ def _vg_anchors(
         if all(math.hypot(m[0] - c[0], m[1] - c[1]) > near for c in corners)
     ]
 
-    # Reflex (concave) corners of the ring — anchors must stay 4mm clear of these.
+    # Reflex (concave) corners of the ring — anchors must stay 3mm clear of these
+    # (was 4mm on thin single-ply raw board; 3-ply cross-grain veneer stock is
+    # stiffer and tolerates a tighter launch point).
     sa = sum(
         ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1]
         for i in range(n)
@@ -2121,8 +2182,8 @@ def _vg_anchors(
             reflex.append(p1)
 
     solid = Polygon(glyph.exterior)
-    clear = 4.0 * ppm
-    launch = 7.0 * ppm
+    clear = 3.0 * ppm
+    launch = 3.0 * ppm
 
     def _launchable(p):
         if any(math.hypot(p[0] - r[0], p[1] - r[1]) < clear for r in reflex):
@@ -2193,11 +2254,15 @@ def _vg_min_radius_mm(pts, ppm):
     return r / ppm
 
 
-def _vg_curve(a, na, b, nb, obstacles, ppm, min_r_mm=5.0, clear_mm=4.0):
+def _vg_curve(a, na, b, nb, obstacles, ppm, min_r_mm=3.0, clear_mm=4.0):
     """Smoothest perpendicular-launch curve a->b that bends no tighter than
     min_r_mm, crosses no obstacle, and keeps >=clear_mm from each obstacle except
     within its attachment neighborhood. obstacles = [(poly, end)] with end in
-    {'a','b',None}. Returns sample pts or None."""
+    {'a','b',None}. Returns sample pts or None.
+
+    min_r_mm was 5.0 for thin single-ply raw board (a tighter bend is a stress
+    concentration point prone to snapping); the current 3-ply cross-grain
+    veneer stock is stiffer and tolerates a 3mm bend."""
     dist = math.hypot(b[0] - a[0], b[1] - a[1])
     best = None
     for hf in (0.4, 0.6, 0.85, 1.15):
@@ -2556,6 +2621,142 @@ def _vg_assemble(seams, letter_union, letters_solid, background, panel, cfg):
     return surround, counters, st
 
 
+def _vg_select_gap_seams_cpsat(gap_allowed, density, py, ph, min_sep, time_limit_s=5.0):
+    """Exact replacement for the old "8 random variants, keep the best"
+    gap-seam picker: an assignment problem solved once with CP-SAT instead
+    of approximated by chance.
+
+    For each adjacent letter pair, `gap_allowed[p]` lists every candidate
+    seam that already passed the geometric filters (line-of-sight, dual-
+    facing-angle, curve construction, min tab-carrying length) --
+    `(y_mid, pts, vertex_idx_a, vertex_idx_b)`. This function assigns up to
+    `density` of them per pair to `density` evenly-spaced height targets,
+    subject to the SAME two hard rules the random search enforced by luck:
+    a vertex is claimed by at most one seam anywhere on the panel, and two
+    seams on the same pair must stay >=min_sep apart. The objective
+    (minimize total assignment distance to each target) picks the
+    evenest-looking layout achievable under those constraints, and does it
+    in one solve instead of hoping one of 8 random tries lands well.
+
+    Returns (list of seam point-paths, set of (glyph_idx, vertex_idx) used)
+    -- same shape gen_seams' inline picker produced. Falls back to the
+    original nearest-to-target greedy pick (deterministic, no rng) if
+    OR-Tools isn't installed, so this degrades gracefully rather than
+    hard-failing a user's environment.
+
+    "At least one seam per pair" is a SOFT preference (a large objective
+    penalty for leaving a pair empty), not a hard constraint -- unlike the
+    original greedy code, which guaranteed one seam per pair even if that
+    meant double-claiming a vertex another pair already used. Two pairs
+    that can only both be satisfied by claiming the same shared vertex are
+    a genuine conflict; vertex exclusivity is the one rule that must never
+    be violated (a doubly-claimed vertex risks an invalid/self-intersecting
+    seam), so here the solver instead leaves the less-important pair
+    unfilled rather than silently corrupt the geometry."""
+    try:
+        from ortools.sat.python import cp_model
+    except ImportError:
+        return _vg_select_gap_seams_greedy(gap_allowed, density, py, ph, min_sep)
+
+    UNFILLED_PENALTY = 10**7  # dwarfs any real y-distance cost (panel is <=1e5 px)
+    model = cp_model.CpModel()
+    targets = [py + ph * (m + 0.5) / density for m in range(density)]
+    x = {}  # (p, m, k) -> BoolVar
+    chosen_expr = {}  # (p, k) -> list of BoolVars (one per m) for that candidate
+    vertex_users = {}  # (glyph_idx, vertex_idx) -> list of BoolVars claiming it
+    unfilled = {}  # p -> BoolVar, 1 if this pair got zero seams
+
+    for p, allowed in enumerate(gap_allowed):
+        if not allowed:
+            continue
+        chosen_expr[p] = {k: [] for k in range(len(allowed))}
+        for m, tgt in enumerate(targets):
+            for k, (y_mid, pts, ia, ib) in enumerate(allowed):
+                v = model.NewBoolVar(f"x_{p}_{m}_{k}")
+                x[(p, m, k)] = v
+                chosen_expr[p][k].append(v)
+            # each target slot gets at most one candidate
+            model.Add(sum(x[(p, m, k)] for k in range(len(allowed))) <= 1)
+        for k in range(len(allowed)):
+            # a given candidate fills at most one target slot on this pair
+            model.Add(sum(chosen_expr[p][k]) <= 1)
+        # soft "at least one seam per pair": unfilled[p]=1 costs a huge
+        # penalty, but is always available so the model stays feasible even
+        # when satisfying every pair would require double-claiming a vertex.
+        total_p = sum(x[(p, m, k)] for m in range(density) for k in range(len(allowed)))
+        u = model.NewBoolVar(f"unfilled_{p}")
+        unfilled[p] = u
+        model.Add(total_p >= 1).OnlyEnforceIf(u.Not())
+        model.Add(total_p == 0).OnlyEnforceIf(u)
+        # two candidates too close together on the same pair can't BOTH be used,
+        # regardless of which target slot either fills
+        for k1 in range(len(allowed)):
+            for k2 in range(k1 + 1, len(allowed)):
+                if abs(allowed[k1][0] - allowed[k2][0]) < min_sep:
+                    model.Add(sum(chosen_expr[p][k1]) + sum(chosen_expr[p][k2]) <= 1)
+        for k, (y_mid, pts, ia, ib) in enumerate(allowed):
+            for gidx, vidx in ((p, ia), (p + 1, ib)):
+                vertex_users.setdefault((gidx, vidx), []).append(sum(chosen_expr[p][k]))
+
+    if not x:  # every pair had an empty candidate list
+        return [], set()
+
+    for key, exprs in vertex_users.items():
+        model.Add(sum(exprs) <= 1)  # each letter vertex claimed at most once -- hard rule
+
+    cost_terms = [UNFILLED_PENALTY * u for u in unfilled.values()]
+    for (p, m, k), v in x.items():
+        y_mid = gap_allowed[p][k][0]
+        cost_terms.append(int(abs(y_mid - targets[m])) * v)
+    model.Minimize(sum(cost_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_s
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return _vg_select_gap_seams_greedy(gap_allowed, density, py, ph, min_sep)
+
+    out_seams, used = [], set()
+    for (p, m, k), v in x.items():
+        if solver.Value(v):
+            y_mid, pts, ia, ib = gap_allowed[p][k]
+            out_seams.append(pts)
+            used.add((p, ia))
+            used.add((p + 1, ib))
+    return out_seams, used
+
+
+def _vg_select_gap_seams_greedy(gap_allowed, density, py, ph, min_sep):
+    """Deterministic fallback for _vg_select_gap_seams_cpsat when OR-Tools
+    isn't installed: nearest-to-target greedy pick, no randomness (unlike
+    the old 8-variant search, this makes one pass and keeps it)."""
+    out_seams, used = [], set()
+    for p, allowed in enumerate(gap_allowed):
+        if not allowed:
+            continue
+        targets = [py + ph * (m + 0.5) / density for m in range(density)]
+        chosen_y = []
+        picked_any = False
+        for tgt in targets:
+            for y_mid, pts, ia, ib in sorted(allowed, key=lambda e: abs(e[0] - tgt)):
+                if (p, ia) in used or (p + 1, ib) in used:
+                    continue
+                if any(abs(y_mid - h) < min_sep for h in chosen_y):
+                    continue
+                used.add((p, ia))
+                used.add((p + 1, ib))
+                chosen_y.append(y_mid)
+                out_seams.append(pts)
+                picked_any = True
+                break
+        if not picked_any:
+            y_mid, pts, ia, ib = min(allowed, key=lambda e: abs(e[0] - ph / 2))
+            used.add((p, ia))
+            used.add((p + 1, ib))
+            out_seams.append(pts)
+    return out_seams, used
+
+
 def build_pieces_vertex_grid(seed, letter_union, cfg, origins, densities=(1, 2, 3, 4)):
     """Vertex-grid layout (curved anchored-seam model). Background tiled by:
       * GAP seams: letter->letter CURVES between allowed convex vertices (line of
@@ -2590,6 +2791,21 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins, densities=(1, 2, 
     solids = [Polygon(g.exterior) for g in glyphs]
     letters_solid = unary_union(solids)
     verts = [_vg_anchors(g, ppm) for g in glyphs]
+    for gi, (g, vs) in enumerate(zip(glyphs, verts)):
+        if not vs:
+            # Letter is small/cramped enough that every candidate failed the
+            # launch-clearance check (e.g. a squeezed word forced tiny caps) --
+            # fall back to its 4 bbox-extreme boundary points so gap/cap/end
+            # seam construction still has somewhere to attach, rather than
+            # crashing outright. These points skip the normal clearance floor,
+            # so a seam through one may sit tighter than usual.
+            ext = list(g.exterior.coords)[:-1]
+            verts[gi] = [
+                min(ext, key=lambda p: p[0]),
+                max(ext, key=lambda p: p[0]),
+                min(ext, key=lambda p: p[1]),
+                max(ext, key=lambda p: p[1]),
+            ]
     norms = [[_vg_normal(g, v, ppm) for v in vs] for g, vs in zip(glyphs, verts)]
     def obstacles(attach):
         return [(sol, attach.get(k)) for k, sol in enumerate(solids)]
@@ -2665,48 +2881,39 @@ def build_pieces_vertex_grid(seed, letter_union, cfg, origins, densities=(1, 2, 
         allow.sort(key=lambda e: abs(e[0][key] - tgt))
         return allow[0][1]
 
+    # GAP seams no longer depend on `variant`: CP-SAT finds the single best
+    # (vertex-exclusive, min-sep-respecting) assignment for a given density
+    # exactly, so there's nothing left for random retries to improve. Solve
+    # once per density and reuse across that density's 8 variant attempts
+    # (which now only vary the CAP/END border-seam tie-breaking below).
+    _gap_cache = {}
+
+    def _gap_seams_for(density):
+        if density not in _gap_cache:
+            min_sep = 1.6 * cfg.tab_len_px  # keep seams on a pair from bunching
+            seams, gap_used = _vg_select_gap_seams_cpsat(gap_allowed, density, py, ph, min_sep)
+            # crowded gaps with zero curved candidates at all: straight
+            # facing-vertex fallback so the column still partitions. Density-
+            # and CP-SAT-independent, so just append once per density.
+            for gi in range(len(glyphs) - 1):
+                if not gap_allowed[gi]:
+                    gj = gi + 1
+                    r = max(verts[gi], key=lambda p: p[0])
+                    lft = min(verts[gj], key=lambda p: p[0])
+                    seams.append([(r[0], r[1]), (lft[0], lft[1])])
+            _gap_cache[density] = (seams, gap_used)
+        return _gap_cache[density]
+
     def gen_seams(density, variant=0):
         """Lay out ALL seams for a given density. `density` = how many gap seams
         to aim for per letter gap and how many caps per letter top/bottom edge;
-        higher density -> more, smaller pieces. Every seam follows the same
-        curved, letter-anchored, exclusive-vertex rules. The seed (+ variant)
-        decides which allowed vertices are picked for the requested targets."""
+        higher density -> more, smaller pieces. GAP seams are solved exactly
+        once per density (see _gap_seams_for); CAP/END border seams still use
+        the seed+variant to break ties among border attach points."""
         rng = random.Random(seed * 131 + density * 17 + variant * 9973)
-        gap_seams, end_seams = [], []
-        used = set()  # (glyph_idx, vertex_idx) — vertices are exclusive
-        min_sep = 1.6 * cfg.tab_len_px  # keep seams on a pair from bunching
-
-        # GAP seams: up to `density` per pair, spread across the panel height.
-        for gi in range(len(glyphs) - 1):
-            gj = gi + 1
-            allowed = gap_allowed[gi]
-            if not allowed:
-                # crowded gap: no curved edge cleared the filters — straight
-                # facing-vertex fallback so the column still partitions.
-                r = max(verts[gi], key=lambda p: p[0])
-                lft = min(verts[gj], key=lambda p: p[0])
-                gap_seams.append([(r[0], r[1]), (lft[0], lft[1])])
-                continue
-            targets = [py + ph * (m + 0.5) / density for m in range(density)]
-            jit = rng.uniform(-0.08, 0.08) * ph
-            chosen_h = []
-            for tgt in targets:
-                t = tgt + jit
-                for e in sorted(allowed, key=lambda e: abs(e[0] - t)):
-                    if (gi, e[2]) in used or (gj, e[3]) in used:
-                        continue
-                    if any(abs(e[0] - h) < min_sep for h in chosen_h):
-                        continue
-                    used.add((gi, e[2]))
-                    used.add((gj, e[3]))
-                    chosen_h.append(e[0])
-                    gap_seams.append(e[1])
-                    break
-            if not chosen_h:  # guarantee at least one seam per pair
-                e = min(allowed, key=lambda e: abs(e[0] - (py + ph / 2)))
-                used.add((gi, e[2]))
-                used.add((gj, e[3]))
-                gap_seams.append(e[1])
+        end_seams = []
+        gap_seams, gap_used = _gap_seams_for(density)
+        used = set(gap_used)  # (glyph_idx, vertex_idx) — vertices are exclusive
 
         # CAP seams: up to `density` per letter top & bottom, spread across width.
         # Claim ONLY vertices whose normal actually points up/down toward that

@@ -1,2 +1,4 @@
 /.claude/
 bak/
+__pycache__/
+*.pyc
