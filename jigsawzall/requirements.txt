@@ -4,6 +4,7 @@ opencv-python-headless>=4.8  # letter contour tracing (cv2.findContours)
 Pillow>=10.0                 # letter rasterization, image loading, mockup rendering
 numpy>=1.24                  # array math for geometry + raster
 pyyaml>=6.0                  # material profile loading (profiles/laser_materials.yaml)
+scipy>=1.10                   # smoothing spline for etch smoothing (quickcut/arcfit.py)
 ortools>=9.8                  # CP-SAT solver for exact seam/vertex assignment (vertex-grid engine)
 # Test runner:
 pytest>=7.0

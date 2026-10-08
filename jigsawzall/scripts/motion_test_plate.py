@@ -18,6 +18,9 @@ profile -- so the only differences are the ones under test:
   "arc"        polyline fitted to G2/G3 arcs (quickcut/arcfit.py)
   "scaled"     polyline with per-move S scaled to the PREDICTED speed
                (grbl_model.scale_power_to_speed: a software M4)
+  "smooth"     outline replaced by a smoothing spline + tangent biarcs that
+               moves it at most SMOOTH_MM (emit_etch_gcode(smooth_mm=...))
+  "smoothscaled"  smooth + speed-scaled S
 
 Each row's predicted per-letter energy factor (time spent / time at the
 commanded F) is written into the G-code comments and onto the preview, so
@@ -57,14 +60,15 @@ from spiral_cal import _label_strokes, _order_strokes  # noqa: E402
 
 STROKES_JSON = ROOT / "data" / "michels_center_SCI_strokes.json"
 OUT_DIR = ROOT / "out" / "motion_test_plate"
-DEFAULT_ROWS = "5000:poly,5000:scaled,3000:poly,3000:arc,3000:scaled"
-VARIANT_NUM = {"poly": 1, "arc": 2, "scaled": 3}  # engraved label digit
+DEFAULT_ROWS = "5000:poly,5000:smooth,3000:poly,3000:smooth,5000:smoothscaled"
+VARIANT_NUM = {"poly": 1, "arc": 2, "scaled": 3, "smooth": 4, "smoothscaled": 5}  # label digit
 LETTERS = "SCI"
 ORIGIN = (10.0, 10.0)  # plate's bottom-left corner on the machine, mm
 LABEL_W = 34.0  # row-label column width
 CELL_W, CELL_H = 26.0, 30.0
 ANNOT_POWER_PCT, ANNOT_FEED = 15.0, 3000
 ARC_TOL_MM = 0.05
+SMOOTH_MM = 0.10  # max shape change for the smoothed variants (approved: < line width)
 SCALE_FLOOR = 0.3  # speed-scaled S never drops below 30% of the profile S
 H = 1000.0  # fake image height for the px->mm round trip through the emitter
 
@@ -90,9 +94,10 @@ def _cell_gcode(loops, feed, variant, material, machine, sender):
         px, material, cfg, f"motion test F{feed} {variant}", feed_override=feed,
         min_segment_mm=0.0, simplify_mm=0.0,  # strokes are already production output
         arc_tolerance_mm=ARC_TOL_MM if variant == "arc" else None,
+        smooth_mm=SMOOTH_MM if variant.startswith("smooth") else None,
         motion_report=False, machine=machine, sender=sender,
     )
-    if variant == "scaled":
+    if variant.endswith("scaled"):
         g = grbl_model.scale_power_to_speed(g, machine, sender, floor_frac=SCALE_FLOOR)
     return g
 
@@ -169,7 +174,8 @@ def generate(rows, machine=None, sender=None, material_id="plywood_veneer_3ply_3
         tail += [f"G0 X{arc[0][0]:.3f} Y{arc[0][1]:.3f}", f"M3 S{s_ann}", f"F{ANNOT_FEED}"]
         tail += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in arc[1:]]
         tail.append("M5")
-    tail.append("; --- row labels FEED/VARIANT (1=poly 2=arc 3=scaled) ---")
+    tail.append("; --- row labels FEED/VARIANT (1=poly 2=arc 3=scaled 4=smooth "
+                "5=smooth+scaled) ---")
     for x1, y1, x2, y2 in _order_strokes(labels):
         tail += [f"G0 X{x1:.3f} Y{y1:.3f}", f"M3 S{s_ann}", f"F{ANNOT_FEED}",
                  f"G1 X{x2:.3f} Y{y2:.3f}", "M5"]
@@ -180,7 +186,8 @@ def generate(rows, machine=None, sender=None, material_id="plywood_veneer_3ply_3
         "; letters S C I = the MICHELS center-text strokes (flat inner sliver + 1mm outset)",
         f"; etch: {material_id} etch profile, 100% S1000 M3 single pass; arcs within "
         f"{ARC_TOL_MM}mm; scaled S floor {SCALE_FLOOR:.0%}",
-        "; rows top->bottom, label FEED/VARIANT (1=poly 2=arc 3=scaled):",
+        "; rows top->bottom, label FEED/VARIANT (1=poly 2=arc 3=scaled 4=smooth "
+        "5=smooth+scaled):",
     ]
     for feed, variant, row in table:
         legend.append(
@@ -255,7 +262,7 @@ def render(gcode, out_png, heat_png, table, machine, sender):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--rows", default=DEFAULT_ROWS,
-                   help="comma list FEED:VARIANT, variant poly|arc|scaled, top->bottom")
+                   help="comma list FEED:VARIANT, variant poly|arc|scaled|smooth|smoothscaled, top->bottom")
     p.add_argument("--out", default=str(OUT_DIR / "motion_test_plate.gcode"))
     grbl_model.add_cli_args(p)
     a = p.parse_args(argv)

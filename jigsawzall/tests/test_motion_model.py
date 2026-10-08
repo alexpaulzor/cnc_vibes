@@ -239,3 +239,75 @@ def test_etch_arc_option_emits_arcs_and_renders():
     (path,) = _parse_gcode_paths(g)
     # the rendered path follows the r=5 circle, not the arcs' chords
     assert all(abs(math.hypot(x - 50, y - 50) - 5) < 0.1 for x, y in path)
+
+
+# --- smoothing (spline + tangent biarcs) --------------------------------------
+
+
+def _noisy_loop(r=4.0, n=60, amp=0.04):
+    """A traced-looking circle: staircase-ish noise of +-amp on the radius."""
+    pts = [(50 + (r + amp * (-1) ** i) * math.cos(2 * math.pi * i / n),
+            50 + (r + amp * (-1) ** i) * math.sin(2 * math.pi * i / n)) for i in range(n)]
+    return pts + [pts[0]]
+
+
+def _join_angles(start, prims):
+    out, P, Tprev = [], start, None
+    for p in prims:
+        dense = arcfit.primitives_to_points(P, [p], 0.005)
+        dx, dy = dense[1][0] - P[0], dense[1][1] - P[1]
+        n = math.hypot(dx, dy)
+        if Tprev:
+            out.append(math.degrees(math.acos(max(-1, min(1, (dx * Tprev[0] + dy * Tprev[1]) / n)))))
+        Tprev = arcfit._end_tangent(P, p)
+        P = p[1]
+    return out
+
+
+def test_smooth_polyline_stays_within_budget_and_closed():
+    loop = _noisy_loop()
+    sm = arcfit.smooth_polyline(loop, 0.08)
+    assert sm[0] == sm[-1]
+    assert LineString(sm).hausdorff_distance(LineString(loop)) <= 0.08 + 1e-9
+
+
+def test_smooth_arcs_are_tangent_and_within_total_budget():
+    loop = _noisy_loop()
+    sm = arcfit.smooth_polyline(loop, 0.08)
+    prims = arcfit.fit_smooth_arcs(sm, 0.02)
+    path = LineString(arcfit.primitives_to_points(sm[0], prims, 0.02))
+    assert path.hausdorff_distance(LineString(loop)) <= 0.10 + 1e-6
+    assert max(_join_angles(sm[0], prims)) < 3.0
+    assert len(prims) < len(loop)  # fewer commands than the traced polyline
+
+
+def test_smooth_keeps_a_real_corner():
+    # a square's corners can't be rounded smooth within 0.08mm: the fit must
+    # still follow them (within budget), not cut across
+    sq = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+    sm = arcfit.smooth_polyline(sq, 0.08)
+    prims = arcfit.fit_smooth_arcs(sm, 0.02)
+    path = LineString(arcfit.primitives_to_points(sm[0], prims, 0.02))
+    assert path.hausdorff_distance(LineString(sq)) <= 0.10 + 1e-6
+
+
+def test_smoothing_speeds_up_noisy_curve():
+    loop = _noisy_loop(n=90)
+    poly = _stroke(loop, feed=5000)
+    sm = arcfit.smooth_polyline(loop, 0.08)
+    g = ("G0 X%.3f Y%.3f\nM3 S1000\nF5000\n" % sm[0]
+         + "\n".join(arcfit.prims_to_gcode(arcfit.fit_smooth_arcs(sm, 0.02))) + "\nM5\n")
+    m = G.MachineProfile()
+    fp = G.stroke_stats(G.simulate(poly, m, SD))[0].energy_factor
+    fs = G.stroke_stats(G.simulate(g, m, SD))[0].energy_factor
+    assert fs < fp
+
+
+def test_etch_smooth_option():
+    g = _etch(smooth_mm=0.10)
+    assert "strokes SMOOTHED" in g
+    assert any(ln.startswith(("G2 ", "G3 ")) for ln in g.splitlines())
+    from jigsaw import _parse_gcode_paths
+
+    (path,) = _parse_gcode_paths(g)
+    assert all(abs(math.hypot(x - 50, y - 50) - 5) <= 0.10 + 1e-3 for x, y in path)

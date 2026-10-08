@@ -214,3 +214,288 @@ def prims_to_gcode(prims, s_words=None, fmt="{:.3f}") -> list[str]:
 def simplify_lines(points: list[Point], tol_mm: float) -> list[Point]:
     """Tolerance-based downsampling baseline (Douglas-Peucker)."""
     return list(LineString(points).simplify(tol_mm, preserve_topology=False).coords)
+
+
+# ---------------------------------------------------------------------------
+# Smoothing fit: tangent-continuous arcs within a max shape change
+# ---------------------------------------------------------------------------
+#
+# fit_arcs() above keeps every endpoint ON an input vertex, so on a noisy
+# traced outline each arc meets the next at a small kink -- and GRBL slows at
+# every kink ($11 junction deviation). fit_smooth_arcs() instead lets the path
+# move off the traced outline by up to `max_dev_mm` (the approved budget:
+# less than the laser line width) and makes each new arc START TANGENT to the
+# previous one, so consecutive moves join without a corner. Where no tangent
+# arc fits (a genuine corner sharper than max_dev_mm can round off, or a
+# reversal) it starts a fresh, untangented primitive -- a real corner stays a
+# corner.
+
+
+def _pt_seg_dist(P, A, B):
+    """Distances from points P (m,2) to segments A->B (k,2): (m,) minimum."""
+    import numpy as np
+
+    AB = B - A
+    L2 = np.maximum((AB * AB).sum(1), 1e-18)
+    AP = P[:, None, :] - A[None, :, :]
+    t = np.clip((AP * AB[None]).sum(2) / L2[None], 0.0, 1.0)
+    D = AP - t[..., None] * AB[None]
+    return np.sqrt((D * D).sum(2)).min(1)
+
+
+def _sample(P, prim, step):
+    return primitives_to_points(P, [prim], step_mm=step)
+
+
+def _end_tangent(P, prim):
+    if prim[0] == "G1":
+        dx, dy = prim[1][0] - P[0], prim[1][1] - P[1]
+        n = math.hypot(dx, dy)
+        return (dx / n, dy / n) if n > 1e-12 else None
+    cx, cy = P[0] + prim[2][0], P[1] + prim[2][1]
+    ex, ey = prim[1]
+    rx, ry = ex - cx, ey - cy
+    r = math.hypot(rx, ry)
+    return (-ry / r, rx / r) if prim[0] == "G3" else (ry / r, -rx / r)
+
+
+def _tangent_prim(P, T, pts, i, j, max_r):
+    """Arc (or line) leaving P along unit tangent T, curvature least-squares
+    fitted to pts[i+1..j], ending at pts[j]'s projection onto it."""
+    tx, ty = T
+    nx, ny = -ty, tx  # left normal
+    num = den = 0.0
+    for k in range(i + 1, j + 1):
+        dx, dy = pts[k][0] - P[0], pts[k][1] - P[1]
+        t, n = dx * tx + dy * ty, dx * nx + dy * ny
+        s = t * t + n * n
+        num += n * s
+        den += s * s
+    if den < 1e-18:
+        return None
+    kappa = 2 * num / den  # signed, left-positive
+    qx, qy = pts[j]
+    if abs(kappa) < 1.0 / max_r:
+        t = (qx - P[0]) * tx + (qy - P[1]) * ty
+        if t <= 1e-6:
+            return None
+        return ("G1", (P[0] + t * tx, P[1] + t * ty))
+    R = 1.0 / kappa  # signed
+    cx, cy = P[0] + nx * R, P[1] + ny * R
+    vx, vy = qx - cx, qy - cy
+    vn = math.hypot(vx, vy)
+    if vn < 1e-9:
+        return None
+    r = abs(R)
+    ex, ey = cx + vx / vn * r, cy + vy / vn * r
+    if math.dist((ex, ey), P) < 1e-6:
+        return None
+    return ("G3" if kappa > 0 else "G2", (ex, ey), (cx - P[0], cy - P[1]))
+
+
+def _free_prims(P, pts, i, j, max_r):
+    """Untangented candidates from P toward pts[j]: a line, and the arc
+    through P, the middle vertex and pts[j]."""
+    out = [("G1", tuple(pts[j]))]
+    if j - i >= 2:
+        m = pts[(i + 1 + j) // 2]
+        cen = _circle_through(P, m, pts[j])
+        if cen is not None and math.hypot(P[0] - cen[0], P[1] - cen[1]) <= max_r:
+            ccw = _cross(P, m, pts[j]) > 0
+            out.append(("G3" if ccw else "G2", tuple(pts[j]), (cen[0] - P[0], cen[1] - P[1])))
+    return out
+
+
+def _fits(P, prim, pts, i, j, A, B, max_dev, step):
+    """Shape check, both ways: every vertex i+1..j within max_dev of the new
+    move, every point of the new move within max_dev of the traced polyline
+    near it, the move sweeps < 270deg, and it visits the vertices in order
+    (so an out-and-back never collapses onto a one-way arc)."""
+    import numpy as np
+
+    if prim[0] != "G1":
+        r = math.hypot(*prim[2])
+        cx, cy = P[0] + prim[2][0], P[1] + prim[2][1]
+        a0 = math.atan2(P[1] - cy, P[0] - cx)
+        a1 = math.atan2(prim[1][1] - cy, prim[1][0] - cx)
+        sweep = (a1 - a0) % (2 * math.pi) if prim[0] == "G3" else (a0 - a1) % (2 * math.pi)
+        if sweep > 1.5 * math.pi:
+            return False
+    S = np.array(_sample(P, prim, step))
+    V = np.array(pts[i + 1: j + 1])
+    lo, hi = max(0, i - 1), min(len(pts) - 1, j + 1)
+    if _pt_seg_dist(V, S[:-1], S[1:]).max() > max_dev:
+        return False
+    if _pt_seg_dist(S, A[lo:hi], B[lo:hi]).max() > max_dev:
+        return False
+    # order: each vertex's nearest sample index must not go backwards
+    d2 = ((V[:, None, :] - S[None, :, :]) ** 2).sum(2)
+    idx = d2.argmin(1)
+    back = np.maximum.accumulate(idx) - idx
+    return bool((back * step <= max_dev + step).all())
+
+
+def _arc_to(P, T, E, max_r):
+    """Arc leaving P along unit tangent T and ending exactly at E (a line if
+    E is straight ahead)."""
+    wx, wy = E[0] - P[0], E[1] - P[1]
+    nx, ny = -T[1], T[0]
+    wn = wx * nx + wy * ny
+    ww = wx * wx + wy * wy
+    if ww < 1e-18:
+        return None
+    if abs(wn) < 1e-12 or ww / (2 * abs(wn)) > max_r:
+        if wx * T[0] + wy * T[1] <= 0:
+            return None
+        return ("G1", tuple(E))
+    R = ww / (2 * wn)  # signed, left-positive
+    return ("G3" if R > 0 else "G2", tuple(E), (nx * R, ny * R))
+
+
+def _biarc(P0, T0, P1, T1, max_r):
+    """Two tangent-continuous arcs from (P0, T0) to (P1, T1), equal-tangent-
+    length joint (the classic biarc). None if it doesn't exist."""
+    vx, vy = P1[0] - P0[0], P1[1] - P0[1]
+    tx, ty = T0[0] + T1[0], T0[1] + T1[1]
+    vt = vx * tx + vy * ty
+    vv = vx * vx + vy * vy
+    a = 2 * (1 - (T0[0] * T1[0] + T0[1] * T1[1]))
+    if a < 1e-9:
+        if abs(vt) < 1e-12:
+            return None
+        d = vv / (2 * vt)
+    else:
+        disc = vt * vt + a * vv
+        d = (-vt + math.sqrt(disc)) / a
+    if d <= 1e-9:
+        return None
+    q0 = (P0[0] + d * T0[0], P0[1] + d * T0[1])
+    q1 = (P1[0] - d * T1[0], P1[1] - d * T1[1])
+    J = ((q0[0] + q1[0]) / 2, (q0[1] + q1[1]) / 2)
+    jx, jy = q1[0] - q0[0], q1[1] - q0[1]
+    jn = math.hypot(jx, jy)
+    if jn < 1e-12:
+        return None
+    a1 = _arc_to(P0, T0, J, max_r)
+    a2 = _arc_to(J, (jx / jn, jy / jn), P1, max_r)
+    if a1 is None or a2 is None:
+        return None
+    return [a1, a2]
+
+
+def _tangents(pts):
+    """Unit tangents of a densely sampled smooth polyline (central
+    differences; one-sided at open ends, wrapped for a closed loop)."""
+    n = len(pts)
+    closed = n > 3 and math.dist(pts[0], pts[-1]) < 1e-9
+    out = []
+    for k in range(n):
+        if closed:
+            a = pts[k - 1] if k > 0 else pts[-2]
+            b = pts[k + 1] if k < n - 1 else pts[1]
+        else:
+            a, b = pts[max(0, k - 1)], pts[min(n - 1, k + 1)]
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        d = math.hypot(dx, dy)
+        out.append((dx / d, dy / d) if d > 1e-12 else (1.0, 0.0))
+    return out
+
+
+def fit_smooth_arcs(points: list[Point], max_dev_mm: float = 0.02,
+                    max_radius_mm: float = 500.0, step_mm: float = 0.05,
+                    max_misses: int = 4) -> list[tuple]:
+    """Biarc fit of a densely sampled SMOOTH polyline (use smooth_polyline()
+    first on traced data): from each fitted point, the longest biarc to a
+    later point -- matching the curve's position and tangent at both ends,
+    so consecutive moves join without a corner -- whose two-sided distance
+    to the polyline stays within max_dev_mm. Where none fits (a real corner)
+    a short G1 bridges to the next point. Same primitive format as
+    fit_arcs()."""
+    import numpy as np
+
+    pts = [tuple(points[0])]
+    for p in points[1:]:
+        if math.dist(p, pts[-1]) > 1e-9:
+            pts.append(tuple(p))
+    n = len(pts)
+    if n < 2:
+        return []
+    T = _tangents(pts)
+    arr = np.array(pts)
+    A, B = arr[:-1], arr[1:]
+    out = []
+    i = 0
+    while i < n - 1:
+        best = None
+        misses = 0
+        for j in range(i + 2, n):
+            ba = _biarc(pts[i], T[i], pts[j], T[j], max_radius_mm)
+            ok = False
+            if ba is not None:
+                S = _sample(pts[i], ba[0], step_mm) + _sample(ba[0][1], ba[1], step_mm)[1:]
+                S = np.array(S)
+                V = arr[i: j + 1]
+                lo, hi = i, j
+                ok = (_pt_seg_dist(V, S[:-1], S[1:]).max() <= max_dev_mm
+                      and _pt_seg_dist(S, A[lo:hi], B[lo:hi]).max() <= max_dev_mm)
+            if ok:
+                best, misses = (j, ba), 0
+            else:
+                misses += 1
+                if misses > max_misses:
+                    break
+        if best is None:
+            out.append(("G1", pts[i + 1]))
+            i += 1
+            continue
+        j, ba = best
+        out += ba
+        i = j
+    return out
+
+
+def smooth_polyline(points: list[Point], max_dev_mm: float = 0.08,
+                    spacing_mm: float = 0.1, iterations: int = 25) -> list[Point]:
+    """Smooth a traced (staircase-noisy) polyline without moving it more than
+    max_dev_mm: a cubic smoothing spline (scipy splprep, periodic for a closed
+    loop) through the chord-densified polyline, its smoothing factor bisected
+    to the largest value whose Hausdorff distance to the input stays within
+    max_dev_mm; returned resampled every ~spacing_mm. Open polylines keep
+    their endpoints within max_dev_mm; closed loops (first == last) stay
+    closed. Corners sharper than max_dev_mm can round stay (nearly) corners."""
+    import numpy as np
+    from scipy.interpolate import splev, splprep
+
+    closed = len(points) > 3 and math.dist(points[0], points[-1]) <= 0.05
+    if closed and math.dist(points[0], points[-1]) > 0:
+        points = [*points, points[0]]
+    line = LineString(points)
+    total = line.length
+    if total < 4 * spacing_mm or len(points) < 4:
+        return [tuple(p) for p in points]
+    n = max(8, int(total / spacing_mm))
+    k_end = n if closed else n + 1
+    Q = np.array([line.interpolate(k * total / n).coords[0] for k in range(k_end)])
+    m = max(8, int(round(total / spacing_mm)))
+    uu = np.linspace(0.0, 1.0, m + 1)
+
+    def fit(sm):
+        tck, _u = splprep(Q.T, s=sm, per=1 if closed else 0, k=3)
+        S = np.array(splev(uu, tck)).T
+        if not closed:
+            S[0], S[-1] = Q[0], Q[-1]
+        return S, LineString(S).hausdorff_distance(line)
+
+    best, _ = fit(0.0)
+    lo, hi = 0.0, len(Q) * max_dev_mm ** 2 * 4
+    for _ in range(iterations):
+        mid = (lo + hi) / 2
+        S, d = fit(mid)
+        if d <= max_dev_mm:
+            lo, best = mid, S
+        else:
+            hi = mid
+    out = [tuple(p) for p in best]
+    if closed:
+        out[-1] = out[0]
+    return out

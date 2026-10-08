@@ -111,3 +111,9 @@ arcs through exact endpoints while every vertex stays within `tol_mm` and no
 chord bulges more than `tol_mm + source_tol_mm`. GRBL re-chops each arc into
 fine `$12` chords, so this cuts the streamed line count and the junction
 angles, not the planner's block count.
+
+`smooth_polyline()` + `fit_smooth_arcs()` go further for traced (staircase)
+outlines: a smoothing spline kept within a max shape change of the trace,
+then tangent-continuous biarcs, so consecutive moves join without corners
+(GRBL's `$11` junction slowdowns disappear). Needs scipy. In the etch
+emitter: `emit_etch_gcode(smooth_mm=0.10)` / `ring_prototype.py --etch-smooth-mm 0.10`.
