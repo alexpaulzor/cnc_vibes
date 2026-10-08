@@ -187,6 +187,10 @@ class RingParams:
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
     center_loose_cap_max_mm: float = 30.0
+    # Loose center text (flat) at EXACTLY this cap height: the hub disc grows
+    # (outer ring letters shrink) until the center text fits at this size.
+    # None = old behaviour (hub sized by the ring; center fills what's left).
+    center_cap_target_mm: float | None = None
     # Print one line per variant (score + elapsed + ETA) while generating.
     progress: bool = False
 
@@ -417,7 +421,10 @@ def center_letters(rp, ppm, r_h, C):
     fits down to center_text_cap_min_mm."""
     min_gap = rp.center_min_gap_mm * ppm
     cap_mm = rp.center_loose_cap_max_mm
-    while cap_mm >= rp.center_text_cap_min_mm:
+    floor_mm = rp.center_text_cap_min_mm
+    if rp.center_cap_target_mm is not None:
+        cap_mm = floor_mm = rp.center_cap_target_mm
+    while cap_mm >= floor_mm:
         track_mm = rp.center_track_mm
         while track_mm <= rp.center_track_mm + 10:
             out = _center_layout(rp, ppm, r_h, C, cap_mm, track_mm * ppm)
@@ -432,6 +439,39 @@ def center_letters(rp, ppm, r_h, C):
             track_mm += 0.5
         cap_mm -= 0.5
     return None, None
+
+
+def center_hub_r_needed_mm(rp, ppm):
+    """Hub radius (mm) the loose center text needs to fit at exactly
+    rp.center_cap_target_mm with rp.center_min_gap_mm between letters, using
+    the same tracking search as center_letters but in an unbounded hub."""
+    if rp.center_style != "flat":
+        raise SystemExit("--center-cap-mm is only implemented for --center-style flat")
+    key = (rp.center_text, rp.font, rp.center_cap_target_mm, rp.center_min_gap_mm,
+           rp.center_track_mm, rp.center_text_gap_mm, rp.center_text_fit_frac, ppm)
+    if key not in _HUB_NEED_CACHE:
+        _HUB_NEED_CACHE[key] = _center_hub_r_needed_mm(rp, ppm)
+    return _HUB_NEED_CACHE[key]
+
+
+_HUB_NEED_CACHE = {}
+
+
+def _center_hub_r_needed_mm(rp, ppm):
+    cap_mm = rp.center_cap_target_mm
+    track_mm = rp.center_track_mm
+    while track_mm <= rp.center_track_mm + 10:
+        out = _center_layout(rp, ppm, 1e9, (0.0, 0.0), cap_mm, track_mm * ppm)
+        gaps = [min(a.distance(b) for j, b in enumerate(out) if j != i)
+                for i, a in enumerate(out)]
+        if min(gaps) >= rp.center_min_gap_mm * ppm:
+            r = max(math.hypot(px, py) for g in out
+                    for px, py in g.convex_hull.exterior.coords)
+            return r / ppm / rp.center_text_fit_frac
+        track_mm += 0.5
+    raise SystemExit(
+        f"center text {rp.center_text!r} can't reach {rp.center_min_gap_mm}mm letter gaps "
+        f"at {cap_mm}mm cap within {rp.center_track_mm + 10}mm tracking")
 
 
 def _center_layout(rp, ppm, r_h, C, cap_mm, track):
@@ -654,6 +694,9 @@ def fit_ring(words, rp: RingParams, ppm):
     Rp = rp.diameter_mm / 2 * ppm
     Ro = Rp - (rp.frame_mm + rp.rim_mm) * ppm
     h_mm = rp.cap_h_max_mm
+    hub_min_mm = rp.hub_r_min_mm
+    if rp.center_text and rp.center_cap_target_mm is not None:
+        hub_min_mm = max(hub_min_mm, center_hub_r_needed_mm(rp, ppm))
     is_logo_font = rp.font == PLANET_LOGO_FONT
     if is_logo_font:
         _logo_glyphs, _logo_cap_ref_px, _ = _load_planet_logo_glyphs()
@@ -730,7 +773,7 @@ def fit_ring(words, rp: RingParams, ppm):
         span = sum(l + r for l, r in ext)
         beta = (2 * math.pi - span) / n  # equal angular gap
         # hub sizing
-        r_h = max(rp.hub_r_min_mm * ppm, n * rp.hub_arc_mm * ppm / (2 * math.pi))
+        r_h = max(hub_min_mm * ppm, n * rp.hub_arc_mm * ppm / (2 * math.pi))
         r_h = min(r_h, Rin - rp.hub_ring_min_mm * ppm)
         ths, t = [], 0.0
         for l, r in ext:
@@ -756,8 +799,12 @@ def fit_ring(words, rp: RingParams, ppm):
         ok = (
             beta > 0
             and min(gaps) >= rp.min_gap_mm * ppm
-            and r_h >= rp.hub_r_min_mm * ppm
+            and r_h >= hub_min_mm * ppm
         )
+        if not ok and h_mm <= rp.cap_h_min_mm and r_h < hub_min_mm * ppm:
+            raise SystemExit(
+                f"hub radius {hub_min_mm:.1f}mm (needed for the center text) doesn't fit "
+                f"even with {rp.cap_h_min_mm}mm ring letters")
         if ok or h_mm <= rp.cap_h_min_mm:
             return dict(
                 labels=labels,
@@ -864,9 +911,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
         # letters' seam-routing obstacles -- only tab clearance sees them.
         cl, ccap = center_letters(rp, ppm, r_h, C)
         if cl is None:
-            warnings.warn(
+            raise SystemExit(
                 f"center_text {rp.center_text!r} ({rp.center_style}) doesn't fit "
-                f"hub radius {r_h / ppm:.0f}mm -- skipping"
+                f"hub radius {r_h / ppm:.0f}mm -- try --center-cap-mm to grow the hub"
             )
         else:
             world.extend(cl)
@@ -880,10 +927,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 found = block
                 break
         if found is None:
-            warnings.warn(
+            raise SystemExit(
                 f"center_text {rp.center_text!r} doesn't fit hub radius "
-                f"{r_h / ppm:.0f}mm even at {rp.center_text_cap_min_mm}mm cap "
-                "-- skipping, hub stays a plain pinwheel"
+                f"{r_h / ppm:.0f}mm even at {rp.center_text_cap_min_mm}mm cap"
             )
         else:
             world_block = affinity.translate(found, C[0], C[1])
@@ -1709,6 +1755,11 @@ def main():
         "--center-text", default=None,
         help="two words for the hub medallion, e.g. 'THE+PAULS' (forces the hub disc undivided)",
     )
+    ap.add_argument("--center-cap-mm", type=float, default=None,
+                    help="loose center text at exactly this cap height; the hub grows "
+                         "(ring letters shrink) until it fits (flat style)")
+    ap.add_argument("--center-min-gap-mm", type=float, default=None,
+                    help="min wood between adjacent loose center letters (default 5)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
@@ -1748,6 +1799,8 @@ def main():
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
         center_style=a.center_style,
         center_word=_center_word_index(a.center_word, words),
+        center_cap_target_mm=a.center_cap_mm,
+        **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
     )
     tag = "-".join(words)
     pieces, cfg, L, st, _panel, _C = generate(words, a.seed, rp)
@@ -1807,7 +1860,7 @@ def main():
         print(f"-> {a.gcode}  ({len(gcode.splitlines())} lines), toolpath {png}")
     print(
         f"{tag}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
-        f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, {len(pieces)} pieces, "
+        f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, center cap {L.get('center_cap_mm')}mm, {len(pieces)} pieces, "
         f"score (QA defects, thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
 
