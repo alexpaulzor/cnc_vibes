@@ -289,6 +289,8 @@ def test_smooth_keeps_a_real_corner():
     prims = arcfit.fit_smooth_arcs(sm, 0.02)
     path = LineString(arcfit.primitives_to_points(sm[0], prims, 0.02))
     assert path.hausdorff_distance(LineString(sq)) <= 0.10 + 1e-6
+    # split at the corners and smoothed per side: still exactly 4 straight moves
+    assert [p[0] for p in prims] == ["G1"] * 4
 
 
 def test_smoothing_speeds_up_noisy_curve():

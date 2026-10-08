@@ -454,33 +454,51 @@ def fit_smooth_arcs(points: list[Point], max_dev_mm: float = 0.02,
     return out
 
 
-def smooth_polyline(points: list[Point], max_dev_mm: float = 0.08,
-                    spacing_mm: float = 0.1, iterations: int = 25) -> list[Point]:
-    """Smooth a traced (staircase-noisy) polyline without moving it more than
-    max_dev_mm: a cubic smoothing spline (scipy splprep, periodic for a closed
-    loop) through the chord-densified polyline, its smoothing factor bisected
-    to the largest value whose Hausdorff distance to the input stays within
-    max_dev_mm; returned resampled every ~spacing_mm. Open polylines keep
-    their endpoints within max_dev_mm; closed loops (first == last) stay
-    closed. Corners sharper than max_dev_mm can round stay (nearly) corners."""
+def _corner_indices(pts, corner_deg, closed):
+    """Indices into pts of genuine corners: vertices of the 0.05mm
+    Douglas-Peucker simplification (so a pixel staircase doesn't count)
+    turning by more than corner_deg."""
+    simp = list(LineString(pts).simplify(0.05).coords)
+    if closed and len(simp) > 3:
+        ring = simp[:-1]
+        cand = range(len(ring))
+    else:
+        ring = simp
+        cand = range(1, len(ring) - 1)
+    out = []
+    for k in cand:
+        a, b, c = ring[k - 1], ring[k], ring[(k + 1) % len(ring)]
+        v1 = (b[0] - a[0], b[1] - a[1])
+        v2 = (c[0] - b[0], c[1] - b[1])
+        n1, n2 = math.hypot(*v1), math.hypot(*v2)
+        if n1 < 1e-9 or n2 < 1e-9:
+            continue
+        cosang = (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)
+        if math.degrees(math.acos(max(-1.0, min(1.0, cosang)))) > corner_deg:
+            out.append(min(range(len(pts)), key=lambda i: math.dist(pts[i], b)))
+    return sorted(set(out))
+
+
+def _smooth_piece(points, max_dev_mm, closed, spacing_mm, iterations):
     import numpy as np
     from scipy.interpolate import splev, splprep
 
-    closed = len(points) > 3 and math.dist(points[0], points[-1]) <= 0.05
-    if closed and math.dist(points[0], points[-1]) > 0:
-        points = [*points, points[0]]
     line = LineString(points)
     total = line.length
-    if total < 4 * spacing_mm or len(points) < 4:
+    if total < 4 * spacing_mm or len(points) < 3:
         return [tuple(p) for p in points]
     n = max(8, int(total / spacing_mm))
     k_end = n if closed else n + 1
     Q = np.array([line.interpolate(k * total / n).coords[0] for k in range(k_end)])
     m = max(8, int(round(total / spacing_mm)))
     uu = np.linspace(0.0, 1.0, m + 1)
+    w = np.ones(len(Q))
+    if not closed:
+        w[0] = w[-1] = 1000.0  # pin the ends (corners / stroke ends)
+    k = 3 if len(Q) > 3 else len(Q) - 1
 
     def fit(sm):
-        tck, _u = splprep(Q.T, s=sm, per=1 if closed else 0, k=3)
+        tck, _u = splprep(Q.T, w=w, s=sm, per=1 if closed else 0, k=k)
         S = np.array(splev(uu, tck)).T
         if not closed:
             S[0], S[-1] = Q[0], Q[-1]
@@ -498,4 +516,49 @@ def smooth_polyline(points: list[Point], max_dev_mm: float = 0.08,
     out = [tuple(p) for p in best]
     if closed:
         out[-1] = out[0]
+    return out
+
+
+def smooth_polyline(points: list[Point], max_dev_mm: float = 0.08,
+                    spacing_mm: float = 0.1, iterations: int = 25,
+                    corner_deg: float = 50.0) -> list[Point]:
+    """Smooth a traced (staircase-noisy) polyline without moving it more than
+    max_dev_mm: a cubic smoothing spline (scipy splprep) through the
+    chord-densified polyline, its smoothing factor bisected to the largest
+    value whose Hausdorff distance to the input stays within max_dev_mm;
+    resampled every ~spacing_mm. Genuine corners (turning more than
+    corner_deg on the 0.05mm-simplified outline) are kept as corners: the
+    stroke is split there and each piece smoothed with its ends pinned -- a
+    spline across a sharp corner rings (wiggles) and slows the head down.
+    Closed loops (first == last within 0.05mm) stay closed."""
+    closed = len(points) > 3 and math.dist(points[0], points[-1]) <= 0.05
+    pts = [tuple(p) for p in points]
+    if closed and math.dist(pts[0], pts[-1]) > 0:
+        pts.append(pts[0])
+    if LineString(pts).length < 4 * spacing_mm or len(pts) < 4:
+        return pts
+    corners = _corner_indices(pts, corner_deg, closed)
+    if closed:
+        ring = pts[:-1]
+        if not corners:
+            return _smooth_piece(pts, max_dev_mm, True, spacing_mm, iterations)
+        c0 = corners[0]
+        ring = ring[c0:] + ring[:c0]  # start at a corner
+        cs = sorted({(c - c0) % len(ring) for c in corners}) + [len(ring)]
+        ring = ring + [ring[0]]
+        bounds = cs
+    else:
+        ring = pts
+        bounds = [0] + [c for c in corners if 0 < c < len(pts) - 1] + [len(pts) - 1]
+    out = [ring[bounds[0]]]
+    for a, b in zip(bounds, bounds[1:]):
+        piece = ring[a: b + 1]
+        sm = _smooth_piece(piece, max_dev_mm, False, spacing_mm, iterations)
+        out += sm[1:]
+    if closed:
+        # rotated to start at a corner: same loop, different start point;
+        # put the original start back so warmup/ordering are unchanged
+        k = min(range(len(out)), key=lambda i: math.dist(out[i], pts[0]))
+        loop = out[:-1]
+        out = loop[k:] + loop[:k] + [loop[k]]
     return out
