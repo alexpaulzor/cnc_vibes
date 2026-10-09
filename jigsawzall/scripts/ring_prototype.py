@@ -1376,31 +1376,38 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     if inner.is_empty:
         inner = free
     bx0, by0, bx1, by1 = inner.bounds
+    # A fixed row of seeds hugging the words (~one column apart, ~4t out):
+    # the cells right beside the words stay shallow, so a cell plus a word
+    # slice is never too tall -- without a hard "halo" seam around them.
+    hug = core.buffer(4 * t).exterior
+    n_hug = max(4, round(hug.length / col))
+    fixed = [hug.interpolate(i / n_hug, normalized=True) for i in range(n_hug)]
+    fixed = [q for q in fixed if inner.contains(q)]
     pts = []
-    while len(pts) < k:
+    while len(pts) < max(1, k - len(fixed)):
         q = Point(rng.uniform(bx0, bx1), rng.uniform(by0, by1))
-        if inner.contains(q):
+        if inner.contains(q) and all(q.distance(f) > col / 2 for f in fixed):
             pts.append(q)
     env = R.envelope.buffer(R.length)
-    for _ in range(4):  # Lloyd relaxation: even out piece sizes
-        cells = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env)
+    for _ in range(4):  # Lloyd relaxation (free seeds only): even out piece sizes
+        cells = shapely.voronoi_polygons(MultiPoint(fixed + pts), extend_to=env)
         new = []
         for q in pts:
             cell = next(c for c in cells.geoms if c.contains(q))
             cc = cell.intersection(free)
             new.append(cc.centroid if not cc.is_empty else q)
         pts = new
-    edges = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env, only_edges=True)
+    edges = shapely.voronoi_polygons(MultiPoint(fixed + pts), extend_to=env, only_edges=True)
     net = edges.intersection(free)
     segs = [g for g in getattr(net, "geoms", [net]) if g.geom_type == "LineString"]
     segs = list(getattr(linemerge(segs), "geoms", [linemerge(segs)])) if segs else []
     segs = [ln for ln in segs if ln.length >= 2 * t]
     outside = unary_union(segs + [R.boundary])
 
-    def ray_hit(p0, d):
+    def ray_hit(p0, d, far=None):
         """First point where the ray from p0 in direction d (unit) meets the
-        grid outside the core; None if it never does."""
-        far = 4 * Rin
+        grid outside the core within `far`; None if it doesn't."""
+        far = far or 4 * Rin
         ray = LineString([p0, (p0[0] + d[0] * far, p0[1] + d[1] * far)])
         hit = ray.difference(core.buffer(0.5)).intersection(outside)
         if hit.is_empty:
@@ -1417,12 +1424,24 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         y_mid = (blocks[0].bounds[3] + blocks[1].bounds[1]) / 2
         xl = core.bounds[0] - 1
         xr = core.bounds[2] + 1
-        left = ray_hit((xl, y_mid), (-1, 0))
-        right = ray_hit((xr, y_mid), (1, 0))
-        a = left or (xl, y_mid)
-        b = right or (xr, y_mid)
-        out.append(dict(pts=[a, b], kind="hullmid", plain_ok=True, structural=True,
-                        ends=(end_type(a) if left else "L", end_type(b) if right else "L")))
+        # reach out to the first grid seam within a column; otherwise stop on
+        # the end letter (never a straight line across the whole disc)
+        left = ray_hit((xl, y_mid), (-1, 0), far=col)
+        right = ray_hit((xr, y_mid), (1, 0), far=col)
+        allw_ = unary_union(words)
+        if left is None:
+            h = nearest_points(allw_, Point(xl, y_mid))[0]
+            left_pt, left_t = (h.x, h.y), "L"
+        else:
+            left_pt, left_t = left, end_type(left)
+        if right is None:
+            h = nearest_points(allw_, Point(xr, y_mid))[0]
+            right_pt, right_t = (h.x, h.y), "L"
+        else:
+            right_pt, right_t = right, end_type(right)
+        mid = [left_pt, (xl, y_mid), (xr, y_mid), right_pt]
+        out.append(dict(pts=mid, kind="hullmid", plain_ok=True, structural=True,
+                        ends=(left_t, right_t)))
 
     # --- slicing cuts through each word -----------------------------------
     def edge_angle(g, pt):
