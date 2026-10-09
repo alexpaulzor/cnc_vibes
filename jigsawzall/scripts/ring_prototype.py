@@ -1396,7 +1396,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     allw = unary_union(words)
     blocks = [w.convex_hull.buffer(t) for w in words]
     core = unary_union(blocks).convex_hull  # both outlines + the gap between them
-    row_d = 5 * t  # row seams this far outside the outlines
+    row_d = 3 * t  # row seams this far outside the outlines
     excl = core.buffer(row_d)
     if not R.buffer(-t).contains(excl):
         raise SystemExit("hull style: center words + row seams don't fit inside the ring")
@@ -1463,21 +1463,32 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             pw = straight
         return pw, (end_type(a), end_type(b))
 
+    # Horizontal seams are emitted LAST, split at every point where a column
+    # or grid seam lands on them: a seam carries at most one tab, so one long
+    # seam across the words would get a single tab for the whole row.
+    horiz = []  # [kind, pts, ends, contact points]
     rows = {}  # word index -> row seam LineString
     y_top = core.bounds[1] - row_d
     y_bot = core.bounds[3] + row_d
     pw, ends = horizontal(y_top, 0.8 * t)
-    out.append(dict(pts=pw, kind="hullrow", plain_ok=True, structural=True, ends=ends))
+    horiz.append(["hullrow", pw, ends, []])
     rows[0] = LineString(pw)
     pw, ends = horizontal(y_bot, 0.8 * t)
-    out.append(dict(pts=pw, kind="hullrow", plain_ok=True, structural=True, ends=ends))
+    horiz.append(["hullrow", pw, ends, []])
     rows[len(words) - 1] = LineString(pw)
     mid = None
     if len(words) > 1:
         y_mid = (blocks[0].bounds[3] + blocks[1].bounds[1]) / 2
         pw, ends = horizontal(y_mid, 0.6 * t)
-        out.append(dict(pts=pw, kind="hullmid", plain_ok=True, structural=True, ends=ends))
+        horiz.append(["hullmid", pw, ends, []])
         mid = LineString(pw)
+
+    def touch(line, q):
+        """Record q as a contact point on the horizontal seam `line`."""
+        for h in horiz:
+            if LineString(h[1]).distance(Point(q)) < 1.0:
+                h[3].append(tuple(q))
+                return
 
     def cross(line, x, y_hint):
         """Where the vertical at x meets `line` (nearest to y_hint)."""
@@ -1529,13 +1540,17 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             if o is not None:
                 pw = [o, (x, near_y)]
                 amp = min(0.8 * t, LineString(pw).length / 6)
+                touch(rows[wi], o)
                 out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
-                                plain_ok=True, structural=True, ends=("T", "L")))
+                                plain_ok=True, structural=True, ends=("J", "L")))
             if mid is not None:
                 m = cross(mid, x, far_y)
                 if m is not None:
-                    out.append(dict(pts=[(x, far_y), m], kind="hullcut", plain_ok=True,
-                                    structural=True, ends=("L", "T")))
+                    pw = [(x, far_y), m]
+                    amp = min(0.8 * t, LineString(pw).length / 6)
+                    touch(mid, m)
+                    out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
+                                    plain_ok=True, structural=True, ends=("L", "J")))
 
     # --- grid seams: ends on the rows land on the row seam; at the row ends
     # they finish on the nearest letter ---------------------------------------
@@ -1554,7 +1569,8 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                 hits = [h for r in row_lines for h in [ray.intersection(r)] if not h.is_empty]
                 cs = [c for h in hits for g in getattr(h, "geoms", [h]) for c in getattr(g, "coords", [])]
                 if cs:
-                    tgt, et = min(cs, key=lambda c: math.dist(c, (q.x, q.y))), "T"
+                    tgt, et = min(cs, key=lambda c: math.dist(c, (q.x, q.y))), "J"
+                    touch(None, tgt)
                 else:
                     h = nearest_points(allw, q)[0]
                     tgt, et = (h.x, h.y), "L"
@@ -1572,6 +1588,27 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         # structural: a grid seam with no room for a tab is cut plain rather
         # than dropped (dropping merges cells into oversized pieces)
         out.append(dict(pts=p, kind="hullgrid", plain_ok=True, structural=True, ends=tuple(ends)))
+    # --- the horizontal seams, split at every contact ------------------------
+    for kind, pw, ends, contacts in horiz:
+        ln = LineString(pw)
+        cuts = sorted({round(ln.project(Point(q)), 3) for q in contacts
+                       if 0.5 < ln.project(Point(q)) < ln.length - 0.5})
+        stops = [0.0] + cuts + [ln.length]
+        for k_ in range(len(stops) - 1):
+            a, b = stops[k_], stops[k_ + 1]
+            if b - a < 0.5:
+                continue
+            n = max(2, int((b - a) / 2.0))
+            seg = [ln.interpolate(a + (b - a) * i / n) for i in range(n + 1)]
+            seg = [(q.x, q.y) for q in seg]
+            # contact ends sit exactly on the other seams' endpoints (J)
+            if k_ > 0:
+                seg[0] = min(contacts, key=lambda c: math.dist(c, seg[0]))
+            if k_ < len(stops) - 2:
+                seg[-1] = min(contacts, key=lambda c: math.dist(c, seg[-1]))
+            e0 = ends[0] if k_ == 0 else "J"
+            e1 = ends[1] if k_ == len(stops) - 2 else "J"
+            out.append(dict(pts=seg, kind=kind, plain_ok=True, structural=True, ends=(e0, e1)))
     return out
 
 

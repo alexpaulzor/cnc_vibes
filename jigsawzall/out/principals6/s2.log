@@ -1,0 +1,4 @@
+WARNING outline etch: letter at (125,146)mm: 1.0mm inset splits it into 3 part(s) -- inner etch dropped
+WARNING outline etch: letter at (227,147)mm: 1.0mm inset splits it into 5 part(s) -- inner etch dropped
+QA FAILED: 2 breakable feature(s) no variant could repair: oversized near image (251,193)mm, oversized near image (251,193)mm
+BRIAN-GILLIAN: cap 21.0mm, min letter gap 32.3mm, hub r 86mm, center cap 13.0mm, 102 pieces, 0 bridged counters, score (QA defects, thin, oversized, sliver, nub, dropped) = (1, 0, 1, 0, 0, 33) -> out/principals6/s2.png
