@@ -516,9 +516,11 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
         # the strip between the two lines is wood too -- same floor applies
         gap = max(rp.center_text_gap_mm, rp.center_min_gap_mm) * ppm + 1
         if rp.center_style == "hull":
-            # room for a seam between the two words (same rule as the ring
-            # band): each word is then its own row, sliced like ring letters
-            gap = max(gap, rp.hub_ring_min_mm * ppm + 1)
+            # room for a TABBED, wobbly seam between the two words: on each
+            # side the biggest tab (3 x its 1.2t bulb radius) + t of wood to
+            # the letters + the seam's 0.6t wobble
+            t_ = rp.min_feature_mm * ppm
+            gap = max(gap, 2 * (3 * max(TAB_SIZE_CLASSES) * t_ + t_ + 0.6 * t_) + 1)
         g1, x1, _t1 = _word_advances(w1, font, track)
         g2, x2, _t2 = _word_advances(w2, font, track)
         # line 1 baseline above centre, line 2 baseline below
