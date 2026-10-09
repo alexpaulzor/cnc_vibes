@@ -1483,7 +1483,9 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         junctions.append(e)
     # --- the halo seam, split at every cut landing ------------------------
     for seg in _ring_split(halo, junctions):
-        out.append(dict(pts=curved(seg) if len(seg) > 2 else seg, kind="hullhalo",
+        # not bowed: _vg_bow pushes away from the letters, i.e. deep into the
+        # grid, swallowing the cell beyond; the halo's own shape is curvy enough
+        out.append(dict(pts=seg, kind="hullhalo",
                         plain_ok=True, structural=True, ends=("J", "J")))
     # --- Voronoi grid between the halo and the ring -----------------------
     free = R.difference(halo_region)

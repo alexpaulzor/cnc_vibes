@@ -1,4 +1,0 @@
-WARNING outline etch: letter at (125,160)mm: 1.0mm inset splits it into 3 part(s) -- inner etch dropped
-WARNING outline etch: letter at (227,161)mm: 1.0mm inset splits it into 5 part(s) -- inner etch dropped
-QA FAILED: 12 breakable feature(s) no variant could repair: strip near image (185,174)mm, strip near image (124,165)mm, strip near image (151,158)mm, oversized near image (86,267)mm, oversized near image (175,232)mm, oversized near image (163,133)mm, strip near image (151,158)mm, strip near image (124,165)mm, strip near image (185,174)mm, oversized near image (86,267)mm, oversized near image (175,232)mm, oversized near image (163,133)mm
-BRIAN-GILLIAN: cap 25.2mm, min letter gap 28.1mm, hub r 82mm, center cap 13.0mm, 93 pieces, 0 bridged counters, score (QA defects, thin, oversized, sliver, nub, dropped) = (6, 0, 3, 0, 0, 51) -> out/hull/dbg_s1.png
