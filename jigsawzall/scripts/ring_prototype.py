@@ -1786,6 +1786,9 @@ def main():
                          "(ring letters shrink) until it fits (flat style)")
     ap.add_argument("--center-min-gap-mm", type=float, default=None,
                     help="min wood between adjacent loose center letters (default 3)")
+    ap.add_argument("--hub-ring-mm", type=float, default=None,
+                    help="min radial depth of the ring band between the outer letters "
+                         "and the center disc (default 26)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
@@ -1836,6 +1839,7 @@ def main():
         center_style=a.center_style,
         center_word=_center_word_index(a.center_word, words),
         center_cap_target_mm=a.center_cap_mm,
+        **({"hub_ring_min_mm": a.hub_ring_mm} if a.hub_ring_mm is not None else {}),
         **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
     )
     tag = "-".join(words)
