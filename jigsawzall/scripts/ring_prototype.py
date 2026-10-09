@@ -1519,7 +1519,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     q = min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
                     for ya, yb in ((y0 - 1.5 * t, g.bounds[1] - 2 * t), (y1 + 1.5 * t, g.bounds[3] + 2 * t)):
                         if (yb - ya) * (1 if yb > ya else -1) > 0 and \
-                                LineString([(x, ya), (x, yb)]).distance(g) < t:
+                                LineString([(x, ya), (x, yb)]).distance(g) < 1.8 * t:  # t + wobble
                             q = 0.0
                     return y0, y1, q
         return None
@@ -1533,15 +1533,36 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             if c and c[2] >= 55:
                 good.append(x)
             x += 0.5 * ppm
-        n_cols = max(1, round((word.bounds[2] - word.bounds[0]) / col) - 1)
-        xs = []
+        # columns spaced evenly along the WHOLE row seam (out to the grid at
+        # both ends): over the word they hop through a letter, beyond it
+        # they're plain cuts from the row seam to the middle seam
+        row = rows[wi]
+        xa, xb = sorted((row.coords[0][0], row.coords[-1][0]))
+        n_cols = max(1, round((xb - xa) / col) - 1)
+        xs, plain = [], []
         for j in range(1, n_cols + 1):
-            w = word.bounds[0] + (word.bounds[2] - word.bounds[0]) * j / (n_cols + 1)
-            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)]
-            if cand:
-                best = min(cand, key=lambda g: abs(g - w))
-                if abs(best - w) < 0.5 * col:
-                    xs.append(best)
+            w = xa + (xb - xa) * j / (n_cols + 1)
+            if word.bounds[0] - 0.25 * col < w < word.bounds[2] + 0.25 * col:
+                cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)]
+                if cand:
+                    best = min(cand, key=lambda g: abs(g - w))
+                    if abs(best - w) < 0.5 * col:
+                        xs.append(best)
+            elif mid is not None:
+                plain.append(w)
+        for x in plain:
+            a_ = cross(row, x, row.centroid.y)
+            b_ = cross(mid, x, mid.centroid.y)
+            if a_ is None or b_ is None:
+                continue
+            ln_ = LineString([a_, b_])
+            if ln_.distance(allw) < 1.8 * t or not R.contains(ln_):  # t + wobble
+                continue
+            touch(row, a_)
+            touch(mid, b_)
+            pw = _wobble([a_, b_], min(0.8 * t, ln_.length / 6), 0, 0, flat_ends=True)
+            out.append(dict(pts=pw, kind="hullcut", plain_ok=True, structural=True,
+                            ends=("J", "J")))
         for x in xs:
             y0, y1, _q = column(word, x)
             near_y, far_y = (y0, y1) if outer_up else (y1, y0)
@@ -1560,28 +1581,6 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     touch(mid, m)
                     out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
                                     plain_ok=True, structural=True, ends=("L", "J")))
-
-    # --- end zones: beyond the words, wavy cuts straight from each row seam
-    # to the middle seam so the end pieces stay about a column wide ---------
-    if mid is not None:
-        for wi, word in enumerate(words):
-            row = rows[wi]
-            for side in (0, 1):
-                x_word = word.bounds[0] if side == 0 else word.bounds[2]
-                x_far = row.coords[0][0] if side == 0 else row.coords[-1][0]
-                span = abs(x_word - x_far)
-                n_end = int(span / col)
-                for j in range(1, n_end + 1):
-                    x = x_word + (x_far - x_word) * j / (n_end + 1)
-                    a = cross(row, x, row.centroid.y)
-                    b = cross(mid, x, mid.centroid.y)
-                    if a is None or b is None or not R.buffer(-t).contains(LineString([a, b])):
-                        continue
-                    touch(row, a)
-                    touch(mid, b)
-                    pw = _wobble([a, b], min(0.8 * t, math.dist(a, b) / 6), 0, 0, flat_ends=True)
-                    out.append(dict(pts=pw, kind="hullcut", plain_ok=True, structural=True,
-                                    ends=("J", "J")))
 
     # --- grid seams: ends on the rows land on the row seam; at the row ends
     # they finish on the nearest letter ---------------------------------------
