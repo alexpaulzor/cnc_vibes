@@ -1094,7 +1094,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 # hull style: the innermost ring seams host the center grid's T
                 # ends -- dropping one leaves those grid seams dangling
                 seams.append(dict(pts=pts, kind="ring", ends=("L", "L"),
-                                  plain_ok=hull_mode and lv == 0))
+                                  plain_ok=hull_mode and lv == 0,
+                                  structural=hull_mode and lv == 0))
         # --- rim subdivisions: T off the outermost ring seam up to the rim ----
         top_lv = len(levels) - 1
         for g in range(n):
@@ -1423,14 +1424,14 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     for x in xs:
         a = column_hit(x, top=True)
         h1, b1 = hop(a, top_w, down=True)
-        out.append(dict(pts=[a, h1], kind="hullcut", plain_ok=True, ends=("J", "L")))
+        out.append(dict(pts=[a, h1], kind="hullcut", plain_ok=True, structural=True, ends=("J", "L")))
         tail = b1
         if len(words) > 1:
             h2, b2 = hop(b1, bot_w, down=True)
-            out.append(dict(pts=[b1, h2], kind="hullcut", plain_ok=True, ends=("L", "L")))
+            out.append(dict(pts=[b1, h2], kind="hullcut", plain_ok=True, structural=True, ends=("L", "L")))
             tail = b2
         z = column_hit(tail[0], top=False)
-        out.append(dict(pts=[tail, z], kind="hullcut", plain_ok=True, ends=("L", "J")))
+        out.append(dict(pts=[tail, z], kind="hullcut", plain_ok=True, structural=True, ends=("L", "J")))
         junctions += [a, z]
     # --- one cut from each end of the halo onto the end letter ------------
     hb = halo_region.bounds
@@ -1444,12 +1445,12 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             continue
         e = min(pts, key=lambda c: abs(c[0] - xe))
         h = nearest_points(allw, Point(e))[0]
-        out.append(dict(pts=[e, (h.x, h.y)], kind="hullcut", plain_ok=True, ends=("J", "L")))
+        out.append(dict(pts=[e, (h.x, h.y)], kind="hullcut", plain_ok=True, structural=True, ends=("J", "L")))
         junctions.append(e)
     # --- the halo seam, split at every cut landing ------------------------
     for seg in _ring_split(halo, junctions):
         out.append(dict(pts=curved(seg) if len(seg) > 2 else seg, kind="hullhalo",
-                        plain_ok=True, ends=("J", "J")))
+                        plain_ok=True, structural=True, ends=("J", "J")))
     # --- Voronoi grid between the halo and the ring -----------------------
     free = R.difference(halo_region)
     a_target = 0.6 * (rp.target_w_mm * ppm) ** 2
@@ -1493,7 +1494,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             p = curved(p)
         # structural: a grid seam with no room for a tab is cut plain rather
         # than dropped (dropping merges cells into oversized pieces)
-        out.append(dict(pts=p, kind="hullgrid", plain_ok=True, ends=tuple(ends)))
+        out.append(dict(pts=p, kind="hullgrid", plain_ok=True, structural=True, ends=tuple(ends)))
     return out
 
 
@@ -1766,7 +1767,10 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             # keep the seam untabbed only if it's needed for structure (hub
             # arcs, spokes); otherwise drop it like wave-grid does.
             cand = LineString(rs)
-            if ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand):
+            # structural seams (hull-style grid) are always cut: dropping one
+            # merges cells into an oversized piece, worse than a crowded seam
+            if s.get("structural") or (
+                    ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand)):
                 tabbed.append(rs)
                 accepted.append(cand)
                 s["final"] = cand
