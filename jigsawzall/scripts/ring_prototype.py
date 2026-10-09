@@ -1406,7 +1406,9 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                 ends.append("J")
         if ends == ["J", "J"]:
             p = curved(p)
-        out.append(dict(pts=p, kind="hullgrid", ends=tuple(ends)))
+        # structural: a grid seam with no room for a tab is cut plain rather
+        # than dropped (dropping merges cells into oversized pieces)
+        out.append(dict(pts=p, kind="hullgrid", plain_ok=True, ends=tuple(ends)))
     return out
 
 
