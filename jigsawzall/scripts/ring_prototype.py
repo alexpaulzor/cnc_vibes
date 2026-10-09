@@ -1463,6 +1463,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     return y0, y1, min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
         return None
 
+    seam_target = {}  # grid-seam endpoint on the core -> letter point to finish on
     for wi, word in enumerate(words):
         outer_up = wi == 0  # top word: grid is above it, middle seam below
         good = []
@@ -1474,32 +1475,40 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             x += 0.5 * ppm
         if not good:
             continue
-        # where grid seams meet this word's side of the core, plus fill-ins
-        side = [ln for ln in segs for q in (ln.coords[0], ln.coords[-1])
+        # where grid seams meet this word's side of the core (those seams
+        # become the column's outer cut), then fill-ins so no slice is wider
+        # than about a column
+        hits = [q for ln in segs for q in (ln.coords[0], ln.coords[-1])
                 if core.exterior.distance(Point(q)) < 1.0
                 and word.bounds[0] < q[0] < word.bounds[2]
                 and ((q[1] < word.centroid.y) if outer_up else (q[1] > word.centroid.y))]
-        wanted = sorted({q[0] for ln in side for q in (ln.coords[0], ln.coords[-1])
-                         if core.exterior.distance(Point(q)) < 1.0
-                         and word.bounds[0] < q[0] < word.bounds[2]})
+        xs = []  # (column x, grid-seam endpoint it serves or None)
+        for q in sorted(hits, key=lambda c: c[0]):
+            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u, _ in xs)]
+            if cand:
+                best = min(cand, key=lambda g: abs(g - q[0]))
+                if abs(best - q[0]) < 0.5 * col:
+                    xs.append((best, q))
         n_fill = max(1, round((word.bounds[2] - word.bounds[0]) / col) - 1)
         for j in range(1, n_fill + 1):
-            wanted.append(word.bounds[0] + (word.bounds[2] - word.bounds[0]) * j / (n_fill + 1))
-        xs = []
-        for w in sorted(wanted):
-            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)]
+            w = word.bounds[0] + (word.bounds[2] - word.bounds[0]) * j / (n_fill + 1)
+            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u, _ in xs)]
             if cand:
                 best = min(cand, key=lambda g: abs(g - w))
                 if abs(best - w) < 0.5 * col:
-                    xs.append(best)
-        for x in xs:
+                    xs.append((best, None))
+        for x, served in xs:
             y0, y1, _q = column(word, x)
             near_y, far_y = (y0, y1) if outer_up else (y1, y0)
-            # outer part: from the grid straight onto the letter
-            o = ray_hit((x, near_y), (0, -1) if outer_up else (0, 1))
-            if o is not None:
-                out.append(dict(pts=[o, (x, near_y)], kind="hullcut", plain_ok=True,
-                                structural=True, ends=(end_type(o), "L")))
+            if served is not None:
+                # that grid seam finishes on this column's letter (below)
+                seam_target[(round(served[0], 1), round(served[1], 1))] = (x, near_y)
+            else:
+                # outer part: from the grid straight onto the letter
+                o = ray_hit((x, near_y), (0, -1) if outer_up else (0, 1))
+                if o is not None:
+                    out.append(dict(pts=[o, (x, near_y)], kind="hullcut", plain_ok=True,
+                                    structural=True, ends=(end_type(o), "L")))
             # inner part: from the letter to the middle seam (or the far grid)
             if y_mid is not None:
                 out.append(dict(pts=[(x, far_y), (x, y_mid)], kind="hullcut", plain_ok=True,
@@ -1518,11 +1527,14 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         for e in (0, -1):
             q = Point(p[e])
             if core.exterior.distance(q) < 1.0:
-                h = nearest_points(allw, q)[0]
+                tgt = seam_target.get((round(q.x, 1), round(q.y, 1)))
+                if tgt is None:
+                    h = nearest_points(allw, q)[0]
+                    tgt = (h.x, h.y)
                 if e == 0:
-                    p.insert(0, (h.x, h.y))
+                    p.insert(0, tgt)
                 else:
-                    p.append((h.x, h.y))
+                    p.append(tgt)
                 ends.append("L")
             elif R.boundary.distance(q) < 1.0:
                 ends.append(end_type(q))
