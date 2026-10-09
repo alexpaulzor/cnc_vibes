@@ -42,8 +42,8 @@ def _lines(geom):
 def letter_outline_strokes(letter_polys, panel, ppm, inset_mm=0.75, outset_mm=0.75):
     """Returns (strokes, warnings). strokes: list of [(x, y), ...] px
     polylines. A letter whose stroke is too thin for the inset (the inset
-    collapses or splits a stroke apart) is reported in `warnings` rather
-    than silently dropped or etched as fragments."""
+    collapses or splits a stroke apart) gets no inner etch, only the outer
+    one, and is reported in `warnings`."""
     strokes, warns = [], []
     others_cache = unary_union(letter_polys)
     inner_panel = panel.buffer(-outset_mm * ppm)
@@ -53,13 +53,16 @@ def letter_outline_strokes(letter_polys, panel, ppm, inset_mm=0.75, outset_mm=0.
             inn = g.buffer(-inset_mm * ppm, join_style=_ROUND)
             n_in = 0 if inn.is_empty else (len(inn.geoms) if isinstance(inn, MultiPolygon) else 1)
             if n_in != n_parts:
+                # Stroke too thin for the inset: drop this letter's inner etch
+                # (fragments would read as noise); the outer etch still runs.
                 c = g.centroid
                 warns.append(
                     f"letter at ({c.x / ppm:.0f},{c.y / ppm:.0f})mm: {inset_mm}mm inset "
-                    f"splits it into {n_in} part(s) -- stroke too thin"
+                    f"splits it into {n_in} part(s) -- inner etch dropped"
                 )
-            for r in _rings(inn):
-                strokes.append(list(r.coords))
+            else:
+                for r in _rings(inn):
+                    strokes.append(list(r.coords))
         if outset_mm > 0:
             out = g.buffer(outset_mm * ppm, join_style=_ROUND)
             # stay on the panel and never run across a neighbouring letter
