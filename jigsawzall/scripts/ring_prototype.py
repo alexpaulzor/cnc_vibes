@@ -1345,9 +1345,15 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     ring_letters = unary_union(ring_solids)
     lines = [LineString(sm["pts"]) for sm in seams] + [g.boundary for g in ring_solids]
     faces = list(polygonize(shapely.union_all(lines + [panel.boundary], grid_size=0.1)))
-    disc = Point(C).buffer(Rin, quad_segs=64)
-    R = next((f for f in faces if f.contains(Point(C))), disc).intersection(disc)
+    # The inner region is the face around the centre bounded by the innermost
+    # ring seams and the ring letters -- it reaches up BETWEEN the letters, so
+    # don't clip it to the letters' base circle (seams would end in mid-wood).
+    R = next((f for f in faces if f.contains(Point(C))), None)
+    if R is None:
+        raise SystemExit("hull style: no closed inner region inside the ring seams")
     R = R.difference(ring_letters)
+    if R.area > math.pi * Rin ** 2 * 1.5:
+        raise SystemExit("hull style: inner region leaks past the ring letters (open ring seam)")
     if R.geom_type == "MultiPolygon":
         R = max(R.geoms, key=lambda g: g.area)
     words = [unary_union(w) for w in center_words if w]
