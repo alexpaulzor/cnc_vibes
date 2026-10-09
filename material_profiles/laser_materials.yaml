@@ -42,6 +42,7 @@
 - id: plywood_baltic_birch_3mm
   family: wood
   thickness_mm: 3.0
+  min_feature_mm: 4.0   # flimsier than the 3-ply veneer; the old 4mm floors
   laser:
     power_percent: 100
     feed_mm_per_min: 500
@@ -73,6 +74,7 @@
 - id: plywood_veneer_3ply_3mm
   family: wood
   thickness_mm: 3.0
+  min_feature_mm: 3.0   # thinnest wood that survives (stiff cross-grain 3-ply); jigsawzall derives its floors from it
   laser:
     power_percent: 100
     feed_mm_per_min: 350

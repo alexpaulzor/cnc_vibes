@@ -163,6 +163,11 @@ class PuzzleConfig:
     # brittle thin bridges; costs dropped tabs where letters are dense).
     letter_clearance_mm: float | None = None
     fragment_min_thickness_factor: float = 1.0  # multiplied by tab_circle_r_px
+    # Thinnest wood (mm) the stock survives: tab-vs-border walls and the
+    # thin-bridge lint derive from it. 4.0 = the old raw/Baltic-birch floor
+    # (unchanged default for the banner tools); the ring passes its
+    # material's min_feature_mm (3.0 on the 3-ply veneer).
+    min_feature_mm: float = 4.0
     fragment_min_area_factor: float = 0.10  # fraction of (cell_w * cell_h)
     shift_steps: int = 12
     shift_step_frac: float = 0.2
@@ -543,10 +548,8 @@ def _tab_bulb_polygon(
     return None
 
 
-# Minimum material wall (mm) a tab may leave against an obstacle (letter or
-# panel border) before its bulb is shrunk/flipped to back off — the hard floor
-# below which a bridge is considered brittle.
-_BORDER_FLOOR_MM = 4.0
+# The minimum material wall a tab may leave against an obstacle (letter or
+# panel border) is cfg.min_feature_mm -- below it a bridge is brittle.
 
 
 def find_clear_tab_offset(
@@ -587,7 +590,7 @@ def find_clear_tab_offset(
     # a tab that leaves less than this against the border (drop to a straight
     # edge instead). Scales with the bulb radius but capped so a big letter
     # clearance doesn't force wholesale drops on a compact banner.
-    border_floor = min(clr, _BORDER_FLOOR_MM * cfg.px_per_mm)
+    border_floor = min(clr, cfg.min_feature_mm * cfg.px_per_mm)
 
     candidates = [center]
     for i in range(1, cfg.shift_steps + 1):
@@ -1783,7 +1786,7 @@ def _straight_edge_with_tab(
     stats["total"] += 1
     edge_dir = ((c1[0] - c0[0]) / length, (c1[1] - c0[1]) / length)
     clr = cfg.letter_clearance_px
-    floor = min(clr, _BORDER_FLOOR_MM * cfg.px_per_mm)
+    floor = min(clr, cfg.min_feature_mm * cfg.px_per_mm)
     R = cfg.tab_circle_r_px
     border = box(
         cfg.margin_px,
@@ -2460,11 +2463,11 @@ def _vg_sliver(poly, cfg):
 
 
 def _vg_thin_bridge(poly, cfg):
-    # Erode by half the 4mm floor: empty -> <4mm everywhere; >=2 lobes -> a <4mm
-    # waist (dumbbell); erodes to <10% -> a thin strip. A tab bulb erodes to a
-    # sub-7mm nub, so a normal piece-with-a-tab passes.
+    # Erode by half the min_feature_mm floor: empty -> thinner everywhere;
+    # >=2 lobes -> a thin waist (dumbbell); erodes to <10% -> a thin strip. A
+    # tab bulb erodes to a sub-7mm nub, so a normal piece-with-a-tab passes.
     ppm = cfg.px_per_mm
-    er = poly.buffer(-2.0 * ppm)
+    er = poly.buffer(-cfg.min_feature_mm / 2 * ppm)
     if er.is_empty:
         return True
     lobes = [p for p in _poly_list_vg(er) if p.area > (7 * ppm) ** 2]

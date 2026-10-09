@@ -97,6 +97,10 @@ class RingParams:
     cap_h_max_mm: float = 46.0  # == banner_letter_h_mm (upper bound)
     cap_h_min_mm: float = 18.0
     min_gap_mm: float = 14.0  # tab fit (tab_height + 2R = 11) + letter_gap_extra 3
+    # Thinnest wood the stock survives (mm), normally the material profile's
+    # min_feature_mm (3.0 on the stiff 3-ply veneer). Every wood-strength limit
+    # left as None below is derived from it in __post_init__.
+    min_feature_mm: float = 3.0
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
     hub_ring_min_mm: float = 26.0  # min radial thickness of the hub ring
     hub_r_min_mm: float = 22.0
@@ -130,10 +134,10 @@ class RingParams:
     # Tab / clearance sizing (defaults = the name-plate tabs). Small discs
     # (~140mm, 4-up on a 300mm panel) need scaled-down tabs: every seam must
     # hold tab_len + 2 * clearance, and 140mm-class seams are only 13-20mm long.
-    tab_r_px: int = 15
-    tab_stem_px: float = 30.0
-    border_floor_mm: float = 7.0
-    letter_clearance_mm: float = 4.0
+    tab_r_px: float | None = None  # bulb radius: min_feature_mm
+    tab_stem_px: float | None = None  # neck width: 2 * min_feature_mm
+    border_floor_mm: float | None = None  # tab <-> disc edge wall: min_feature_mm
+    letter_clearance_mm: float | None = None  # tab <-> letter wall: min_feature_mm
     # Solid outer frame: a continuous annulus this wide (mm) around the puzzle,
     # never cut radially. Rim seams stop on its inner circle (T-junctions) and the
     # circle itself is split into a few tabbed arcs so the pieces lock into it.
@@ -182,7 +186,7 @@ class RingParams:
     # attached only at its ends -- must be at least this wide (Alex: 3mm is
     # fine on the stiff 3-ply veneer stock; was 5mm). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
-    center_min_gap_mm: float = 3.0
+    center_min_gap_mm: float | None = None  # = min_feature_mm
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
@@ -193,6 +197,19 @@ class RingParams:
     center_cap_target_mm: float | None = None
     # Print one line per variant (score + elapsed + ETA) while generating.
     progress: bool = False
+
+    def __post_init__(self):
+        t, ppm = self.min_feature_mm, 5  # PuzzleConfig.px_per_mm
+        if self.tab_r_px is None:
+            self.tab_r_px = t * ppm
+        if self.tab_stem_px is None:
+            self.tab_stem_px = 2 * t * ppm
+        if self.border_floor_mm is None:
+            self.border_floor_mm = t
+        if self.letter_clearance_mm is None:
+            self.letter_clearance_mm = t
+        if self.center_min_gap_mm is None:
+            self.center_min_gap_mm = t
 
 
 # --------------------------------------------------------------------------
@@ -1012,7 +1029,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 na = xf_vec((0.0, -1.0), th)
                 phi = ang_of(a, C) + math.radians(rng.uniform(-4, 4))
                 b, nb, eb = rim_target(phi)
-                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="topcap", plain_ok=rp.plain_caps, ends=("L", eb)))
                 top_caps.setdefault(i, []).append(ang_of(b, C))
             for p in bp:
@@ -1021,14 +1038,14 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 phi = ang_of(a, C) + math.radians(rng.uniform(-6, 6))
                 b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
                 nb = out_vec(phi)
-                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="botcap", plain_ok=rp.plain_caps, ends=("L", "T")))
                 hub_ends.append(phi % (2 * math.pi))
             for a, b, _side in bridges:
                 aw, bw = xf_pt(a, th, Rin, C), xf_pt(b, th, Rin, C)
                 na = xf_vec((1.0, 0.0) if b[0] >= a[0] else (-1.0, 0.0), th)
                 nb = (-na[0], -na[1])
-                pts = G._vg_curve(aw, na, bw, nb, obstacles({i: "ab"}), ppm) or [aw, bw]
+                pts = G._vg_curve(aw, na, bw, nb, obstacles({i: "ab"}), ppm, clear_mm=rp.min_feature_mm) or [aw, bw]
                 seams.append(dict(pts=curved(pts), kind="bridge", plain_ok=rp.plain_caps, ends=("L", "L")))
         # --- ring seams between neighbouring slots ---------------------------
         levels = [0.5] if rp.rows == 2 else list(rp.levels3)  # frac of cap h
@@ -1100,7 +1117,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 a = host[idx]
                 b, nb, eb = rim_target(ang_of(a, C) + math.radians(rng.uniform(-3, 3)))
                 na = out_vec(ang_of(a, C))
-                pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="rimsub", ends=("T", eb)))
         # --- middle-band subdivisions (wide gaps on short names) ---------------
         if len(levels) == 2:
@@ -1117,7 +1134,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     a = lo_h[closest_on(lo_h, phi, C)]
                     b = up_h[closest_on(up_h, phi, C)]
                     na, nb = out_vec(ang_of(a, C)), out_vec(ang_of(b, C) + math.pi)
-                    pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm) or [a, b]
+                    pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                     seams.append(dict(pts=curved(pts), kind="midsub", ends=("T", "T")))
         # --- hub-ring subdivisions: T off the innermost ring seam to the hub ---
         hub_sorted = sorted(hub_ends)
@@ -1302,7 +1319,7 @@ def _extend(pts, end, d):
 # the 22px/11px floor), and the largest is only a modest, likely-safe step
 # above the proven default -- not yet physically confirmed at 1.10x, so
 # don't push it further without a test cut.
-TAB_SIZE_CLASSES = (0.85, 1.0, 1.10)
+TAB_SIZE_CLASSES = (1.0, 1.10, 1.20)  # smallest = the full min_feature_mm tab
 
 
 def _tab_size_class(pts):
@@ -1356,32 +1373,31 @@ def _snap_notch_ends(seams, letters_solid, ppm, min_notch_mm=1.0):
     return snapped
 
 
-QA_NECK_MM = 3.0     # no material neck narrower than this (Alex: ~3mm material floor)
-QA_STRIP_W_MM = 3.0  # strips narrower than this ...
-QA_STRIP_L_MM = 6.0  # ... may not be longer than this
+# QA floors are the material's min_feature_mm (cfg.min_feature_mm): no neck
+# narrower than t, no strip narrower than t that is longer than 2t.
 
 
-def qa_defects(pieces, bulbs, ppm):
+def qa_defects(pieces, bulbs, ppm, t_mm=3.0):
     """Breakable features on background pieces: (kind, Point, piece_idx).
-    'bridge': eroding by QA_NECK_MM/2 splits off a chunk (a neck under
-    QA_NECK_MM) that is not a tab bulb. 'strip': material an opening of width
-    QA_STRIP_W_MM removes, longer than QA_STRIP_L_MM, not part of a tab."""
+    'bridge': eroding by t_mm/2 splits off a chunk (a neck under t_mm) that
+    is not a tab bulb. 'strip': material an opening of width t_mm removes,
+    longer than 2 * t_mm, not part of a tab."""
     def parts(g):
         return [q for q in getattr(g, "geoms", [g]) if not q.is_empty and q.area > 0]
     tabs = unary_union([b.buffer(1.5 * ppm) for b in bulbs]) if bulbs else None
     out = []
     for i, g in enumerate(pieces):
-        lobes = sorted(parts(g.buffer(-QA_NECK_MM / 2 * ppm)), key=lambda q: -q.area)
+        lobes = sorted(parts(g.buffer(-t_mm / 2 * ppm)), key=lambda q: -q.area)
         for q in lobes[1:]:
             if q.area < 2.0 * ppm ** 2:
                 continue
             if tabs is not None and tabs.contains(q):
                 continue
             out.append(("bridge", q.centroid, i))
-        r = QA_STRIP_W_MM / 2 * ppm
+        r = t_mm / 2 * ppm
         lost = g.difference(g.buffer(-r).buffer(r).buffer(0.05 * ppm))
         for q in parts(lost.buffer(-0.2 * ppm).buffer(0.2 * ppm)):
-            if q.length / 2 / ppm <= QA_STRIP_L_MM or q.area < 2.0 * ppm ** 2:
+            if q.length / 2 / ppm <= 2 * t_mm or q.area < 2.0 * ppm ** 2:
                 continue
             if tabs is not None and tabs.buffer(1.0 * ppm).contains(q):
                 continue
@@ -1402,7 +1418,7 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
         surround, counters, st = assemble(seams, letter_union, letters_solid, background,
                                           panel, cfg, C, distinct_tabs, bans=bans,
                                           untabbed_kinds=untabbed_kinds)
-        defects = qa_defects(surround, st["bulbs"], ppm)
+        defects = qa_defects(surround, st["bulbs"], ppm, cfg.min_feature_mm)
         if best is None or len(defects) < len(best[3]):
             best = (surround, counters, st, defects, {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
         if not defects:
@@ -1628,9 +1644,8 @@ def score(surround, panel, cfg):
 
 
 def make_cfg(rp):
-    """Name-plate tab settings (banner_puzzle_config's fat capsule tabs, 4mm
-    letter clearance) on a square canvas. Both border floors are 7mm: a ring has
-    no 'short dimension', every tab near the rim gets the generous floor."""
+    """Ring tab settings on a square canvas: fat capsule tabs, letter and
+    border clearances, all derived from rp.min_feature_mm (see RingParams)."""
     return G.PuzzleConfig(
         panel_mm=rp.diameter_mm,
         panel_h_mm=rp.diameter_mm,
@@ -1642,6 +1657,7 @@ def make_cfg(rp):
         tab_border_floor_v_mm=rp.border_floor_mm,
         tab_border_floor_h_mm=rp.border_floor_mm,
         font_path=rp.font,
+        min_feature_mm=rp.min_feature_mm,
     )
 
 
@@ -1711,7 +1727,7 @@ def generate(words, seed, rp):
         (k, (q.x, q.y))
         for k, q, _i in qa_defects(
             [p["polygon"] for p in pieces if p["kind"] != "letter"],
-            st.get("bulbs", []), cfg.px_per_mm,
+            st.get("bulbs", []), cfg.px_per_mm, cfg.min_feature_mm,
         )
     ]
     return pieces, cfg, L, st, panel, C
@@ -1782,7 +1798,10 @@ def main():
         "(0 = off). Shows which side is up, and reads before painting",
     )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
-    ap.add_argument("--material", default="plywood_baltic_birch_3mm")
+    ap.add_argument("--material", default="plywood_veneer_3ply_3mm",
+                    help="material profile id; its min_feature_mm sets every wood-strength limit")
+    ap.add_argument("--min-feature-mm", type=float, default=None,
+                    help="override the material's min_feature_mm (thinnest wood it survives)")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")
@@ -1798,7 +1817,14 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     words = [w.upper() for w in a.word.split("+") if w.strip()]
+    from emitter import load_material
+
+    material = load_material(a.material)
+    t_mm = a.min_feature_mm or material.get("min_feature_mm")
+    if t_mm is None:
+        raise SystemExit(f"material {a.material} has no min_feature_mm; pass --min-feature-mm")
     rp = RingParams(
+        min_feature_mm=t_mm,
         diameter_mm=a.diameter_mm,
         shape=a.shape,
         rows=a.rows,
@@ -1842,9 +1868,6 @@ def main():
               + ", ".join(f"{k} near image ({x / cfg.px_per_mm:.0f},{y / cfg.px_per_mm:.0f})mm"
                           for k, (x, y) in bad))
     if a.gcode:
-        from emitter import load_material
-
-        material = load_material(a.material)
         if a.passes is not None:
             material = {**material, "laser": {**material["laser"], "passes": a.passes}}
         gcode = J._emit_cut_for(
