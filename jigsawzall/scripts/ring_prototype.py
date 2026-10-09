@@ -201,7 +201,7 @@ class RingParams:
     def __post_init__(self):
         t, ppm = self.min_feature_mm, 5  # PuzzleConfig.px_per_mm
         if self.tab_r_px is None:
-            self.tab_r_px = t * ppm
+            self.tab_r_px = int(round(t * ppm))  # px canvas sizes derive from it
         if self.tab_stem_px is None:
             self.tab_stem_px = 2 * t * ppm
         if self.border_floor_mm is None:
