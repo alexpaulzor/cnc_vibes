@@ -340,6 +340,7 @@ def _emit_cut_for(
     power_percent=None,
     ramp_ms=WARMUP_MS,
     max_backtrack_ms=None,
+    bridge_mm=0.5,
 ):
     if size == "small":
         return emit_cut_gcode_simple(
@@ -363,6 +364,7 @@ def _emit_cut_for(
         power_percent=power_percent,
         ramp_ms=ramp_ms,
         max_backtrack_ms=max_backtrack_ms,
+        bridge_mm=bridge_mm,
     )
 
 

@@ -102,7 +102,11 @@ class RingParams:
     # left as None below is derived from it in __post_init__.
     min_feature_mm: float = 3.0
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
-    hub_ring_min_mm: float = 26.0  # min radial thickness of the hub ring
+    # min radial depth of the band between the outer letters and the center
+    # disc. None = 4.4 * min_feature_mm: the largest tab class's bulb
+    # (2 * 1.2t) plus a t wall each side -- as thin as a tabbed seam allows,
+    # so every letter gets the room (was a hand-set 26mm).
+    hub_ring_min_mm: float | None = None
     hub_r_min_mm: float = 22.0
     target_w_mm: float = 46.0  # target arc width of rim / hub-ring pieces
     hub_piece_mm: float = 62.0  # max chord of a hub-disc wedge
@@ -210,6 +214,8 @@ class RingParams:
             self.letter_clearance_mm = t
         if self.center_min_gap_mm is None:
             self.center_min_gap_mm = t
+        if self.hub_ring_min_mm is None:
+            self.hub_ring_min_mm = 2 * max(TAB_SIZE_CLASSES) * t + 2 * t
 
 
 # --------------------------------------------------------------------------
@@ -1723,14 +1729,45 @@ def generate(words, seed, rp):
         p["serial"] = i
     # QA again on the FINAL pieces (after pocket carving / counter fusing /
     # sliver absorption), so nothing breakable slips in after the search.
-    st["defects_final"] = [
-        (k, (q.x, q.y))
-        for k, q, _i in qa_defects(
-            [p["polygon"] for p in pieces if p["kind"] != "letter"],
-            st.get("bulbs", []), cfg.px_per_mm, cfg.min_feature_mm,
-        )
-    ]
+    nonletter = [p for p in pieces if p["kind"] != "letter"]
+    defects = qa_defects([p["polygon"] for p in nonletter], st.get("bulbs", []),
+                         cfg.px_per_mm, cfg.min_feature_mm)
+    # A letter counter too thin to survive as a loose piece (the triangle in a
+    # small A) isn't a puzzle piece anyone needs: leave it in place, held by a
+    # breakaway bridge on each face (see add_counter_bridges), and stop
+    # counting it as a defect.
+    bridged = add_counter_bridges(
+        {i for _k, _q, i in defects}, nonletter, letter_union_of(pieces), cfg)
+    st["bridged_counters"] = len(bridged)
+    st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
     return pieces, cfg, L, st, panel, C
+
+
+def letter_union_of(pieces):
+    return unary_union([p["polygon"] for p in pieces if p["kind"] == "letter"])
+
+
+def add_counter_bridges(idxs, nonletter, letters, cfg, max_faces=3):
+    """For each nonletter[i] (i in idxs) that is a letter counter -- a piece
+    lying inside a hole of a letter -- record breakaway bridge points
+    (image px) at the midpoints of its longest straight faces in
+    p["bridges"]. The emitter leaves a short uncut gap of the cut line there.
+    Returns the set of indices bridged."""
+    ppm = cfg.px_per_mm
+    holes = [Polygon(r) for g in getattr(letters, "geoms", [letters]) for r in g.interiors]
+    done = set()
+    for i in idxs:
+        poly = nonletter[i]["polygon"]
+        if not any(h.buffer(0.2 * ppm).contains(poly) for h in holes):
+            continue  # not a counter: a real defect, leave it reported
+        ring = list(poly.simplify(0.3 * ppm).exterior.coords)
+        faces = sorted(zip(ring, ring[1:]), key=lambda e: -math.dist(*e))
+        pts = [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+               for a, b in faces[:max_faces] if math.dist(a, b) >= 2.0 * ppm]
+        if pts:
+            nonletter[i]["bridges"] = pts
+            done.add(i)
+    return done
 
 
 def render_debug_overlay(png_path, seams):
@@ -1788,7 +1825,7 @@ def main():
                     help="min wood between adjacent loose center letters (default 3)")
     ap.add_argument("--hub-ring-mm", type=float, default=None,
                     help="min radial depth of the ring band between the outer letters "
-                         "and the center disc (default 26)")
+                         "and the center disc (default 4.4 x min_feature_mm)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
@@ -1817,6 +1854,9 @@ def main():
         "--min-segment-mm", type=float, default=0.3,
         help="drop G1 chords shorter than this (mm) so GRBL never stalls on micro-moves",
     )
+    ap.add_argument("--bridge-mm", type=float, default=0.5,
+                    help="uncut gap (laser centerline, mm) holding each too-thin letter "
+                         "counter in place; ~0.3mm of wood after a ~0.2mm kerf")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     words = [w.upper() for w in a.word.split("+") if w.strip()]
@@ -1879,6 +1919,7 @@ def main():
             feed_override=a.feed, power_percent=100.0,
             min_segment_mm=a.min_segment_mm,
             max_backtrack_ms=a.max_backtrack_ms,
+            bridge_mm=a.bridge_mm,
         )
         if strokes:
             from emitter import combine_passes, emit_etch_gcode
@@ -1898,6 +1939,7 @@ def main():
     print(
         f"{tag}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, center cap {L.get('center_cap_mm')}mm, {len(pieces)} pieces, "
+        f"{st.get('bridged_counters', 0)} bridged counters, "
         f"score (QA defects, thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
 
