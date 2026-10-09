@@ -31,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import shapely  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 from shapely import affinity  # noqa: E402
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box  # noqa: E402
-from shapely.ops import nearest_points, polygonize, unary_union  # noqa: E402
+from shapely.geometry import LineString, MultiPoint, MultiPolygon, Point, Polygon, box  # noqa: E402
+from shapely.ops import linemerge, nearest_points, polygonize, unary_union  # noqa: E402
 
 import geometry as G  # noqa: E402
 
@@ -180,7 +180,12 @@ class RingParams:
     #                  word 1 across the top, word 2 across the bottom
     #                  flipped (reversed + rotated 180) so both read upright,
     #                  with both words' midlines on the same circle.
-    center_style: str = "medallion"
+    #   "hull"      -- (default) same loose letters, but no hub circle at all:
+    #                  the whole inside of the ring is one continuous puzzle
+    #                  grid; each center word's outline (never cut) is treated
+    #                  like one big ring letter -- seams stop at it and finish on
+    #                  the nearest small letter (see hull_center_seams).
+    center_style: str = "hull"
     # Leave the hub circle (centre disc <-> ring) as a plain, tab-free circular
     # cut so the assembled centre disc turns freely: nobody's name is favoured
     # as "up". The disc's own spokes keep their tabs and hold it together.
@@ -427,7 +432,8 @@ def _word_advances(word, font, track_px):
     """Per-letter local glyphs plus each letter's centre offset along the
     word (x=0 at the word's centre), using the font's own advances plus
     `track_px` extra between letters."""
-    glyphs = [glyph_local(ch, font) for ch in word]
+    # simplify: traced glyphs are 1px staircases (see letter_glyph in fit_ring)
+    glyphs = [glyph_local(ch, font).simplify(RingParams.outline_smooth_px) for ch in word]
     adv = [font.getlength(ch) for ch in word]
     pos, x = [], 0.0
     for a in adv:
@@ -468,8 +474,8 @@ def center_hub_r_needed_mm(rp, ppm):
     """Hub radius (mm) the loose center text needs to fit at exactly
     rp.center_cap_target_mm with rp.center_min_gap_mm between letters, using
     the same tracking search as center_letters but in an unbounded hub."""
-    if rp.center_style != "flat":
-        raise SystemExit("--center-cap-mm is only implemented for --center-style flat")
+    if rp.center_style not in ("flat", "hull"):
+        raise SystemExit("--center-cap-mm is only implemented for --center-style hull/flat")
     key = (rp.center_text, rp.font, rp.center_cap_target_mm, rp.center_min_gap_mm,
            rp.center_track_mm, rp.center_text_gap_mm, rp.center_text_fit_frac, ppm)
     if key not in _HUB_NEED_CACHE:
@@ -506,7 +512,7 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
     font = _center_font(rp, cap_mm, ppm)
     cap = cap_mm * ppm
     out = []
-    if rp.center_style == "flat":
+    if rp.center_style in ("flat", "hull"):
         # the strip between the two lines is wood too -- same floor applies
         gap = max(rp.center_text_gap_mm, rp.center_min_gap_mm) * ppm + 1
         g1, x1, _t1 = _word_advances(w1, font, track)
@@ -932,12 +938,15 @@ def build_ring(words, seed, rp: RingParams, cfg):
     ths, locs = L["ths"], L["locs"]
     n = len(locs)
     world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
-    global _center_medallion
+    global _center_medallion, _frame_exempt
     _center_medallion = None
+    _frame_exempt = rp.frame_mm > 0
     center_solids = []
     center_polys = []
+    center_words = []
+    hull_mode = bool(rp.center_text) and rp.center_style == "hull"
     L["center_cap_mm"] = None
-    if rp.center_text and rp.center_style in ("flat", "ring"):
+    if rp.center_text and rp.center_style in ("flat", "ring", "hull"):
         # Loose letters cut straight out of the ordinary pinwheel hub: no
         # medallion, no exemption, spokes stay. They join letter_union (so
         # they become pockets/pieces like any letter) but NOT the outer
@@ -951,6 +960,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
         else:
             world.extend(cl)
             center_polys = list(cl)
+            n1 = sum(1 for ch in rp.center_text[0] if not ch.isspace())
+            center_words = [cl[:n1], cl[n1:]]
             center_solids = [solid_of(g) for g in cl]
             L["center_cap_mm"] = ccap
     elif rp.center_text:
@@ -1038,7 +1049,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="topcap", plain_ok=rp.plain_caps, ends=("L", eb)))
                 top_caps.setdefault(i, []).append(ang_of(b, C))
-            for p in bp:
+            for p in ([] if hull_mode else bp):
                 a = xf_pt(p, th, Rin, C)
                 na = xf_vec((0.0, 1.0), th)
                 phi = ang_of(a, C) + math.radians(rng.uniform(-6, 6))
@@ -1142,10 +1153,14 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     na, nb = out_vec(ang_of(a, C)), out_vec(ang_of(b, C) + math.pi)
                     pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                     seams.append(dict(pts=curved(pts), kind="midsub", ends=("T", "T")))
+        if hull_mode:
+            # --- no hub: one continuous grid inside the ring ------------------
+            seams.extend(hull_center_seams(
+                seams, solids, panel, C, Rin, center_words, rp, ppm, rng, curved))
         # --- hub-ring subdivisions: T off the innermost ring seam to the hub ---
-        hub_sorted = sorted(hub_ends)
+        hub_sorted = sorted(hub_ends) if not hull_mode else []
         r_hm = (Rin + r_h) / 2
-        for g in range(n):
+        for g in range(n if not hull_mode else 0):
             host = ring_seams.get((g, 0))
             if host is None:
                 continue
@@ -1190,7 +1205,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
             k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
-        if k_hub > 1 and center_polys:
+        if hull_mode:
+            pass  # no spokes, no hub circle
+        elif k_hub > 1 and center_polys:
             # Loose center text: pick a pinwheel whose spokes never pass a
             # center letter without touching it (see plan_center_pinwheel).
             P, phis, twist, tw = plan_center_pinwheel(
@@ -1262,7 +1279,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     dict(pts=curved([a, b]), kind="cornersub", ends=("T", "B"))
                 )
         # --- hub circle: arcs between spoke landings (caps T onto it) ---------
-        hs = sorted(split)
+        hs = sorted(split) if not hull_mode else []
         for q in range(len(hs)):
             b0, b1 = hs[q], hs[(q + 1) % len(hs)]
             seams.insert(
@@ -1279,6 +1296,13 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
+        # A piece too big to be fun (or wrapping all the way round, like a
+        # ring band that lost all its seams) is a hard QA failure, not a soft
+        # score term: it would warp and makes a dull puzzle.
+        for f in surround:
+            if oversized_oriented(f, cfg):
+                c = f.representative_point()
+                st["defects"].append(("oversized", (c.x, c.y)))
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
@@ -1306,6 +1330,78 @@ def build_ring(words, seed, rp: RingParams, cfg):
 # --------------------------------------------------------------------------
 # assembly with junction support (generalised _vg_assemble)
 # --------------------------------------------------------------------------
+
+
+def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, rng, curved):
+    """Seams for the inside of the ring in "hull" style: a Lloyd-relaxed
+    Voronoi grid over the region inside the innermost ring seams, with each
+    center word's outline (its convex hull padded by min_feature_mm, never
+    cut) treated like one big letter. Voronoi edges are clipped at the
+    outline and finished with a short straight run onto the nearest small
+    letter of that word, so no seam ends in mid-wood and the between-letter
+    rules don't apply inside the outline. Edge ends: "J" at Voronoi
+    vertices, "L" on a letter, "T" on a ring seam."""
+    t = rp.min_feature_mm * ppm
+    ring_letters = unary_union(ring_solids)
+    lines = [LineString(sm["pts"]) for sm in seams] + [g.boundary for g in ring_solids]
+    faces = list(polygonize(shapely.union_all(lines + [panel.boundary], grid_size=0.1)))
+    disc = Point(C).buffer(Rin, quad_segs=64)
+    R = next((f for f in faces if f.contains(Point(C))), disc).intersection(disc)
+    R = R.difference(ring_letters)
+    if R.geom_type == "MultiPolygon":
+        R = max(R.geoms, key=lambda g: g.area)
+    words = [unary_union(w) for w in center_words if w]
+    blocks = [w.convex_hull.buffer(t) for w in words]
+    block = unary_union(blocks)
+    free = R.difference(block)
+    a_target = 0.6 * (rp.target_w_mm * ppm) ** 2
+    k = max(2, round(free.area / a_target))
+    inner = free.buffer(-2 * t)
+    if inner.is_empty:
+        inner = free
+    x0, y0, x1, y1 = inner.bounds
+    pts = []
+    while len(pts) < k:
+        q = Point(rng.uniform(x0, x1), rng.uniform(y0, y1))
+        if inner.contains(q):
+            pts.append(q)
+    env = R.envelope.buffer(R.length)
+    for _ in range(4):  # Lloyd relaxation: even out piece sizes
+        cells = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env)
+        new = []
+        for q in pts:
+            cell = next(c for c in cells.geoms if c.contains(q))
+            cc = cell.intersection(free)
+            new.append(cc.centroid if not cc.is_empty else q)
+        pts = new
+    edges = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env, only_edges=True)
+    net = edges.intersection(R).difference(block)
+    segs = [g for g in getattr(net, "geoms", [net]) if g.geom_type == "LineString"]
+    segs = list(getattr(linemerge(segs), "geoms", [linemerge(segs)])) if segs else []
+    out = []
+    for ln in segs:
+        if ln.length < 2 * t:
+            continue
+        p = [tuple(c) for c in ln.coords]
+        ends = []
+        for e in (0, -1):
+            q = Point(p[e])
+            if block.boundary.distance(q) < 1.0:
+                w = min(words, key=lambda g: g.distance(q))
+                hit = nearest_points(w, q)[0]
+                if e == 0:
+                    p.insert(0, (hit.x, hit.y))
+                else:
+                    p.append((hit.x, hit.y))
+                ends.append("L")
+            elif R.boundary.distance(q) < 1.0:
+                ends.append("L" if ring_letters.distance(q) < 2.0 else "T")
+            else:
+                ends.append("J")
+        if ends == ["J", "J"]:
+            p = curved(p)
+        out.append(dict(pts=p, kind="hullgrid", ends=tuple(ends)))
+    return out
 
 
 def _extend(pts, end, d):
@@ -1595,6 +1691,9 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
     return surround, counters, st
 
 
+_frame_exempt = False  # set by build_ring: only a frame_mm > 0 build has a legit annulus
+
+
 def oversized_oriented(poly, cfg):
     """Rotation-invariant _vg_oversized: ring pieces sit at every angle, so the
     axis-aligned bbox test would flag diagonal pieces falsely."""
@@ -1608,8 +1707,8 @@ def oversized_oriented(poly, cfg):
     # scoring away from an otherwise-clean layout during generate()'s search.
     polys = poly.geoms if poly.geom_type == "MultiPolygon" else [poly]
     hole_area = sum(Polygon(r).area for p in polys for r in p.interiors)
-    if hole_area > poly.area * 2:
-        return False
+    if _frame_exempt and hole_area > poly.area * 2:
+        return False  # only a real frame may be a giant annulus
     # The undivided hub medallion background around a center_text block is
     # correctly "oversized" by ordinary standards too -- it's deliberately
     # one big solid piece (spokes skipped) instead of pinwheel wedges, same
@@ -1740,6 +1839,10 @@ def generate(words, seed, rp):
         {i for _k, _q, i in defects}, nonletter, letter_union_of(pieces), cfg)
     st["bridged_counters"] = len(bridged)
     st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
+    for p in nonletter:
+        if oversized_oriented(p["polygon"], cfg):
+            c = p["polygon"].representative_point()
+            st["defects_final"].append(("oversized", (c.x, c.y)))
     return pieces, cfg, L, st, panel, C
 
 
@@ -1828,9 +1931,10 @@ def main():
                          "and the center disc (default 4.4 x min_feature_mm)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
-        "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
-        help="medallion = fused words + undivided hub (original); flat / ring = "
-        "loose letters cut out of the normal pie-sliced hub",
+        "--center-style", choices=("hull", "medallion", "flat", "ring"), default="hull",
+        help="hull (default) = loose center letters inside one continuous puzzle grid, "
+        "each word's outline treated like one big letter; flat / ring = loose letters "
+        "in a free-turning pie-sliced hub disc; medallion = fused words + undivided hub",
     )
     ap.add_argument(
         "--outline-etch-mm", type=float, default=0.0,
