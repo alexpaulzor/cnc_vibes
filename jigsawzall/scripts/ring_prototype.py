@@ -1091,7 +1091,10 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ]
                 pts = curved(pts)
                 ring_seams[(g, lv)] = pts
-                seams.append(dict(pts=pts, kind="ring", ends=("L", "L")))
+                # hull style: the innermost ring seams host the center grid's T
+                # ends -- dropping one leaves those grid seams dangling
+                seams.append(dict(pts=pts, kind="ring", ends=("L", "L"),
+                                  plain_ok=hull_mode and lv == 0))
         # --- rim subdivisions: T off the outermost ring seam up to the rim ----
         top_lv = len(levels) - 1
         for g in range(n):
@@ -1296,13 +1299,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
-        # A piece too big to be fun (or wrapping all the way round, like a
-        # ring band that lost all its seams) is a hard QA failure, not a soft
-        # score term: it would warp and makes a dull puzzle.
-        for f in surround:
-            if oversized_oriented(f, cfg):
-                c = f.representative_point()
-                st["defects"].append(("oversized", (c.x, c.y)))
+        # st["defects"] includes oversized pieces (assemble_qa): a piece too
+        # big to be fun, or wrapping all the way round, is a hard QA failure.
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
@@ -1529,12 +1527,18 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
                                           panel, cfg, C, distinct_tabs, bans=bans,
                                           untabbed_kinds=untabbed_kinds)
         defects = qa_defects(surround, st["bulbs"], ppm, cfg.min_feature_mm)
-        if best is None or len(defects) < len(best[3]):
-            best = (surround, counters, st, defects, {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
+        # Oversized pieces count when picking the best round: dropping seams
+        # kills thin-strip defects by merging cells into giant pieces, and
+        # without this the loop would prefer exactly that.
+        over = [("oversized", f.representative_point(), i)
+                for i, f in enumerate(surround) if oversized_oriented(f, cfg)]
+        if best is None or len(defects) + len(over) < len(best[3]):
+            best = (surround, counters, st, defects + over,
+                    {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
         if not defects:
             break
         changed = False
-        for _kind, pt, _pi in defects:
+        for _kind, pt, _pi in defects:  # thin features only: oversized has no seam to ban
             near = [(si, sm) for si, sm in enumerate(seams)
                     if sm.get("final") is not None and sm["final"].distance(pt) < 8 * ppm]
             near.sort(key=lambda t: t[1]["final"].distance(pt))
