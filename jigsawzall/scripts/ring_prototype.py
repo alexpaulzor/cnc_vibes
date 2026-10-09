@@ -1382,21 +1382,76 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     net = edges.intersection(R).difference(block)
     segs = [g for g in getattr(net, "geoms", [net]) if g.geom_type == "LineString"]
     segs = list(getattr(linemerge(segs), "geoms", [linemerge(segs)])) if segs else []
-    out = []
+    segs = [ln for ln in segs if ln.length >= 2 * t]
+    outside = unary_union(segs + [R.boundary])
+    letter_x0 = min(w.bounds[0] for w in words)
+    letter_x1 = max(w.bounds[2] for w in words)
+    cy = block.centroid.y
+    far = 4 * (block.bounds[3] - block.bounds[1]) + 4 * Rin
+
+    def letter_at(word, q):
+        return min(getattr(word, "geoms", [word]), key=lambda g: g.distance(q))
+
+    def hop(q, word, down):
+        """From q, the cut to `word` straight along the column (nearest
+        point if the column misses it); returns (hit, far side of that letter)."""
+        ray = LineString([(q[0], q[1]), (q[0], q[1] + (far if down else -far))])
+        hits = ray.intersection(word)
+        if hits.is_empty:
+            h = nearest_points(word, Point(q))[0]
+        else:
+            ys = [c[1] for g in getattr(hits, "geoms", [hits]) for c in g.coords]
+            h = Point(q[0], min(ys) if down else max(ys))
+        g = letter_at(word, h)
+        col = LineString([(h.x, g.bounds[1] - 1), (h.x, g.bounds[3] + 1)]).intersection(g)
+        ys = [c[1] for k in getattr(col, "geoms", [col]) for c in getattr(k, "coords", [])]
+        far_y = (max(ys) if down else min(ys)) if ys else (g.bounds[3] if down else g.bounds[1])
+        return (h.x, h.y), (h.x, far_y)
+
+    out, cols = [], []
+
+    def through(q, down):
+        """Cut across the whole word band from block-boundary point q: onto the
+        near word's letter, across the lane onto the far word's letter, then
+        out the far side of the outline and on to the grid (T). Splits the
+        outline's wood into slices instead of one piece around the words."""
+        near_w, far_w = (words[0], words[-1]) if down else (words[-1], words[0])
+        h1, b1 = hop(q, near_w, down)
+        seq = [h1]
+        tail_from = b1
+        if len(words) > 1:
+            h2, b2 = hop(b1, far_w, down)
+            out.append(dict(pts=[b1, h2], kind="hullgrid", plain_ok=True, ends=("L", "L")))
+            tail_from = b2
+        ray = LineString([tail_from, (tail_from[0], tail_from[1] + (far if down else -far))])
+        beyond = ray.difference(block)
+        exit_pts = [c for g in getattr(beyond, "geoms", [beyond]) for c in getattr(g, "coords", [])]
+        hit = ray.difference(block.buffer(0.5)).intersection(outside)
+        if hit.is_empty or not exit_pts:
+            return seq
+        hp = min((c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [(g.x, g.y)])),
+                 key=lambda c: abs(c[1] - tail_from[1]))
+        end_t = "L" if ring_letters.distance(Point(hp)) < 2.0 else "T"
+        out.append(dict(pts=[tail_from, hp], kind="hullgrid", plain_ok=True, ends=("L", end_t)))
+        return seq
+
     for ln in segs:
-        if ln.length < 2 * t:
-            continue
         p = [tuple(c) for c in ln.coords]
         ends = []
         for e in (0, -1):
             q = Point(p[e])
             if block.boundary.distance(q) < 1.0:
-                w = min(words, key=lambda g: g.distance(q))
-                hit = nearest_points(w, q)[0]
-                if e == 0:
-                    p.insert(0, (hit.x, hit.y))
+                if letter_x0 < q.x < letter_x1 and all(abs(q.x - x) > 2.5 * t for x in cols):
+                    cols.append(q.x)
+                    tip = through(p[e], down=q.y < cy)
                 else:
-                    p.append((hit.x, hit.y))
+                    w = min(words, key=lambda g: g.distance(q))
+                    h = nearest_points(w, q)[0]
+                    tip = [(h.x, h.y)]
+                if e == 0:
+                    p = tip[::-1] + p
+                else:
+                    p = p + tip
                 ends.append("L")
             elif R.boundary.distance(q) < 1.0:
                 ends.append("L" if ring_letters.distance(q) < 2.0 else "T")
