@@ -1527,6 +1527,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     return y0, y1, q
         return None
 
+    mid_x = []  # where columns already land on the middle seam
     for wi, word in enumerate(words):
         outer_up = wi == 0
         good = []
@@ -1546,13 +1547,24 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         for j in range(1, n_cols + 1):
             w = xa + (xb - xa) * j / (n_cols + 1)
             if word.bounds[0] - 0.25 * col < w < word.bounds[2] + 0.25 * col:
-                cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)]
+                # on the middle seam, land exactly on the other word's column
+                # (one shared junction) or keep 4t clear of it -- a few mm
+                # apart chops the seam into stubs with no room for a tab
+                cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)
+                        and all(abs(g - m_) < 0.3 * ppm or abs(g - m_) >= 4 * t for m_ in mid_x)]
+                snap = [g for g in cand if any(abs(g - m_) < 0.3 * ppm for m_ in mid_x)
+                        and abs(g - w) < 0.5 * col]
+                if snap:
+                    cand = snap
                 if cand:
                     best = min(cand, key=lambda g: abs(g - w))
                     if abs(best - w) < 0.5 * col:
                         xs.append(best)
             elif mid is not None:
                 plain.append(w)
+        plain = [x for x in plain if all(abs(x - m_) >= 4 * t for m_ in mid_x)] + \
+            [m_ for m_ in mid_x if not (word.bounds[0] - 0.25 * col < m_ < word.bounds[2] + 0.25 * col)
+             and any(abs(m_ - x) < 0.5 * col for x in plain)]
         for x in plain:
             a_ = cross(row, x, row.centroid.y)
             b_ = cross(mid, x, mid.centroid.y)
@@ -1563,6 +1575,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                 continue
             touch(row, a_)
             touch(mid, b_)
+            mid_x.append(x)
             pw = _wobble([a_, b_], min(0.8 * t, ln_.length / 6), 0, 0, flat_ends=True)
             out.append(dict(pts=pw, kind="hullcut", plain_ok=True, structural=True,
                             ends=("J", "J")))
@@ -1582,6 +1595,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     pw = [(x, far_y), m]
                     amp = min(0.8 * t, LineString(pw).length / 6)
                     touch(mid, m)
+                    mid_x.append(x)
                     out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
                                     plain_ok=True, structural=True, ends=("L", "J")))
 
