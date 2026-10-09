@@ -1411,27 +1411,49 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
 
     # --- through-cuts across the word band, on letter centres ~col apart --
     top_w, bot_w = words[0], words[-1]
-    # columns only where a top-word letter sits right over a bottom-word
-    # letter (>= 2t of overlap), so the cut drops straight down with no
-    # sideways jog leaving a thin wedge of wood
+    # Columns only where a top-word letter sits right over a bottom-word
+    # letter, and where the cut meets every letter edge it touches at a
+    # steep angle: a cut landing on a slanted edge (an N's diagonal, an R's
+    # leg) leaves a thin wedge of wood beside it.
     tops = list(getattr(top_w, "geoms", [top_w]))
-    bots = list(getattr(bot_w, "geoms", [bot_w])) if len(words) > 1 else tops
+    bots = list(getattr(bot_w, "geoms", [bot_w])) if len(words) > 1 else []
+
+    def edge_angle(g, pt):
+        ring = min([g.exterior] + list(g.interiors), key=lambda r: r.distance(Point(pt)))
+        d = ring.project(Point(pt))
+        p0, p1 = ring.interpolate(d - 0.8 * ppm), ring.interpolate(d + 0.8 * ppm)
+        dx, dy = p1.x - p0.x, p1.y - p0.y
+        n = math.hypot(dx, dy) or 1.0
+        return math.degrees(math.acos(min(1.0, abs(dy) / n)))  # 90 = edge square to the cut
+
+    def column_quality(x):
+        q = []
+        for g in [t_ for t_ in tops if t_.bounds[0] < x < t_.bounds[2]][:1] + \
+                 [b_ for b_ in bots if b_.bounds[0] < x < b_.bounds[2]][:1]:
+            cut = LineString([(x, g.bounds[1] - 1), (x, g.bounds[3] + 1)]).intersection(g)
+            ys = [c[1] for k in getattr(cut, "geoms", [cut]) for c in getattr(k, "coords", [])]
+            if not ys:
+                return 0.0
+            q += [edge_angle(g, (x, min(ys))), edge_angle(g, (x, max(ys)))]
+        return min(q) if len(q) == (4 if bots else 2) else 0.0
+
     centres = []
     for g1 in tops:
-        for g2 in bots:
+        for g2 in bots or [g1]:
             lo, hi = max(g1.bounds[0], g2.bounds[0]), min(g1.bounds[2], g2.bounds[2])
-            if hi - lo >= 2 * t:
-                centres.append((lo + hi) / 2)
-    if not centres:
-        centres = sorted(g.centroid.x for g in tops)
+            xq = lo + 0.5 * ppm
+            while xq < hi - 0.5 * ppm:
+                if column_quality(xq) >= 55:
+                    centres.append(xq)
+                xq += 0.5 * ppm
     x0, x1 = top_w.bounds[0], top_w.bounds[2]
     k = max(1, round((x1 - x0) / col) - 1)
     xs = []
     for j in range(1, k + 1):
         want = x0 + (x1 - x0) * j / (k + 1)
-        x = min(centres, key=lambda c: abs(c - want))
-        if all(abs(x - u) > 0.5 * col for u in xs):
-            xs.append(x)
+        cand = [c for c in centres if all(abs(c - u) > 0.5 * col for u in xs)]
+        if cand:
+            xs.append(min(cand, key=lambda c: abs(c - want)))
     junctions = []
     for x in xs:
         a = column_hit(x, top=True)
