@@ -1517,9 +1517,12 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                 if ys:
                     y0, y1 = min(ys), max(ys)
                     q = min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
-                    for ya, yb in ((y0 - 1.5 * t, g.bounds[1] - 2 * t), (y1 + 1.5 * t, g.bounds[3] + 2 * t)):
-                        if (yb - ya) * (1 if yb > ya else -1) > 0 and \
-                                LineString([(x, ya), (x, yb)]).distance(g) < 1.8 * t:  # t + wobble
+                    # other parts of this letter within t + the cut's wobble
+                    # sideways, beyond where the cut leaves it (a P's stem
+                    # beside a cut from its bowl) would leave a sliver
+                    side = 1.8 * t
+                    for lo, hi in ((g.bounds[1], y0 - 0.5 * t), (y1 + 0.5 * t, g.bounds[3])):
+                        if hi > lo and not g.intersection(box(x - side, lo, x + side, hi)).is_empty:
                             q = 0.0
                     return y0, y1, q
         return None
