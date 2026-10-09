@@ -179,10 +179,10 @@ class RingParams:
     hub_rotates: bool = True
     center_track_mm: float = 2.0  # starting extra spacing between loose center letters
     # Wood between two adjacent loose center letters is a short finger
-    # attached only at its ends -- must be at least this wide (Alex: 5mm
-    # floor for short spans on the 3-ply veneer stock). Tracking widens until
+    # attached only at its ends -- must be at least this wide (Alex: 3mm is
+    # fine on the stiff 3-ply veneer stock; was 5mm). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
-    center_min_gap_mm: float = 5.0
+    center_min_gap_mm: float = 3.0
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
@@ -491,6 +491,15 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
         # line 1 baseline above centre, line 2 baseline below
         y1 = -gap / 2
         y2 = gap / 2 + cap
+        # Round letters overshoot the baseline / cap line (C O S G dip below,
+        # O C bulge above), so baseline spacing alone leaves < gap of wood
+        # between the lines. Measure the real shapes and push the lines apart.
+        l1 = unary_union([affinity.translate(g, x, 0) for g, x in zip(g1, x1)])
+        l2 = unary_union([affinity.translate(g, x, 0) for g, x in zip(g2, x2)])
+        d = affinity.translate(l1, 0, y1).distance(affinity.translate(l2, 0, y2))
+        if d < gap:
+            y1 -= (gap - d) / 2
+            y2 += (gap - d) / 2
         out = [affinity.translate(g, C[0] + x, C[1] + y1) for g, x in zip(g1, x1)]
         out += [affinity.translate(g, C[0] + x, C[1] + y2) for g, x in zip(g2, x2)]
         r = max(
@@ -1760,7 +1769,7 @@ def main():
                     help="loose center text at exactly this cap height; the hub grows "
                          "(ring letters shrink) until it fits (flat style)")
     ap.add_argument("--center-min-gap-mm", type=float, default=None,
-                    help="min wood between adjacent loose center letters (default 5)")
+                    help="min wood between adjacent loose center letters (default 3)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
