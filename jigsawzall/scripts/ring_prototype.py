@@ -1506,13 +1506,22 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         return math.degrees(math.acos(min(1.0, abs(dy) / n)))  # 90 = edge square to the cut
 
     def column(word, x):
+        """(top y, bottom y, quality) of the letter under column x. Quality 0
+        if the cut leaving either side would run alongside another part of
+        the same letter (a P's stem beside a cut from its bowl) -- that
+        leaves a sliver."""
         for g in getattr(word, "geoms", [word]):
             if g.bounds[0] < x < g.bounds[2]:
                 cut = LineString([(x, g.bounds[1] - 1), (x, g.bounds[3] + 1)]).intersection(g)
                 ys = [c[1] for k_ in getattr(cut, "geoms", [cut]) for c in getattr(k_, "coords", [])]
                 if ys:
                     y0, y1 = min(ys), max(ys)
-                    return y0, y1, min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
+                    q = min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
+                    for ya, yb in ((y0 - 1.5 * t, g.bounds[1] - 2 * t), (y1 + 1.5 * t, g.bounds[3] + 2 * t)):
+                        if (yb - ya) * (1 if yb > ya else -1) > 0 and \
+                                LineString([(x, ya), (x, yb)]).distance(g) < t:
+                            q = 0.0
+                    return y0, y1, q
         return None
 
     for wi, word in enumerate(words):
@@ -1551,6 +1560,28 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     touch(mid, m)
                     out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
                                     plain_ok=True, structural=True, ends=("L", "J")))
+
+    # --- end zones: beyond the words, wavy cuts straight from each row seam
+    # to the middle seam so the end pieces stay about a column wide ---------
+    if mid is not None:
+        for wi, word in enumerate(words):
+            row = rows[wi]
+            for side in (0, 1):
+                x_word = word.bounds[0] if side == 0 else word.bounds[2]
+                x_far = row.coords[0][0] if side == 0 else row.coords[-1][0]
+                span = abs(x_word - x_far)
+                n_end = int(span / col)
+                for j in range(1, n_end + 1):
+                    x = x_word + (x_far - x_word) * j / (n_end + 1)
+                    a = cross(row, x, row.centroid.y)
+                    b = cross(mid, x, mid.centroid.y)
+                    if a is None or b is None or not R.buffer(-t).contains(LineString([a, b])):
+                        continue
+                    touch(row, a)
+                    touch(mid, b)
+                    pw = _wobble([a, b], min(0.8 * t, math.dist(a, b) / 6), 0, 0, flat_ends=True)
+                    out.append(dict(pts=pw, kind="hullcut", plain_ok=True, structural=True,
+                                    ends=("J", "J")))
 
     # --- grid seams: ends on the rows land on the row seam; at the row ends
     # they finish on the nearest letter ---------------------------------------
