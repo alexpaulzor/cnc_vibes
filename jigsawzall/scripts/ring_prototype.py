@@ -1334,17 +1334,43 @@ def build_ring(words, seed, rp: RingParams, cfg):
 # --------------------------------------------------------------------------
 
 
+def _wobble(pts, amp, wavelength, phase, flat_ends=False, step=2.0):
+    """Offset a polyline sideways by a smooth wave that vanishes at both ends
+    (endpoints stay put). flat_ends also zeroes the slope there, so the line
+    still meets whatever it lands on head-on (an S-curve)."""
+    ln = LineString(pts)
+    L = ln.length
+    if L < 3 * step or amp <= 0:
+        return [tuple(p) for p in pts]
+    n = max(4, int(L / step))
+    out = []
+    for i in range(n + 1):
+        sd = L * i / n
+        a, b = ln.interpolate(max(0.0, sd - step / 2)), ln.interpolate(min(L, sd + step / 2))
+        dx, dy = b.x - a.x, b.y - a.y
+        m = math.hypot(dx, dy) or 1.0
+        u = sd / L
+        if flat_ends:
+            w = amp * math.sin(2 * math.pi * u) * math.sin(math.pi * u)
+        else:
+            w = amp * math.sin(2 * math.pi * sd / wavelength + phase) * math.sin(math.pi * u)
+        q = ln.interpolate(sd)
+        out.append((q.x - dy / m * w, q.y + dx / m * w))
+    return out
+
+
 def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, rng, curved):
     """Seams for the inside of the ring in "hull" style (no hub circle).
 
     The two center words sit a seam's width apart (see _center_layout). Each
     word's outline (convex hull padded by min_feature_mm, never cut) is
-    treated like one row of big letters: a seam runs along the gap between
-    the words, and each word is sliced by straight cuts from the grid onto a
-    letter and from that letter on to the middle seam -- so every slice is a
-    grid cell plus one word's height. Outside the outlines a Lloyd-relaxed
-    Voronoi grid fills the region inside the innermost ring seams.
-    Ends: "J" junctions, "L" on a letter, "T" on a seam."""
+    treated like one row of big letters:
+      * a wobbly middle seam runs along the gap between the words;
+      * a wobbly row seam runs ~5t outside each word, out to the grid;
+      * wavy column cuts run from each row seam onto a letter, and on from
+        that letter to the middle seam -- so the word is cut into slices.
+    A Lloyd-relaxed Voronoi grid fills the rest of the region inside the
+    innermost ring seams. Ends: "J" junction, "L" letter, "T" on a seam."""
     t = rp.min_feature_mm * ppm
     col = 0.55 * rp.target_w_mm * ppm
     ring_letters = unary_union(ring_solids)
@@ -1362,88 +1388,99 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     if R.geom_type == "MultiPolygon":
         R = max(R.geoms, key=lambda g: g.area)
     words = [unary_union(w) for w in center_words if w]
+    allw = unary_union(words)
     blocks = [w.convex_hull.buffer(t) for w in words]
     core = unary_union(blocks).convex_hull  # both outlines + the gap between them
-    if not R.buffer(-t).contains(core):
-        raise SystemExit("hull style: center words don't fit inside the ring")
+    row_d = 5 * t  # row seams this far outside the outlines
+    excl = core.buffer(row_d)
+    if not R.buffer(-t).contains(excl):
+        raise SystemExit("hull style: center words + row seams don't fit inside the ring")
     out = []
 
-    # --- Voronoi grid outside the outlines --------------------------------
-    free = R.difference(core)
+    # --- Voronoi grid outside the word rows --------------------------------
+    free = R.difference(excl)
     a_target = 0.45 * (rp.target_w_mm * ppm) ** 2
     k = max(2, round(free.area / a_target))
     inner = free.buffer(-2 * t)
     if inner.is_empty:
         inner = free
     bx0, by0, bx1, by1 = inner.bounds
-    # A fixed row of seeds hugging the words (~one column apart, ~4t out):
-    # the cells right beside the words stay shallow, so a cell plus a word
-    # slice is never too tall -- without a hard "halo" seam around them.
-    hug = core.buffer(4 * t).exterior
-    n_hug = max(4, round(hug.length / col))
-    fixed = [hug.interpolate(i / n_hug, normalized=True) for i in range(n_hug)]
-    fixed = [q for q in fixed if inner.contains(q)]
     pts = []
-    while len(pts) < max(1, k - len(fixed)):
+    while len(pts) < k:
         q = Point(rng.uniform(bx0, bx1), rng.uniform(by0, by1))
-        if inner.contains(q) and all(q.distance(f) > col / 2 for f in fixed):
+        if inner.contains(q):
             pts.append(q)
     env = R.envelope.buffer(R.length)
-    for _ in range(4):  # Lloyd relaxation (free seeds only): even out piece sizes
-        cells = shapely.voronoi_polygons(MultiPoint(fixed + pts), extend_to=env)
+    for _ in range(4):  # Lloyd relaxation: even out piece sizes
+        cells = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env)
         new = []
         for q in pts:
             cell = next(c for c in cells.geoms if c.contains(q))
             cc = cell.intersection(free)
             new.append(cc.centroid if not cc.is_empty else q)
         pts = new
-    edges = shapely.voronoi_polygons(MultiPoint(fixed + pts), extend_to=env, only_edges=True)
+    edges = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env, only_edges=True)
     net = edges.intersection(free)
     segs = [g for g in getattr(net, "geoms", [net]) if g.geom_type == "LineString"]
     segs = list(getattr(linemerge(segs), "geoms", [linemerge(segs)])) if segs else []
     segs = [ln for ln in segs if ln.length >= 2 * t]
-    outside = unary_union(segs + [R.boundary])
-
-    def ray_hit(p0, d, far=None):
-        """First point where the ray from p0 in direction d (unit) meets the
-        grid outside the core within `far`; None if it doesn't."""
-        far = far or 4 * Rin
-        ray = LineString([p0, (p0[0] + d[0] * far, p0[1] + d[1] * far)])
-        hit = ray.difference(core.buffer(0.5)).intersection(outside)
-        if hit.is_empty:
-            return None
-        cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
-        return min(cs, key=lambda c: math.dist(c, p0)) if cs else None
+    grid = unary_union(segs + [R.boundary])
 
     def end_type(q):
         return "L" if ring_letters.distance(Point(q)) < 2.0 else "T"
 
-    # --- the seam along the gap between the words -------------------------
-    y_mid = None
+    def reach(p0, d, far):
+        """First point on the grid along a ray from p0 (outside excl)."""
+        ray = LineString([p0, (p0[0] + d[0] * far, p0[1] + d[1] * far)])
+        hit = ray.difference(excl.buffer(-0.5)).intersection(grid)
+        cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
+        return min(cs, key=lambda c: math.dist(c, p0)) if cs else None
+
+    def horizontal(y, amp):
+        """A wobbly seam at height y across the word rows, reaching out to
+        the grid on both sides. Returns (pts, ends)."""
+        x0, x1 = excl.bounds[0], excl.bounds[2]
+        a = reach((x0 + 1, y), (-1, 0), 2 * col)
+        b = reach((x1 - 1, y), (1, 0), 2 * col)
+        if a is None:
+            a = reach((x0 + 1, y), (-1, 0), 4 * Rin)
+        if b is None:
+            b = reach((x1 - 1, y), (1, 0), 4 * Rin)
+        a = a or (x0, y)
+        b = b or (x1, y)
+        straight = [a, (x0, y), (x1, y), b]
+        for k_ in range(4):  # shrink the wave until it keeps t off every letter
+            pw = _wobble(straight, amp, 1.4 * col, rng.uniform(0, 2 * math.pi))
+            if LineString(pw).distance(allw) >= t:
+                break
+            amp *= 0.6
+        else:
+            pw = straight
+        return pw, (end_type(a), end_type(b))
+
+    rows = {}  # word index -> row seam LineString
+    y_top = core.bounds[1] - row_d
+    y_bot = core.bounds[3] + row_d
+    pw, ends = horizontal(y_top, 0.8 * t)
+    out.append(dict(pts=pw, kind="hullrow", plain_ok=True, structural=True, ends=ends))
+    rows[0] = LineString(pw)
+    pw, ends = horizontal(y_bot, 0.8 * t)
+    out.append(dict(pts=pw, kind="hullrow", plain_ok=True, structural=True, ends=ends))
+    rows[len(words) - 1] = LineString(pw)
+    mid = None
     if len(words) > 1:
         y_mid = (blocks[0].bounds[3] + blocks[1].bounds[1]) / 2
-        xl = core.bounds[0] - 1
-        xr = core.bounds[2] + 1
-        # reach out to the first grid seam within a column; otherwise stop on
-        # the end letter (never a straight line across the whole disc)
-        left = ray_hit((xl, y_mid), (-1, 0), far=col)
-        right = ray_hit((xr, y_mid), (1, 0), far=col)
-        allw_ = unary_union(words)
-        if left is None:
-            h = nearest_points(allw_, Point(xl, y_mid))[0]
-            left_pt, left_t = (h.x, h.y), "L"
-        else:
-            left_pt, left_t = left, end_type(left)
-        if right is None:
-            h = nearest_points(allw_, Point(xr, y_mid))[0]
-            right_pt, right_t = (h.x, h.y), "L"
-        else:
-            right_pt, right_t = right, end_type(right)
-        mid = [left_pt, (xl, y_mid), (xr, y_mid), right_pt]
-        out.append(dict(pts=mid, kind="hullmid", plain_ok=True, structural=True,
-                        ends=(left_t, right_t)))
+        pw, ends = horizontal(y_mid, 0.6 * t)
+        out.append(dict(pts=pw, kind="hullmid", plain_ok=True, structural=True, ends=ends))
+        mid = LineString(pw)
 
-    # --- slicing cuts through each word -----------------------------------
+    def cross(line, x, y_hint):
+        """Where the vertical at x meets `line` (nearest to y_hint)."""
+        hit = LineString([(x, y_hint - 4 * Rin), (x, y_hint + 4 * Rin)]).intersection(line)
+        cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
+        return min(cs, key=lambda c: abs(c[1] - y_hint)) if cs else None
+
+    # --- column cuts: row seam -> letter -> middle seam ----------------------
     def edge_angle(g, pt):
         ring = min([g.exterior] + list(g.interiors), key=lambda r: r.distance(Point(pt)))
         d = ring.project(Point(pt))
@@ -1453,7 +1490,6 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         return math.degrees(math.acos(min(1.0, abs(dy) / n)))  # 90 = edge square to the cut
 
     def column(word, x):
-        """(top y, bottom y, quality) of the letter of `word` under column x."""
         for g in getattr(word, "geoms", [word]):
             if g.bounds[0] < x < g.bounds[2]:
                 cut = LineString([(x, g.bounds[1] - 1), (x, g.bounds[3] + 1)]).intersection(g)
@@ -1463,9 +1499,8 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                     return y0, y1, min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
         return None
 
-    seam_target = {}  # grid-seam endpoint on the core -> letter point to finish on
     for wi, word in enumerate(words):
-        outer_up = wi == 0  # top word: grid is above it, middle seam below
+        outer_up = wi == 0
         good = []
         x = word.bounds[0] + 0.5 * ppm
         while x < word.bounds[2]:
@@ -1473,69 +1508,56 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
             if c and c[2] >= 55:
                 good.append(x)
             x += 0.5 * ppm
-        if not good:
-            continue
-        # where grid seams meet this word's side of the core (those seams
-        # become the column's outer cut), then fill-ins so no slice is wider
-        # than about a column
-        hits = [q for ln in segs for q in (ln.coords[0], ln.coords[-1])
-                if core.exterior.distance(Point(q)) < 1.0
-                and word.bounds[0] < q[0] < word.bounds[2]
-                and ((q[1] < word.centroid.y) if outer_up else (q[1] > word.centroid.y))]
-        xs = []  # (column x, grid-seam endpoint it serves or None)
-        for q in sorted(hits, key=lambda c: c[0]):
-            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u, _ in xs)]
-            if cand:
-                best = min(cand, key=lambda g: abs(g - q[0]))
-                if abs(best - q[0]) < 0.5 * col:
-                    xs.append((best, q))
-        n_fill = max(1, round((word.bounds[2] - word.bounds[0]) / col) - 1)
-        for j in range(1, n_fill + 1):
-            w = word.bounds[0] + (word.bounds[2] - word.bounds[0]) * j / (n_fill + 1)
-            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u, _ in xs)]
+        n_cols = max(1, round((word.bounds[2] - word.bounds[0]) / col) - 1)
+        xs = []
+        for j in range(1, n_cols + 1):
+            w = word.bounds[0] + (word.bounds[2] - word.bounds[0]) * j / (n_cols + 1)
+            cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)]
             if cand:
                 best = min(cand, key=lambda g: abs(g - w))
                 if abs(best - w) < 0.5 * col:
-                    xs.append((best, None))
-        for x, served in xs:
+                    xs.append(best)
+        for x in xs:
             y0, y1, _q = column(word, x)
             near_y, far_y = (y0, y1) if outer_up else (y1, y0)
-            if served is not None:
-                # that grid seam finishes on this column's letter (below)
-                seam_target[(round(served[0], 1), round(served[1], 1))] = (x, near_y)
-            else:
-                # outer part: from the grid straight onto the letter
-                o = ray_hit((x, near_y), (0, -1) if outer_up else (0, 1))
-                if o is not None:
-                    out.append(dict(pts=[o, (x, near_y)], kind="hullcut", plain_ok=True,
-                                    structural=True, ends=(end_type(o), "L")))
-            # inner part: from the letter to the middle seam (or the far grid)
-            if y_mid is not None:
-                out.append(dict(pts=[(x, far_y), (x, y_mid)], kind="hullcut", plain_ok=True,
-                                structural=True, ends=("L", "T")))
-            else:
-                o2 = ray_hit((x, far_y), (0, 1) if outer_up else (0, -1))
-                if o2 is not None:
-                    out.append(dict(pts=[(x, far_y), o2], kind="hullcut", plain_ok=True,
-                                    structural=True, ends=("L", end_type(o2))))
+            o = cross(rows[wi], x, near_y)
+            if o is not None:
+                pw = [o, (x, near_y)]
+                amp = min(0.8 * t, LineString(pw).length / 6)
+                out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
+                                plain_ok=True, structural=True, ends=("T", "L")))
+            if mid is not None:
+                m = cross(mid, x, far_y)
+                if m is not None:
+                    out.append(dict(pts=[(x, far_y), m], kind="hullcut", plain_ok=True,
+                                    structural=True, ends=("L", "T")))
 
-    # --- grid seams: ends on the core are finished on the nearest letter ---
-    allw = unary_union(words)
+    # --- grid seams: ends on the rows land on the row seam; at the row ends
+    # they finish on the nearest letter ---------------------------------------
+    row_lines = [r for r in rows.values()] + ([mid] if mid is not None else [])
     for ln in segs:
         p = [tuple(c) for c in ln.coords]
         ends = []
         for e in (0, -1):
             q = Point(p[e])
-            if core.exterior.distance(q) < 1.0:
-                tgt = seam_target.get((round(q.x, 1), round(q.y, 1)))
-                if tgt is None:
+            if excl.exterior.distance(q) < 1.0:
+                # carry on in the seam's own direction onto the nearest row seam
+                a_ = p[1] if e == 0 else p[-2]
+                dx, dy = q.x - a_[0], q.y - a_[1]
+                m_ = math.hypot(dx, dy) or 1.0
+                ray = LineString([(q.x, q.y), (q.x + dx / m_ * 3 * row_d, q.y + dy / m_ * 3 * row_d)])
+                hits = [h for r in row_lines for h in [ray.intersection(r)] if not h.is_empty]
+                cs = [c for h in hits for g in getattr(h, "geoms", [h]) for c in getattr(g, "coords", [])]
+                if cs:
+                    tgt, et = min(cs, key=lambda c: math.dist(c, (q.x, q.y))), "T"
+                else:
                     h = nearest_points(allw, q)[0]
-                    tgt = (h.x, h.y)
+                    tgt, et = (h.x, h.y), "L"
                 if e == 0:
                     p.insert(0, tgt)
                 else:
                     p.append(tgt)
-                ends.append("L")
+                ends.append(et)
             elif R.boundary.distance(q) < 1.0:
                 ends.append(end_type(q))
             else:
