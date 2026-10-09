@@ -1094,8 +1094,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 # hull style: the innermost ring seams host the center grid's T
                 # ends -- dropping one leaves those grid seams dangling
                 seams.append(dict(pts=pts, kind="ring", ends=("L", "L"),
-                                  plain_ok=hull_mode and lv == 0,
-                                  structural=hull_mode and lv == 0))
+                                  plain_ok=hull_mode, structural=hull_mode))
         # --- rim subdivisions: T off the outermost ring seam up to the rim ----
         top_lv = len(levels) - 1
         for g in range(n):
@@ -1489,7 +1488,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                         plain_ok=True, structural=True, ends=("J", "J")))
     # --- Voronoi grid between the halo and the ring -----------------------
     free = R.difference(halo_region)
-    a_target = 0.45 * (rp.target_w_mm * ppm) ** 2
+    a_target = 0.35 * (rp.target_w_mm * ppm) ** 2
     k = max(2, round(free.area / a_target))
     inner = free.buffer(-2 * t)
     if inner.is_empty:
@@ -1521,7 +1520,14 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
         for e in (0, -1):
             q = Point(p[e])
             if halo_region.exterior.distance(q) < 1.0:
-                ends.append("T")  # lands on the halo seam
+                # landing within 4t of a column/end cut's junction would leave
+                # a narrow neck between the two: land ON the junction instead
+                jn = min(junctions, key=lambda j: math.dist(j, p[e]), default=None)
+                if jn is not None and math.dist(jn, p[e]) < 4 * t:
+                    p[e] = tuple(jn)
+                    ends.append("J")
+                else:
+                    ends.append("T")  # lands on the halo seam
             elif R.boundary.distance(q) < 1.0:
                 ends.append("L" if ring_letters.distance(q) < 2.0 else "T")
             else:
