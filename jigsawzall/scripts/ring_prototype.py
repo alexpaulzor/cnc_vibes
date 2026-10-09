@@ -1372,7 +1372,10 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
     A Lloyd-relaxed Voronoi grid fills the rest of the region inside the
     innermost ring seams. Ends: "J" junction, "L" letter, "T" on a seam."""
     t = rp.min_feature_mm * ppm
-    col = 0.55 * rp.target_w_mm * ppm
+    # ~35mm between column cuts: each row-seam stretch between two columns
+    # must hold a tab clear of both junctions' keep-out zones, or the slices
+    # come out tab-free and fall out of the finished puzzle
+    col = 0.75 * rp.target_w_mm * ppm
     ring_letters = unary_union(ring_solids)
     lines = [LineString(sm["pts"]) for sm in seams] + [g.boundary for g in ring_solids]
     faces = list(polygonize(shapely.union_all(lines + [panel.boundary], grid_size=0.1)))
