@@ -1411,7 +1411,19 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
 
     # --- through-cuts across the word band, on letter centres ~col apart --
     top_w, bot_w = words[0], words[-1]
-    centres = sorted((g.centroid.x for g in getattr(top_w, "geoms", [top_w])))
+    # columns only where a top-word letter sits right over a bottom-word
+    # letter (>= 2t of overlap), so the cut drops straight down with no
+    # sideways jog leaving a thin wedge of wood
+    tops = list(getattr(top_w, "geoms", [top_w]))
+    bots = list(getattr(bot_w, "geoms", [bot_w])) if len(words) > 1 else tops
+    centres = []
+    for g1 in tops:
+        for g2 in bots:
+            lo, hi = max(g1.bounds[0], g2.bounds[0]), min(g1.bounds[2], g2.bounds[2])
+            if hi - lo >= 2 * t:
+                centres.append((lo + hi) / 2)
+    if not centres:
+        centres = sorted(g.centroid.x for g in tops)
     x0, x1 = top_w.bounds[0], top_w.bounds[2]
     k = max(1, round((x1 - x0) / col) - 1)
     xs = []
@@ -1453,7 +1465,7 @@ def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, 
                         plain_ok=True, structural=True, ends=("J", "J")))
     # --- Voronoi grid between the halo and the ring -----------------------
     free = R.difference(halo_region)
-    a_target = 0.6 * (rp.target_w_mm * ppm) ** 2
+    a_target = 0.45 * (rp.target_w_mm * ppm) ** 2
     k = max(2, round(free.area / a_target))
     inner = free.buffer(-2 * t)
     if inner.is_empty:
