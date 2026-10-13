@@ -389,14 +389,17 @@ def build_letter_first(words, seed, rp, cfg):
             chosen = []
             for j in range(1, n_cols + 1):
                 want = span[0] + (span[1] - span[0]) * j / (n_cols + 1)
+                def land_x(c_):  # where the inward cut drops onto the middle edge
+                    return c_[1][0] - c_[3][0] * 2 * t
                 cand = [(s_, c_) for s_, c_ in goods
                         if all(abs(s_ - u) > 0.5 * col for u, _ in chosen)
-                        and all(abs(c_[2][0] - m_[0]) < 1.0 * ppm or abs(c_[2][0] - m_[0]) >= 4 * t
-                                for m_ in mid_s)]
+                        and all(abs(land_x(c_) - m_[0]) < 1.0 * ppm or abs(land_x(c_) - m_[0]) >= 4 * t
+                                for m_ in mid_s)
+                        and all(abs(land_x(c_) - land_x(o_)) >= 4 * t for _u, o_ in chosen)]
                 if cand:
                     pick = min(cand, key=lambda sc: abs(sc[0] - want))
                     # prefer landing on the other word's junction outright
-                    shared = [sc for sc in cand if any(abs(sc[1][2][0] - m_[0]) < 1.0 * ppm
+                    shared = [sc for sc in cand if any(abs(land_x(sc[1]) - m_[0]) < 1.0 * ppm
                                                        for m_ in mid_s)
                               and abs(sc[0] - want) < 0.5 * col]
                     if shared:
@@ -413,13 +416,18 @@ def build_letter_first(words, seed, rp, cfg):
                     if not on_rim:
                         contacts.append(end)
                 if len(clines) > 1:
-                    inward = (-n_[0], -n_[1])
-                    end2, on_rim2 = _ray_to(inner_pt, inward, reg, panel, t, D)
+                    # leave the letter square to it for 2t, then drop straight
+                    # onto the edge between the words (radial cuts would all
+                    # converge on the centre and leave thin wedges)
+                    elbow = (inner_pt[0] - n_[0] * 2 * t, inner_pt[1] - n_[1] * 2 * t)
+                    down = (0.0, 1.0) if wi == 0 else (0.0, -1.0)
+                    end2, on_rim2 = _ray_to(elbow, down, reg, panel, 0, D)
                     if end2 is not None:
                         snap = min(mid_s, key=lambda m_: math.dist(m_, end2), default=None)
                         if snap is not None and math.dist(snap, end2) < 2 * t:
                             end2 = snap
-                        pts = R._wobble([inner_pt, end2], min(0.8 * t, math.dist(inner_pt, end2) / 6),
+                        pts = [inner_pt, elbow, end2]
+                        pts = R._wobble(pts, min(0.6 * t, LineString(pts).length / 8),
                                         0, 0, flat_ends=True)
                         seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
                                           ends=("L", "J")))
