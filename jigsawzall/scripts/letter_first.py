@@ -19,6 +19,7 @@ Selected with ring_prototype.py --center-style letterfirst.
 from __future__ import annotations
 
 import math
+import os
 import random
 from dataclasses import replace
 
@@ -408,6 +409,9 @@ def build_letter_first(words, seed, rp, cfg):
                         pick = min(shared, key=lambda sc: abs(sc[0] - want))
                     if abs(pick[0] - want) < 0.5 * col:
                         chosen.append(pick)
+            if os.environ.get("LF_DEBUG"):
+                print(f"word {wi}: {len(goods)} good columns, chose {len(chosen)} of {n_cols}, "
+                      f"mid landings so far {[round(m_[0] / ppm) for m_ in mid_s]}", flush=True)
             for s_, (p_hi, p_lo, _foot, n_) in chosen:
                 # n_ is the letters' "up"; the top word's up points away from
                 # the middle, the bottom word's (read upright) toward it
