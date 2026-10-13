@@ -345,6 +345,12 @@ def build_letter_first(words, seed, rp, cfg):
         rng = random.Random(seed * 131 + variant * 9973)
         seams = []
         contacts = []  # points where cuts land on medial edges
+
+        def land(q):
+            # a landing within 2t of an earlier one shares it: two contacts a
+            # hair apart leave a sliver of medial edge too short to cut
+            near = min(contacts, key=lambda c: math.dist(c, q), default=None)
+            return near if near is not None and math.dist(near, q) < 2 * t else q
         n_outer = len(outer_solids)
         for si, (site, reg) in enumerate(zip(sites, regions)):
             if si >= n_outer:
@@ -364,6 +370,8 @@ def build_letter_first(words, seed, rp, cfg):
                 end, on_rim = _ray_to(start, (math.cos(phi), math.sin(phi)), reg, panel, t, D)
                 if end is None:
                     continue
+                if not on_rim:
+                    end = land(end)
                 pts = R._wobble([start, end], min(0.8 * t, math.dist(start, end) / 6), 0, 0,
                                 flat_ends=True)
                 seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
@@ -420,6 +428,8 @@ def build_letter_first(words, seed, rp, cfg):
                 else:
                     outer_pt, inner_pt, n_ = p_lo, p_hi, (-n_[0], -n_[1])
                 end, on_rim = _ray_to(outer_pt, n_, reg, panel, t, D)
+                if end is not None and not on_rim:
+                    end = land(end)
                 if end is not None:
                     pts = R._wobble([outer_pt, end], min(0.8 * t, math.dist(outer_pt, end) / 6),
                                     0, 0, flat_ends=True)
@@ -438,6 +448,8 @@ def build_letter_first(words, seed, rp, cfg):
                         snap = min(mid_s, key=lambda m_: math.dist(m_, end2), default=None)
                         if snap is not None and math.dist(snap, end2) < 2 * t:
                             end2 = snap
+                        else:
+                            end2 = land(end2)
                         pts = [inner_pt, elbow, end2]
                         pts = R._wobble(pts, min(0.6 * t, LineString(pts).length / 8),
                                         0, 0, flat_ends=True)

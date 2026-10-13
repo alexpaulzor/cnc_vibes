@@ -1868,7 +1868,10 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
         if eb in ("L", "T", "B"):
             pts = _extend(pts, 1, 2)
         ls0 = LineString(pts)
-        if ls0.intersection(background).length < 3 * ppm:
+        bg_len = ls0.intersection(background).length
+        # a short structural seam still closes its faces -- skipping it
+        # leaves a hole that merges the pieces on either side
+        if bg_len < (0.3 if s.get("structural") else 3) * ppm:
             s["status"] = "short"
             continue
         n = max(6, int(ls0.length / (2 * ppm)))
