@@ -116,7 +116,32 @@ def _center_block(ref, ref_cap, cap_mm, gap_px, C, ppm, t_px, curv):
     return [unary_union(w) for w in words], words, paths
 
 
-CURVES = (0.0, 2.0, 1.2, 0.8)  # straight, then arcs (radius / line length)
+def _ring_block(ref, ref_cap, cap_mm, r_top, C, ppm, t_px):
+    """Center words on one inner ring concentric with the disc: word 1 over
+    the top with its letters pointing outward (baseline radius r_top), word 2
+    along the bottom pointing inward so it reads upright (baseline radius
+    r_top + cap) -- both in the same band of radius, like a second ring of
+    letters. Letters keep >= t of wood inside a word.
+    Returns (word unions, letters per word, path per word)."""
+    k = cap_mm / ref_cap
+    cap_px = cap_mm * ppm
+    words, paths = [], []
+    for wi, (glyphs, xs) in enumerate(ref):
+        gs = [affinity.scale(g, k, k, origin=(0, 0)) for g in glyphs]
+        pos = [x * k for x in xs]
+        up = 1 if wi == 0 else -1
+        path = ("arc", C[0], C[1], r_top if up > 0 else r_top + cap_px, up)
+        extra = 0.0
+        for _ in range(60):
+            p_ = [x + extra * (i - (len(pos) - 1) / 2) for i, x in enumerate(pos)]
+            placed = _word_on_path(gs, p_, path)
+            gaps = [placed[i].distance(placed[i + 1]) for i in range(len(placed) - 1)]
+            if not gaps or min(gaps) >= t_px:
+                break
+            extra += 0.25 * ppm
+        words.append(placed)
+        paths.append(path)
+    return [unary_union(w) for w in words], words, paths
 
 
 def layout(words, center, rp, ppm, C, panel):
@@ -149,21 +174,27 @@ def layout(words, center, rp, ppm, C, panel):
                             if g.contains(Point(C))), None)
             if allowed is None:
                 continue
+            # the band the center ring may use: out to the inscribed circle of
+            # the allowed region; letters' outer edge sits on it
+            r_out = allowed.exterior.distance(Point(C))
             cand = []
-            for curv in CURVES:
-                lo, hi = 3.0, 60.0
-                for _ in range(12):  # largest center cap that fits
-                    mid = (lo + hi) / 2
-                    wu, _l, _p = _center_block(ref[0], ref[1], mid, word_gap, C, ppm, t_px, curv)
-                    if allowed.contains(unary_union(wu)):
-                        lo = mid
-                    else:
-                        hi = mid
-                if lo < rp.center_text_cap_min_mm:
-                    continue
-                cw, cl, cp = _center_block(ref[0], ref[1], lo, word_gap, C, ppm, t_px, curv)
+            lo, hi = 3.0, 60.0
+            for _ in range(14):  # largest center cap whose ring fits
+                mid = (lo + hi) / 2
+                r_top = r_out - mid * ppm
+                ok = r_top > 0
+                if ok:
+                    wu, _l, _p = _ring_block(ref[0], ref[1], mid, r_top, C, ppm, t_px)
+                    ok = allowed.contains(unary_union(wu)) and (
+                        len(wu) < 2 or wu[0].distance(wu[1]) >= word_gap)
+                if ok:
+                    lo = mid
+                else:
+                    hi = mid
+            if lo >= rp.center_text_cap_min_mm:
+                cw, cl, cp = _ring_block(ref[0], ref[1], lo, r_out - lo * ppm, C, ppm, t_px)
                 area = area_o + sum(g.area for ln in cl for g in ln)
-                cand.append((area, L, world, cw, cl, cp, lo, curv))
+                cand.append((area, L, world, cw, cl, cp, lo, r_out / ppm))
         for c_ in cand:
             if best is None or c_[0] > best[0]:
                 best = c_
