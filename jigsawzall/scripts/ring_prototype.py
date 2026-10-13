@@ -101,6 +101,9 @@ class RingParams:
     # min_feature_mm (3.0 on the stiff 3-ply veneer). Every wood-strength limit
     # left as None below is derived from it in __post_init__.
     min_feature_mm: float = 3.0
+    # letterfirst style: tab space between the rim, the outer letters and the
+    # center words (see letter_first.py)
+    group_gap_mm: float = 15.0
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
     # min radial depth of the band between the outer letters and the center
     # disc. None = 4.4 * min_feature_mm: the largest tab class's bulb
@@ -2038,9 +2041,11 @@ def generate(words, seed, rp):
     cfg = make_cfg(rp)
     if rp.shape == "square":
         cfg = replace(cfg, corner_radius_mm=5.0)
-    piece_polys, letter_union, cfg, L, st, panel, C = build_ring(
-        words, seed, rp, cfg
-    )
+    if rp.center_style == "letterfirst":
+        from letter_first import build_letter_first as builder
+    else:
+        builder = build_ring
+    piece_polys, letter_union, cfg, L, st, panel, C = builder(words, seed, rp, cfg)
     frags = G.carve_letter_pockets(piece_polys, letter_union)
     frags = G.fuse_counter_fragments(frags, letter_union, cfg)
     if rp.shape == "square":
@@ -2195,7 +2200,8 @@ def main():
                          "and the center disc (default 4.4 x min_feature_mm)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
-        "--center-style", choices=("hull", "medallion", "flat", "ring"), default="hull",
+        "--center-style", choices=("letterfirst", "hull", "medallion", "flat", "ring"),
+        default="hull",
         help="hull (default) = loose center letters inside one continuous puzzle grid, "
         "each word's outline treated like one big letter; flat / ring = loose letters "
         "in a free-turning pie-sliced hub disc; medallion = fused words + undivided hub",
