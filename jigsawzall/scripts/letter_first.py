@@ -390,7 +390,9 @@ def build_letter_first(words, seed, rp, cfg):
             for j in range(1, n_cols + 1):
                 want = span[0] + (span[1] - span[0]) * j / (n_cols + 1)
                 def land_x(c_):  # where the inward cut drops onto the middle edge
-                    return c_[1][0] - c_[3][0] * 2 * t
+                    if wi == 0:
+                        return c_[1][0] - c_[3][0] * 2 * t
+                    return c_[0][0] + c_[3][0] * 2 * t
                 cand = [(s_, c_) for s_, c_ in goods
                         if all(abs(s_ - u) > 0.5 * col for u, _ in chosen)
                         and all(abs(land_x(c_) - m_[0]) < 1.0 * ppm or abs(land_x(c_) - m_[0]) >= 4 * t
@@ -406,7 +408,13 @@ def build_letter_first(words, seed, rp, cfg):
                         pick = min(shared, key=lambda sc: abs(sc[0] - want))
                     if abs(pick[0] - want) < 0.5 * col:
                         chosen.append(pick)
-            for s_, (outer_pt, inner_pt, _foot, n_) in chosen:
+            for s_, (p_hi, p_lo, _foot, n_) in chosen:
+                # n_ is the letters' "up"; the top word's up points away from
+                # the middle, the bottom word's (read upright) toward it
+                if wi == 0:
+                    outer_pt, inner_pt = p_hi, p_lo
+                else:
+                    outer_pt, inner_pt, n_ = p_lo, p_hi, (-n_[0], -n_[1])
                 end, on_rim = _ray_to(outer_pt, n_, reg, panel, t, D)
                 if end is not None:
                     pts = R._wobble([outer_pt, end], min(0.8 * t, math.dist(outer_pt, end) / 6),
