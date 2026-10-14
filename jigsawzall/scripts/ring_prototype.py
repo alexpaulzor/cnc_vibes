@@ -1809,7 +1809,7 @@ def qa_defects(pieces, bulbs, ppm, t_mm=3.0):
 
 
 def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
-                distinct_tabs=True, rounds=8, untabbed_kinds=()):
+                distinct_tabs=True, rounds=8, untabbed_kinds=(), junction_keep_mm=7.0):
     """assemble(), then repair breakable features: ban the tab choice of every
     seam near a defect (so it moves / flips sides), and after a seam's tab
     options run out, drop the seam. Returns the best (fewest defects) result;
@@ -1820,7 +1820,8 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
     for _round in range(rounds):
         surround, counters, st = assemble(seams, letter_union, letters_solid, background,
                                           panel, cfg, C, distinct_tabs, bans=bans,
-                                          untabbed_kinds=untabbed_kinds)
+                                          untabbed_kinds=untabbed_kinds,
+                                          junction_keep_mm=junction_keep_mm)
         defects = qa_defects(surround, st["bulbs"], ppm, cfg.min_feature_mm)
         # Oversized pieces count when picking the best round: dropping seams
         # kills thin-strip defects by merging cells into giant pieces, and
@@ -1857,7 +1858,7 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
 
 
 def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True,
-             bans=None, untabbed_kinds=()):
+             bans=None, untabbed_kinds=(), junction_keep_mm=7.0):
     """bans: {seam index: set of tab choices (fallback, i, side) to skip, or
     the string "drop" to force the seam out} -- used by the QA repair loop to
     make a seam pick its next tab position / the other side."""
@@ -1865,7 +1866,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
     bans = bans or {}
     st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0, "bulbs": []}
     min_gap = cfg.letter_clearance_px
-    jr = 7 * ppm  # tab bulbs keep this far from any junction point
+    jr = junction_keep_mm * ppm  # tab bulbs keep this far from any junction point
     # junction points = every non-letter/non-border endpoint (and T hosts' feet)
     junctions = []
     for s in seams:
@@ -2230,6 +2231,8 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--group-gap-mm", type=float, default=15.0,
+                    help="letterfirst: tab space between rim, outer letters and center words")
     ap.add_argument("--ornament", default="heart",
                     help="heart | dot | star | laptop | gradcap | none; comma list = one per word slot")
     ap.add_argument("--font", default=None)
@@ -2293,6 +2296,7 @@ def main():
         raise SystemExit(f"material {a.material} has no min_feature_mm; pass --min-feature-mm")
     rp = RingParams(
         min_feature_mm=t_mm,
+        group_gap_mm=a.group_gap_mm,
         diameter_mm=a.diameter_mm,
         shape=a.shape,
         rows=a.rows,

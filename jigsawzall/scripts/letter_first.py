@@ -378,7 +378,9 @@ def build_letter_first(words, seed, rp, cfg):
         r_c_out = max(math.dist(C, c) for g in word_solids
                       for p in getattr(g, "geoms", [g]) for c in p.exterior.coords)
         r_c_in = min(Pc.distance(g) for g in word_solids)
-        r1 = (r_c_out + r_o_in) / 2
+        # c1 hugs the word tops (1.5t of wood) so its tabs get the whole
+        # tab space on the outside, between and under the outer letters
+        r1 = r_c_out + 1.5 * t
         # c0: under the words by a tab's width where the band allows it
         r0 = max(r1 - band_max, r_c_in - (3 * max(R.TAB_SIZE_CLASSES) * t + t))
         r0 = min(r0, r_c_in - 2 * t)
@@ -450,6 +452,11 @@ def build_letter_first(words, seed, rp, cfg):
 
         # --- center band (c0..c1): columns through single letters
         band_angles = []
+
+        def on_c1(foot):  # distance on c1 from this radial's landing to the nearest outer one
+            q = _at(C, _ang(foot, C), r1)
+            return min((math.dist(q, c) for c in contacts[0]), default=1e9)
+
         for letters_w, path in zip(clines, cpaths):
             span = _path_span(letters_w, path)
             n_cols = max(1, round((span[1] - span[0]) / col) - 1)
@@ -466,6 +473,12 @@ def build_letter_first(words, seed, rp, cfg):
                 cand = [sc for sc in goods if all(abs(sc[0] - u) > 0.5 * col for u, _ in chosen)]
                 if cand:
                     pick = min(cand, key=lambda sc: abs(sc[0] - want))
+                    # share an outer cut's landing on c1 where one is in reach,
+                    # so c1 isn't chopped into stretches too short for a tab
+                    shared = [sc for sc in cand if abs(sc[0] - want) < 0.5 * col
+                              and on_c1(sc[1][2]) < 2 * t]
+                    if shared:
+                        pick = min(shared, key=lambda sc: (on_c1(sc[1][2]), abs(sc[0] - want)))
                     if abs(pick[0] - want) < 0.5 * col:
                         chosen.append(pick)
             for _s, (p_hi, p_lo, foot, _n) in chosen:
@@ -489,6 +502,11 @@ def build_letter_first(words, seed, rp, cfg):
                 n_add = round((b - a) * rm / col) - 1
                 for j in range(1, n_add + 1):
                     want = a + (b - a) * j / (n_add + 1)
+                    near_c1 = [_ang(c, C) for c in contacts[0]
+                               if abs(math.remainder(_ang(c, C) - want, 2 * math.pi)) * rm < 0.4 * col]
+                    if near_c1:
+                        h = min(near_c1, key=lambda h: abs(math.remainder(h - want, 2 * math.pi)))
+                        want = a + (math.remainder(h - a, 2 * math.pi) % (2 * math.pi))
                     for d in sorted(range(-40, 41), key=abs):
                         phi = want + d * 0.5 * ppm / rm
                         if not (a < phi < b):
@@ -502,23 +520,30 @@ def build_letter_first(words, seed, rp, cfg):
         # --- inner rings and the core's pie slices, lined up with the cuts
         # already landing on each ring's outer circle
         def aligned(ci, r, n):
-            have = sorted(_ang(c, C) for c in contacts[ci])
+            """~n cut angles round circle ci: its existing landings (so cuts
+            continue straight across and the circle isn't chopped short),
+            thinned to >= 0.6 step apart, with new angles only where a gap
+            between them is wider than 1.5 steps."""
             step = 2 * math.pi / n
-            best_off, best_hit = rng.uniform(0, step), -1
-            for off in have:
-                hit = sum(1 for k_ in range(n)
-                          if any(abs(math.remainder(off + k_ * step - h, 2 * math.pi)) < 0.25 * step
-                                 for h in have))
-                if hit > best_hit:
-                    best_off, best_hit = off, hit
+            have = sorted({_ang(c, C) % (2 * math.pi) for c in contacts[ci]})
             out = []
-            for k_ in range(n):
-                a = best_off + k_ * step
-                h = min(have, key=lambda h: abs(math.remainder(a - h, 2 * math.pi)), default=None)
-                if h is not None and abs(math.remainder(a - h, 2 * math.pi)) < 0.25 * step:
-                    a = h
-                out.append(a)
-            return out
+            for h in have:
+                if not out or (h - out[-1]) >= 0.6 * step:
+                    out.append(h)
+            if len(out) > 1 and (out[0] + 2 * math.pi - out[-1]) < 0.6 * step:
+                out.pop()
+            if not out:
+                out = [rng.uniform(0, 2 * math.pi)]
+            full = []
+            for i, h in enumerate(out):
+                nxt = out[(i + 1) % len(out)] + (2 * math.pi if i + 1 == len(out) else 0)
+                if len(out) == 1:
+                    nxt = h + 2 * math.pi
+                full.append(h)
+                k_ = round((nxt - h) / step)
+                if (nxt - h) > 1.5 * step:
+                    full += [h + (nxt - h) * j / k_ for j in range(1, k_)]
+            return full
 
         first_inner = 1 if word_solids else 0
         for ci in range(first_inner, len(circles) - 1):
@@ -555,7 +580,7 @@ def build_letter_first(words, seed, rp, cfg):
         with R._oriented_oversized():
             surround, counters, st = R.assemble_qa(
                 seams, letter_union, tab_solids, background, panel, cfg, C,
-                distinct_tabs=rp.distinct_tabs)
+                distinct_tabs=rp.distinct_tabs, junction_keep_mm=1.5 * rp.min_feature_mm)
         sc = (len(st["defects"]),) + R.score(surround, panel, cfg) + (st["dropped"],)
         if best is None or sc < best[0]:
             best = (sc, surround, counters, st, seams)
