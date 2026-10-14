@@ -299,6 +299,9 @@ def glyph_local(ch, font):
     return affinity.translate(poly, -cx, -base_y)
 
 
+UPRIGHT_ORNAMENTS = {"laptop", "gradcap"}  # turned to read upright at the bottom
+
+
 def ornament_local(kind, cap_h):
     """Separator piece at the join (end -> start of the name), in the same
     local frame, centred on the letter band."""
@@ -363,6 +366,39 @@ def ornament_local(kind, cap_h):
         wing_r = box(bw / 2, -wh / 2, bw / 2 + ww, wh / 2)
         wing_l = box(-bw / 2 - ww, -wh / 2, -bw / 2, wh / 2)
         p = unary_union([body, wing_r, wing_l])
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+    if kind == "laptop":
+        # Open laptop from the front: screen (rounded) standing on a wider
+        # keyboard deck, fused along the hinge -- one solid piece, no holes;
+        # the deck is 0.11 cap tall so it stays >= min_feature at ~30mm caps.
+        sw, sh = 0.50 * cap_h, 0.36 * cap_h
+        dw_top, dw_bot, dh = 0.56 * cap_h, 0.68 * cap_h, 0.11 * cap_h
+        r = 0.04 * cap_h
+        screen = box(-sw / 2 + r, -sh + r, sw / 2 - r, -r).buffer(r, quad_segs=8)
+        deck = Polygon([(-dw_top / 2, 0), (dw_top / 2, 0), (dw_bot / 2, dh), (-dw_bot / 2, dh)])
+        deck = deck.buffer(0.02 * cap_h).buffer(-0.02 * cap_h)
+        p = unary_union([screen, deck.buffer(0.005 * cap_h)])
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+    if kind == "gradcap":
+        # Mortarboard: a wide flat diamond board over a narrower skull cap,
+        # a tassel cord hanging from near the board's right corner a full
+        # min_feature clear of the skull (0.10 cap at ~34mm caps), ending in
+        # a tuft -- one solid piece, no holes.
+        bw, bh = 0.84 * cap_h, 0.22 * cap_h
+        board = Polygon([(-bw / 2, 0), (0, -bh / 2), (bw / 2, 0), (0, bh / 2)])
+        sk = 0.15 * cap_h
+        skull = box(-sk, 0.0, sk, 0.24 * cap_h).buffer(0.03 * cap_h, quad_segs=8).intersection(
+            box(-cap_h, 0.0, cap_h, 0.27 * cap_h))
+        cw = 0.10 * cap_h
+        tx = 0.33 * cap_h
+        cord = box(tx - cw / 2, 0.0, tx + cw / 2, 0.30 * cap_h)
+        tuft = Polygon([(tx - 0.07 * cap_h, 0.28 * cap_h), (tx + 0.07 * cap_h, 0.28 * cap_h),
+                        (tx + 0.05 * cap_h, 0.44 * cap_h), (tx - 0.05 * cap_h, 0.44 * cap_h)])
+        tuft = tuft.buffer(0.015 * cap_h)
+        p = unary_union([board.buffer(0.015 * cap_h), skull, cord, tuft])
+        p = p.buffer(0.015 * cap_h).buffer(-0.015 * cap_h)
         b = p.bounds
         return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
     # heart (point toward the hub)
@@ -839,6 +875,13 @@ def fit_ring(words, rp: RingParams, ppm):
             a1 = a0 + ((ths[ks[-1]] + ext[ks[-1]][1]) - a0) % (2 * math.pi)
             mid = (a0 + a1) / 2
             ths = [(x - mid) % (2 * math.pi) for x in ths]
+        # pictorial ornaments in the bottom half turn round so they stand
+        # upright to the reader (a heart or star reads either way)
+        orn_k = iter([o for i in range(len(words)) for o in [orn_kinds[i % len(orn_kinds)]] if o])
+        for k, lab in enumerate(labels):
+            if lab == "*" and next(orn_k) in UPRIGHT_ORNAMENTS \
+                    and math.pi / 2 < ths[k] % (2 * math.pi) < 3 * math.pi / 2:
+                locs[k] = affinity.rotate(locs[k], 180, origin=(0, -cap / 2))
         C = (0.0, 0.0)
         world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
         gaps = [
@@ -1964,6 +2007,10 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
 _frame_exempt = False  # set by build_ring: only a frame_mm > 0 build has a legit annulus
 
 
+OVERSIZE_SHORT_MM = 34.0  # a piece's min-rotated-rectangle sides may not
+OVERSIZE_LONG_MM = 64.0   # exceed these (oversized_oriented)
+
+
 def oversized_oriented(poly, cfg):
     """Rotation-invariant _vg_oversized: ring pieces sit at every angle, so the
     axis-aligned bbox test would flag diagonal pieces falsely."""
@@ -1994,7 +2041,7 @@ def oversized_oriented(poly, cfg):
         mrr = poly.minimum_rotated_rectangle
     xs, ys = mrr.exterior.coords.xy
     e = sorted(math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(2))
-    return e[0] > 34 * ppm or e[1] > 64 * ppm
+    return e[0] > OVERSIZE_SHORT_MM * ppm or e[1] > OVERSIZE_LONG_MM * ppm
 
 
 @contextlib.contextmanager
@@ -2183,7 +2230,8 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
-    ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
+    ap.add_argument("--ornament", default="heart",
+                    help="heart | dot | star | laptop | gradcap | none; comma list = one per word slot")
     ap.add_argument("--font", default=None)
     ap.add_argument(
         "--no-distinct-tabs", action="store_true",
@@ -2249,7 +2297,8 @@ def main():
         shape=a.shape,
         rows=a.rows,
         variants=a.variants,
-        ornament=None if a.ornament == "none" else a.ornament,
+        ornament=(None if a.ornament == "none" else
+                  a.ornament.split(",") if "," in a.ornament else a.ornament),
         font=a.font,
         distinct_tabs=not a.no_distinct_tabs,
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,

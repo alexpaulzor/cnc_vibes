@@ -264,7 +264,7 @@ def _path_span(letters, path):
     return min(ss) - w, max(ss) + w
 
 
-def _column(letters, path, s_, t, ppm):
+def _column(letters, path, s_, t, ppm, need=("outer", "inner")):
     """A cut square to the word's line at arc length s_, through exactly one
     letter. Returns (outer exit point, inner exit point, foot point on the
     path, outward normal) -- or None when the cut would meet a letter edge
@@ -291,10 +291,11 @@ def _column(letters, path, s_, t, ppm):
         m = math.hypot(tx, ty) or 1.0
         return math.degrees(math.acos(min(1.0, abs((tx * nx + ty * ny) / m))))
 
-    if min(angle(outer), angle(inner)) < 55:
+    ends = [(p0, sgn) for p0, sgn, nm in ((outer, 1, "outer"), (inner, -1, "inner")) if nm in need]
+    if min(angle(p0) for p0, _ in ends) < 55:
         return None
     side = 1.8 * t
-    for p0, sgn in ((outer, 1), (inner, -1)):
+    for p0, sgn in ends:
         beyond = LineString([(p0[0] + sgn * nx * 0.5 * t, p0[1] + sgn * ny * 0.5 * t),
                              (p0[0] + sgn * nx * big, p0[1] + sgn * ny * big)]).buffer(side, cap_style=2)
         if not g.intersection(beyond).is_empty:
@@ -302,7 +303,53 @@ def _column(letters, path, s_, t, ppm):
     return outer, inner, (px, py), (nx, ny)
 
 
+def _ang(p, C):
+    """Clockwise-from-top angle of p about C (y down), as R.out_vec uses."""
+    return math.atan2(p[0] - C[0], C[1] - p[1])
+
+
+def _at(C, phi, r):
+    v = R.out_vec(phi)
+    return (C[0] + v[0] * r, C[1] + v[1] * r)
+
+
+def _ang_span(g, C):
+    """(lo, hi) angular extent of polygon g about C, unwrapped around its
+    centroid's angle (hi may exceed pi)."""
+    a0 = _ang((g.centroid.x, g.centroid.y), C)
+    rings = [p.exterior for p in getattr(g, "geoms", [g])]
+    ds = [math.remainder(_ang(c, C) - a0, 2 * math.pi) for r in rings for c in r.coords]
+    return a0 + min(ds), a0 + max(ds)
+
+
+def _ring_radii(r0, ppm):
+    """Concentric circles inside radius r0 (px): equal-width rings, then a
+    core small enough for a few pie slices -- every ring and slice inside
+    the oversized limits. Returns (ring radii outermost first incl. r0, core
+    radius, slices in the core)."""
+    short = 0.9 * R.OVERSIZE_SHORT_MM * ppm
+    n = max(1, math.ceil(r0 / short))
+    w = r0 / n
+    radii = [r0 - i * w for i in range(n)]
+    rc = r0 - (n - 1) * w
+    k = 3
+    while 2 * rc * math.sin(math.pi / k) > short:
+        k += 1
+    return radii, rc, k
+
+
 def build_letter_first(words, seed, rp, cfg):
+    """Concentric-ring edges around the letter-first layout:
+
+      * circle c1 midway between the center words and the outer letters;
+        circle c0 a little inside the center words; equal rings inside c0
+        down to a core cut into curvy pie slices;
+      * radial cuts: through each outer letter and through every gap between
+        outer letters (c1 -> rim); through center-word letters square to
+        their arc (c0 -> c1) and through the empty stretches of that band;
+        evenly round each inner ring, lined up with the cuts landing on its
+        outer circle so verticals continue across rings where they can.
+    Each circle is split where cuts land so every stretch gets its own tab."""
     ppm = cfg.px_per_mm
     D = rp.diameter_mm * ppm
     m = cfg.margin_px
@@ -318,74 +365,92 @@ def build_letter_first(words, seed, rp, cfg):
     center_polys = [g for ln in clines for g in ln]
     letter_union = unary_union(world + center_polys)
     outer_solids = [R.solid_of(g) for g in world]
-    sites = outer_solids + [unary_union([R.solid_of(g) for g in ln]) for ln in clines]
-    site_letters = [[g] for g in outer_solids] + [[R.solid_of(g) for g in ln] for ln in clines]
-    tab_solids = unary_union(sites)
+    word_solids = [unary_union([R.solid_of(g) for g in ln]) for ln in clines]
+    tab_solids = unary_union(outer_solids + word_solids)
     background = panel.difference(letter_union)
-    regions = voronoi_regions(sites, panel, ppm)
-    # medial edges: every region boundary that isn't the disc's own edge
-    edges = unary_union([r.boundary for r in regions]).difference(panel.exterior.buffer(0.5))
-    edges = linemerge([g for g in getattr(edges, "geoms", [edges]) if g.geom_type == "LineString"])
-    edges = [g for g in getattr(edges, "geoms", [edges]) if g.length > 2 * ppm]
-    edges = [g.simplify(0.4 * ppm) for g in edges]
-    edge_net = unary_union(edges + [panel.exterior])
-    target = 0.45 * (rp.target_w_mm * ppm) ** 2
-    col = 0.75 * rp.target_w_mm * ppm  # ~35mm between center-word cuts
+    col = 0.75 * rp.target_w_mm * ppm  # ~35mm between radial cuts
+    band_max = 0.9 * R.OVERSIZE_SHORT_MM * ppm
+    Pc = Point(C)
 
-    def curved(pts):
-        if G_deflect(pts) < 2.5 * ppm:
-            pts = R.G._vg_bow(pts, tab_solids, cfg)
-        return pts
-
-    def G_deflect(pts):
-        return R.G._vg_deflection(pts)
+    # --- circles
+    r_o_in = min(Pc.distance(g) for g in outer_solids)
+    if word_solids:
+        r_c_out = max(math.dist(C, c) for g in word_solids
+                      for p in getattr(g, "geoms", [g]) for c in p.exterior.coords)
+        r_c_in = min(Pc.distance(g) for g in word_solids)
+        r1 = (r_c_out + r_o_in) / 2
+        # c0: under the words by a tab's width where the band allows it
+        r0 = max(r1 - band_max, r_c_in - (3 * max(R.TAB_SIZE_CLASSES) * t + t))
+        r0 = min(r0, r_c_in - 2 * t)
+    else:
+        r1 = r_o_in - rp.group_gap_mm * ppm / 2
+        r0 = r1
+    inner_radii, rc, k_core = _ring_radii(r0, ppm)
+    circles = ([r1] if word_solids else []) + inner_radii  # outermost first
+    if os.environ.get("LF_DEBUG"):
+        print("circles mm", [round(r / ppm, 1) for r in circles], "core", round(rc / ppm, 1),
+              "slices", k_core, flush=True)
 
     best = None
     for variant in range(rp.variants):
         rng = random.Random(seed * 131 + variant * 9973)
         seams = []
-        contacts = []  # points where cuts land on medial edges
+        contacts = {i: [] for i in range(len(circles))}
 
-        def land(q):
-            # a landing within 2t of an earlier one shares it: two contacts a
-            # hair apart leave a sliver of medial edge too short to cut
-            near = min(contacts, key=lambda c: math.dist(c, q), default=None)
-            return near if near is not None and math.dist(near, q) < 2 * t else q
-        n_outer = len(outer_solids)
-        for si, (site, reg) in enumerate(zip(sites, regions)):
-            if si >= n_outer:
-                continue  # center words: letter-aligned cuts below
-            wood = reg.difference(site)
-            n = max(2, round(wood.area / target))
-            cx, cy = site.centroid.x, site.centroid.y
-            phi0 = math.atan2(cy - C[1], cx - C[0]) + math.radians(rng.uniform(-12, 12))
-            far = 2 * D
-            for k_ in range(n):
-                phi = phi0 + 2 * math.pi * k_ / n
-                ray = LineString([(cx, cy), (cx + far * math.cos(phi), cy + far * math.sin(phi))])
-                hit = ray.intersection(site)
-                cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
-                start = max(cs, key=lambda c: math.dist(c, (cx, cy))) if cs else \
-                    (lambda q: (q.x, q.y))(nearest_points(site, Point(cx, cy))[0])
-                end, on_rim = _ray_to(start, (math.cos(phi), math.sin(phi)), reg, panel, t, D)
-                if end is None:
-                    continue
-                if not on_rim:
-                    end = land(end)
-                pts = R._wobble([start, end], min(0.8 * t, math.dist(start, end) / 6), 0, 0,
-                                flat_ends=True)
-                seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
-                                  ends=("L", "B" if on_rim else "J")))
-                if not on_rim:
-                    contacts.append(end)
-        # center words: cuts square to the word's line through single letters
-        # -- outward from the letter to its region's edge, and inward from
-        # the letter's far side to the edge between the two words. Bottom-word
-        # cuts meet that edge at the top word's junction or keep 4t clear.
-        mid_s = []
-        for wi, (letters_w, path) in enumerate(zip(clines, cpaths)):
-            si = n_outer + wi
-            reg = regions[si]
+        def land(ci, q):
+            # a landing within 2t of an earlier one on the same circle shares
+            # it (crossing): two contacts a hair apart leave a sliver of arc
+            near = min(contacts[ci], key=lambda c: math.dist(c, q), default=None)
+            if near is not None and math.dist(near, q) < 2 * t:
+                return near
+            contacts[ci].append(q)
+            return q
+
+        def radial(a, b, ends):
+            pts = R._wobble([a, b], min(0.8 * t, math.dist(a, b) / 6), 0, 0, flat_ends=True)
+            seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True, ends=ends))
+
+        rim = D / 2
+        # --- outer ring: through each letter, and through each gap
+        spans = []
+        for g in outer_solids:
+            lo, hi = _ang_span(g, C)
+            spans.append((lo, hi, g))
+            th = _ang((g.centroid.x, g.centroid.y), C)
+            rho = Pc.distance(g.centroid)
+            path = ("arc", C[0], C[1], rho, 1)
+            # outward and inward cuts pick their angles separately (a heart's
+            # notch spoils the straight line through it, its point doesn't)
+            for side in ("outer", "inner"):
+                goods = []
+                phi = lo
+                while phi < hi:
+                    c_ = _column([g], path, phi * rho, t, ppm, need=(side,))
+                    if c_ is not None:
+                        goods.append((phi, c_))
+                    phi += 0.5 * ppm / rho
+                if goods:
+                    phi, (p_out, p_in, _f, _n) = min(goods, key=lambda pc: abs(pc[0] - th))
+                else:
+                    # no clean crossing (a heart's point): leave from the
+                    # letter's extreme point on that side -- it bisects a tip
+                    cs = [c for p_ in getattr(g, "geoms", [g]) for c in p_.exterior.coords]
+                    p_out = max(cs, key=lambda c: math.dist(c, C))
+                    p_in = min(cs, key=lambda c: math.dist(c, C))
+                if side == "outer":
+                    radial(p_out, _at(C, _ang(p_out, C), rim), ("L", "B"))
+                elif word_solids:
+                    radial(p_in, land(0, _at(C, _ang(p_in, C), r1)), ("L", "J"))
+        spans.sort(key=lambda s: s[0])
+        for i, (lo, hi, _g) in enumerate(spans):
+            lo2 = spans[(i + 1) % len(spans)][0] + (2 * math.pi if i + 1 == len(spans) else 0)
+            mid = (hi + lo2) / 2
+            a = land(0, _at(C, mid, r1)) if word_solids else _at(C, mid, r1)
+            radial(a, _at(C, mid, rim), ("J" if word_solids else "B", "B"))
+
+        # --- center band (c0..c1): columns through single letters
+        band_angles = []
+        for letters_w, path in zip(clines, cpaths):
             span = _path_span(letters_w, path)
             n_cols = max(1, round((span[1] - span[0]) / col) - 1)
             goods = []
@@ -398,88 +463,95 @@ def build_letter_first(words, seed, rp, cfg):
             chosen = []
             for j in range(1, n_cols + 1):
                 want = span[0] + (span[1] - span[0]) * j / (n_cols + 1)
-                def land_x(c_):  # where the inward cut drops onto the middle edge
-                    if wi == 0:
-                        return c_[1][0] - c_[3][0] * 2 * t
-                    return c_[0][0] + c_[3][0] * 2 * t
-                cand = [(s_, c_) for s_, c_ in goods
-                        if all(abs(s_ - u) > 0.5 * col for u, _ in chosen)
-                        and all(abs(land_x(c_) - m_[0]) < 1.0 * ppm or abs(land_x(c_) - m_[0]) >= 4 * t
-                                for m_ in mid_s)
-                        and all(abs(land_x(c_) - land_x(o_)) >= 4 * t for _u, o_ in chosen)]
+                cand = [sc for sc in goods if all(abs(sc[0] - u) > 0.5 * col for u, _ in chosen)]
                 if cand:
                     pick = min(cand, key=lambda sc: abs(sc[0] - want))
-                    # prefer landing on the other word's junction outright
-                    shared = [sc for sc in cand if any(abs(land_x(sc[1]) - m_[0]) < 1.0 * ppm
-                                                       for m_ in mid_s)
-                              and abs(sc[0] - want) < 0.5 * col]
-                    if shared:
-                        pick = min(shared, key=lambda sc: abs(sc[0] - want))
                     if abs(pick[0] - want) < 0.5 * col:
                         chosen.append(pick)
-            if os.environ.get("LF_DEBUG"):
-                print(f"word {wi}: {len(goods)} good columns, chose {len(chosen)} of {n_cols}, "
-                      f"mid landings so far {[round(m_[0] / ppm) for m_ in mid_s]}", flush=True)
-            for s_, (p_hi, p_lo, _foot, n_) in chosen:
-                # n_ is the letters' "up"; the top word's up points away from
-                # the middle, the bottom word's (read upright) toward it
-                if wi == 0:
-                    outer_pt, inner_pt = p_hi, p_lo
-                else:
-                    outer_pt, inner_pt, n_ = p_lo, p_hi, (-n_[0], -n_[1])
-                end, on_rim = _ray_to(outer_pt, n_, reg, panel, t, D)
-                if end is not None and not on_rim:
-                    end = land(end)
-                if end is not None:
-                    pts = R._wobble([outer_pt, end], min(0.8 * t, math.dist(outer_pt, end) / 6),
-                                    0, 0, flat_ends=True)
-                    seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
-                                      ends=("L", "B" if on_rim else "J")))
-                    if not on_rim:
-                        contacts.append(end)
-                if len(clines) > 1:
-                    # leave the letter square to it for 2t, then drop straight
-                    # onto the edge between the words (radial cuts would all
-                    # converge on the centre and leave thin wedges)
-                    elbow = (inner_pt[0] - n_[0] * 2 * t, inner_pt[1] - n_[1] * 2 * t)
-                    down = (0.0, 1.0) if wi == 0 else (0.0, -1.0)
-                    end2, on_rim2 = _ray_to(elbow, down, reg, panel, 0, D)
-                    if end2 is not None:
-                        snap = min(mid_s, key=lambda m_: math.dist(m_, end2), default=None)
-                        if snap is not None and math.dist(snap, end2) < 2 * t:
-                            end2 = snap
-                        else:
-                            end2 = land(end2)
-                        pts = [inner_pt, elbow, end2]
-                        pts = R._wobble(pts, min(0.6 * t, LineString(pts).length / 8),
-                                        0, 0, flat_ends=True)
-                        seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
-                                          ends=("L", "J")))
-                        contacts.append(end2)
-                        mid_s.append(end2)
-        # medial edges split at every cut landing so each stretch gets a tab
-        for e in edges:
-            cuts = sorted({round(e.project(Point(q)), 3) for q in contacts
-                           if e.distance(Point(q)) < 1.0 and 0.5 < e.project(Point(q)) < e.length - 0.5})
-            stops = [0.0] + cuts + [e.length]
-            for k_ in range(len(stops) - 1):
-                a, b = stops[k_], stops[k_ + 1]
-                if b - a < 0.5:
+            for _s, (p_hi, p_lo, foot, _n) in chosen:
+                far, near_ = sorted((p_hi, p_lo), key=lambda q: -math.dist(q, C))
+                phi = _ang(foot, C)
+                radial(far, land(0, _at(C, phi, r1)), ("L", "J"))
+                radial(near_, land(1, _at(C, phi, r0)), ("L", "J"))
+                band_angles.append(phi)
+        if word_solids:
+            # empty stretches of the band (the word ends): straight c0 -> c1
+            # cuts clear of the letters, ~col apart
+            words_u = unary_union(word_solids)
+            rm = (r0 + r1) / 2
+            angs = sorted(a % (2 * math.pi) for a in band_angles)
+            if not angs:
+                angs = [0.0]
+            for i, a in enumerate(angs):
+                b = angs[(i + 1) % len(angs)] + (2 * math.pi if i + 1 == len(angs) else 0)
+                if len(angs) == 1:
+                    b = a + 2 * math.pi
+                n_add = round((b - a) * rm / col) - 1
+                for j in range(1, n_add + 1):
+                    want = a + (b - a) * j / (n_add + 1)
+                    for d in sorted(range(-40, 41), key=abs):
+                        phi = want + d * 0.5 * ppm / rm
+                        if not (a < phi < b):
+                            continue
+                        seg = LineString([_at(C, phi, r0), _at(C, phi, r1)])
+                        if seg.distance(words_u) >= 2 * t:
+                            radial(land(1, _at(C, phi, r0)), land(0, _at(C, phi, r1)),
+                                   ("J", "J"))
+                            break
+
+        # --- inner rings and the core's pie slices, lined up with the cuts
+        # already landing on each ring's outer circle
+        def aligned(ci, r, n):
+            have = sorted(_ang(c, C) for c in contacts[ci])
+            step = 2 * math.pi / n
+            best_off, best_hit = rng.uniform(0, step), -1
+            for off in have:
+                hit = sum(1 for k_ in range(n)
+                          if any(abs(math.remainder(off + k_ * step - h, 2 * math.pi)) < 0.25 * step
+                                 for h in have))
+                if hit > best_hit:
+                    best_off, best_hit = off, hit
+            out = []
+            for k_ in range(n):
+                a = best_off + k_ * step
+                h = min(have, key=lambda h: abs(math.remainder(a - h, 2 * math.pi)), default=None)
+                if h is not None and abs(math.remainder(a - h, 2 * math.pi)) < 0.25 * step:
+                    a = h
+                out.append(a)
+            return out
+
+        first_inner = 1 if word_solids else 0
+        for ci in range(first_inner, len(circles) - 1):
+            ro, ri = circles[ci], circles[ci + 1]
+            n = max(3, round(2 * math.pi * (ro + ri) / 2 / col))
+            for a in aligned(ci, ro, n):
+                radial(land(ci, _at(C, a, ro)), land(ci + 1, _at(C, a, ri)), ("J", "J"))
+        ci = len(circles) - 1
+        twist = rng.choice((-1, 1))
+        for a in aligned(ci, rc, k_core):
+            b = land(ci, _at(C, a, rc))
+            pts = R._pinwheel_spoke(C, _ang(b, C), b, twist, 50, rc)
+            seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True,
+                              ends=("J", "J")))
+
+        # --- circles, split at every landing so each stretch gets a tab
+        for ci, r in enumerate(circles):
+            angs = sorted({round(_ang(c, C) % (2 * math.pi), 6): c for c in contacts[ci]}.items())
+            if not angs:
+                continue
+            for i, (a, pa) in enumerate(angs):
+                b, pb = angs[(i + 1) % len(angs)]
+                if i + 1 == len(angs):
+                    b += 2 * math.pi
+                if b - a < 1e-6:
                     continue
-                nseg = max(2, int((b - a) / (2 * ppm)))
-                seg = [e.interpolate(a + (b - a) * i / nseg) for i in range(nseg + 1)]
-                seg = [(q.x, q.y) for q in seg]
-                if k_ > 0:
-                    seg[0] = min(contacts, key=lambda c: math.dist(c, seg[0]))
-                if k_ < len(stops) - 2:
-                    seg[-1] = min(contacts, key=lambda c: math.dist(c, seg[-1]))
-                ends = []
-                for q in (seg[0], seg[-1]):
-                    ends.append("B" if panel.exterior.distance(Point(q)) < 1.0 else "J")
-                if ends == ["J", "J"] and len(seg) > 2:
-                    seg = curved(seg)
-                seams.append(dict(pts=seg, kind="lfedge", plain_ok=True, structural=True,
-                                  ends=tuple(ends)))
+                nseg = max(4, int((b - a) * r / (2 * ppm)))
+                pts = [pa] + [_at(C, a + (b - a) * j / nseg, r) for j in range(1, nseg)] + [pb]
+                pts = R._wobble(pts, min(0.6 * t, LineString(pts).length / 8), 0, 0,
+                                flat_ends=True)
+                seams.append(dict(pts=pts, kind="lfedge", plain_ok=True, structural=True,
+                                  ends=("J", "J")))
+
         with R._oriented_oversized():
             surround, counters, st = R.assemble_qa(
                 seams, letter_union, tab_solids, background, panel, cfg, C,
