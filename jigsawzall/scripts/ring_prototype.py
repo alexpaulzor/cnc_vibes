@@ -383,16 +383,16 @@ def ornament_local(kind, cap_h):
         return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
     if kind == "gradcap":
         # Mortarboard: a wide flat diamond board over a narrower skull cap,
-        # a tassel cord hanging from near the board's right corner a full
-        # min_feature clear of the skull (0.10 cap at ~34mm caps), ending in
+        # a tassel cord hanging from near the board's right corner, ending in
         # a tuft -- one solid piece, no holes.
         bw, bh = 0.84 * cap_h, 0.22 * cap_h
         board = Polygon([(-bw / 2, 0), (0, -bh / 2), (bw / 2, 0), (0, bh / 2)])
-        sk = 0.15 * cap_h
+        sk = 0.12 * cap_h
         skull = box(-sk, 0.0, sk, 0.24 * cap_h).buffer(0.03 * cap_h, quad_segs=8).intersection(
             box(-cap_h, 0.0, cap_h, 0.27 * cap_h))
         cw = 0.10 * cap_h
-        tx = 0.33 * cap_h
+        tx = 0.36 * cap_h  # cord 0.16 cap clear of the skull: the wood finger
+        # between them stays ~2*min_feature wide (no bridge)
         cord = box(tx - cw / 2, 0.0, tx + cw / 2, 0.30 * cap_h)
         tuft = Polygon([(tx - 0.07 * cap_h, 0.28 * cap_h), (tx + 0.07 * cap_h, 0.28 * cap_h),
                         (tx + 0.05 * cap_h, 0.44 * cap_h), (tx - 0.05 * cap_h, 0.44 * cap_h)])
