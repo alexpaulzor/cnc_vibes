@@ -409,7 +409,8 @@ def build_letter_first(words, seed, rp, cfg):
             return q
 
         def radial(a, b, ends):
-            pts = R._wobble([a, b], min(0.8 * t, math.dist(a, b) / 6), 0, 0, flat_ends=True)
+            amp = rng.choice((-1, 1)) * min(0.8 * t, math.dist(a, b) / 6)
+            pts = R._wobble([a, b], amp, 0, 0, flat_ends=True)
             seams.append(dict(pts=pts, kind="lfcut", plain_ok=True, structural=True, ends=ends))
 
         rim = D / 2
@@ -432,7 +433,10 @@ def build_letter_first(words, seed, rp, cfg):
                         goods.append((phi, c_))
                     phi += 0.5 * ppm / rho
                 if goods:
-                    phi, (p_out, p_in, _f, _n) = min(goods, key=lambda pc: abs(pc[0] - th))
+                    # any clean crossing in the letter's middle half
+                    mid_ = [pc for pc in goods if abs(pc[0] - th) <= 0.25 * (hi - lo)]
+                    phi, (p_out, p_in, _f, _n) = rng.choice(mid_) if mid_ else \
+                        min(goods, key=lambda pc: abs(pc[0] - th))
                 else:
                     # no clean crossing (a heart's point): leave from the
                     # letter's extreme point on that side -- it bisects a tip
@@ -446,7 +450,7 @@ def build_letter_first(words, seed, rp, cfg):
         spans.sort(key=lambda s: s[0])
         for i, (lo, hi, _g) in enumerate(spans):
             lo2 = spans[(i + 1) % len(spans)][0] + (2 * math.pi if i + 1 == len(spans) else 0)
-            mid = (hi + lo2) / 2
+            mid = (hi + lo2) / 2 + rng.uniform(-0.2, 0.2) * (lo2 - hi)
             a = land(0, _at(C, mid, r1)) if word_solids else _at(C, mid, r1)
             radial(a, _at(C, mid, rim), ("J" if word_solids else "B", "B"))
 
@@ -468,8 +472,9 @@ def build_letter_first(words, seed, rp, cfg):
                     goods.append((s_, c_))
                 s_ += 0.5 * ppm
             chosen = []
+            phase = rng.uniform(-0.3, 0.3)
             for j in range(1, n_cols + 1):
-                want = span[0] + (span[1] - span[0]) * j / (n_cols + 1)
+                want = span[0] + (span[1] - span[0]) * (j + phase) / (n_cols + 1)
                 cand = [sc for sc in goods if all(abs(sc[0] - u) > 0.5 * col for u, _ in chosen)]
                 if cand:
                     pick = min(cand, key=lambda sc: abs(sc[0] - want))
@@ -572,8 +577,8 @@ def build_letter_first(words, seed, rp, cfg):
                     continue
                 nseg = max(4, int((b - a) * r / (2 * ppm)))
                 pts = [pa] + [_at(C, a + (b - a) * j / nseg, r) for j in range(1, nseg)] + [pb]
-                pts = R._wobble(pts, min(0.6 * t, LineString(pts).length / 8), 0, 0,
-                                flat_ends=True)
+                pts = R._wobble(pts, rng.choice((-1, 1)) * min(0.6 * t, LineString(pts).length / 8),
+                                0, 0, flat_ends=True)
                 seams.append(dict(pts=pts, kind="lfedge", plain_ok=True, structural=True,
                                   ends=("J", "J")))
 

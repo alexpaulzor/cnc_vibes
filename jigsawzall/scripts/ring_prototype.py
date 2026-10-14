@@ -1388,7 +1388,7 @@ def _wobble(pts, amp, wavelength, phase, flat_ends=False, step=2.0):
     still meets whatever it lands on head-on (an S-curve)."""
     ln = LineString(pts)
     L = ln.length
-    if L < 3 * step or amp <= 0:
+    if L < 3 * step or amp == 0:  # negative amp = wobble to the other side
         return [tuple(p) for p in pts]
     n = max(4, int(L / step))
     out = []
