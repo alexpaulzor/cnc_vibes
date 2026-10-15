@@ -1651,14 +1651,91 @@ def generate(words, seed, rp):
         p["serial"] = i
     # QA again on the FINAL pieces (after pocket carving / counter fusing /
     # sliver absorption), so nothing breakable slips in after the search.
-    st["defects_final"] = [
-        (k, (q.x, q.y))
-        for k, q, _i in qa_defects(
-            [p["polygon"] for p in pieces if p["kind"] != "letter"],
-            st.get("bulbs", []), cfg.px_per_mm,
-        )
-    ]
+    nonletter = [p for p in pieces if p["kind"] != "letter"]
+    defects = qa_defects([p["polygon"] for p in nonletter], st.get("bulbs", []), cfg.px_per_mm)
+    # small letter counters (an A's triangle) stay in place on breakaway
+    # bridges instead of dropping through the cutting bed
+    bridged = add_counter_bridges(
+        {i for _k, _q, i in defects}, nonletter, letter_union_of(pieces), cfg)
+    st["bridged_counters"] = len(bridged)
+    st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
     return pieces, cfg, L, st, panel, C
+
+
+def letter_union_of(pieces):
+    return unary_union([p["polygon"] for p in pieces if p["kind"] == "letter"])
+
+
+def _corner_arcpos(ring, min_turn_deg=30.0):
+    """Arc-length positions of a closed ring's corners (vertices turning by
+    more than min_turn_deg after simplification)."""
+    pts = list(ring.coords)[:-1]
+    out, pos = [], 0.0
+    n = len(pts)
+    cum = [0.0]
+    for k in range(n):
+        cum.append(cum[-1] + math.dist(pts[k], pts[(k + 1) % n]))
+    for k in range(n):
+        a, b, c = pts[k - 1], pts[k], pts[(k + 1) % n]
+        a1 = math.atan2(b[1] - a[1], b[0] - a[0])
+        a2 = math.atan2(c[1] - b[1], c[0] - b[0])
+        if abs(math.degrees(math.remainder(a2 - a1, 2 * math.pi))) > min_turn_deg:
+            out.append(cum[k])
+    return out, cum[-1]
+
+
+def counter_bridge_points(poly, ppm, n=3):
+    """n points round a counter's edge, evenly spaced and placed as far from
+    its corners as that spacing allows (an A's triangle gets one near the
+    middle of each side)."""
+    ring = poly.simplify(0.3 * ppm).exterior
+    corners, P = _corner_arcpos(ring)
+    if P <= 0:
+        return []
+    step = P / n
+
+    def gap(s_):  # arc distance to the nearest corner
+        return min((min(abs(s_ - c), P - abs(s_ - c)) for c in corners), default=P)
+
+    best = max((o * 0.25 * ppm for o in range(max(1, int(step / (0.25 * ppm))))),
+               key=lambda o: min(gap((o + k * step) % P) for k in range(n)))
+    out = []
+    for k in range(n):
+        q = ring.interpolate((best + k * step) % P)
+        out.append((q.x, q.y))
+    return out
+
+
+def add_counter_bridges(idxs, nonletter, letters, cfg, small_mm=10.0, n=3):
+    """Hold letter counters in place with breakaway bridges, recorded as
+    image-px points in p["bridges"] (the emitter leaves a short uncut gap of
+    the cut line at each). Bridged: every counter -- a piece lying inside a
+    hole of a letter -- that is in `idxs` (too thin to survive loose) or whose
+    minimum rotated rectangle fits within small_mm x small_mm (small enough to
+    drop through the cutting bed). Each gets n bridges, evenly spaced and away
+    from corners. Returns the set of indices bridged."""
+    ppm = cfg.px_per_mm
+    holes = [Polygon(r) for g in getattr(letters, "geoms", [letters]) for r in g.interiors]
+    done = set()
+    for i, p in enumerate(nonletter):
+        poly = p["polygon"]
+        if not any(h.buffer(0.2 * ppm).contains(poly) for h in holes):
+            continue  # not a counter
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mrr = poly.minimum_rotated_rectangle
+        xs, ys = mrr.exterior.coords.xy
+        sides = [math.hypot(xs[k + 1] - xs[k], ys[k + 1] - ys[k]) / ppm for k in range(2)]
+        if i not in idxs and max(sides) > small_mm:
+            continue
+        pts = counter_bridge_points(poly, ppm, n)
+        if pts:
+            p["bridges"] = pts
+            done.add(i)
+    return done
+
+
+
 
 
 def render_debug_overlay(png_path, seams):

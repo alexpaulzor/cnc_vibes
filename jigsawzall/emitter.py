@@ -36,7 +36,7 @@ from shapely.geometry import (
     MultiPolygon,
     Polygon,
 )
-from shapely.ops import linemerge, unary_union
+from shapely.ops import linemerge, substring, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
 from motion import decimate, warmup_wiggle  # noqa: E402
@@ -930,6 +930,58 @@ def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
     return out
 
 
+def cut_bridges(chains, bridges_mm, gap_mm, tol_mm=0.3):
+    """Leave an uncut `gap_mm` of cut line centred on each bridge point.
+    Every pass of a chain within tol_mm of a point is split there (a re-trace
+    over the same spot is gapped too). Closed chains split into one open path
+    that starts and ends at the gaps."""
+    out = []
+    for ch in chains:
+        ch = [tuple(p) for p in ch]
+        cum = [0.0]
+        for a, b in zip(ch, ch[1:]):
+            cum.append(cum[-1] + math.dist(a, b))
+        total = cum[-1]
+        cuts = []
+        for bx, by in bridges_mm:
+            best = None  # (distance, arc position) of each separate pass
+            for k, (a, b) in enumerate(zip(ch, ch[1:])):
+                seg = math.dist(a, b)
+                if seg == 0:
+                    continue
+                t = max(0.0, min(1.0, ((bx - a[0]) * (b[0] - a[0]) + (by - a[1]) * (b[1] - a[1])) / seg ** 2))
+                d = math.dist((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])), (bx, by))
+                s_pos = cum[k] + t * seg
+                if d < tol_mm:
+                    if best is not None and s_pos - best[1] <= gap_mm:
+                        if d < best[0]:
+                            best = (d, s_pos)
+                        continue
+                    if best is not None:
+                        cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
+                    best = (d, s_pos)
+            if best is not None:
+                cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
+        if not cuts:
+            out.append(ch)
+            continue
+        cuts.sort()
+        line = LineString(ch)
+        keep, pos = [], 0.0
+        for lo, hi in cuts:
+            if lo > pos:
+                keep.append((pos, lo))
+            pos = max(pos, hi)
+        if pos < total:
+            keep.append((pos, total))
+        parts = [list(substring(line, lo, hi).coords) for lo, hi in keep if hi - lo > 1e-6]
+        closed = math.dist(ch[0], ch[-1]) < 1e-6
+        if closed and len(parts) > 1 and keep[0][0] == 0.0 and keep[-1][1] == total:
+            parts = [parts[-1] + parts[0][1:]] + parts[1:-1]
+        out.extend(p for p in parts if len(p) >= 2)
+    return out
+
+
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -941,6 +993,7 @@ def emit_cut_gcode_full(
     power_percent: float | None = None,
     ramp_ms: float = WARMUP_MS,
     max_backtrack_ms: float | None = None,
+    bridge_mm: float = 0.5,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -971,6 +1024,7 @@ def emit_cut_gcode_full(
     bt_ms = ramp_ms if max_backtrack_ms is None else max_backtrack_ms
     max_dup_px = max(0.0, bt_ms) / 1000.0 * (feed / 60.0) * cfg.px_per_mm
 
+    bridges_mm = [img_to_machine_mm(x, y, cfg) for p in pieces for x, y in p.get("bridges", ())]
     pieces = reconcile_letter_pockets(pieces, cfg.px_per_mm)
     edges = extract_unique_edges(pieces)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
@@ -1042,6 +1096,8 @@ def emit_cut_gcode_full(
         _order_chains_min_travel(border_chains, start=last)
     )
     chains = inner_chains + border_chains
+    if bridges_mm and bridge_mm > 0:
+        chains = cut_bridges(chains, bridges_mm, bridge_mm)
     n_edges = len(all_edges)
 
     extra = [
@@ -1064,6 +1120,10 @@ def emit_cut_gcode_full(
     )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
+    if bridges_mm and bridge_mm > 0:
+        extra.append(
+            f"breakaway bridges: {len(bridges_mm)} x {bridge_mm}mm uncut gaps hold tiny "
+            "letter counters in place (snap out by hand)")
 
     lines = _header(
         title=f"full puzzle: word={word}, "
