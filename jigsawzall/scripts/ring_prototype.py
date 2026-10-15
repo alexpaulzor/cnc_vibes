@@ -1776,6 +1776,9 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--cap-max-mm", type=float, default=None,
+                    help="largest outer-letter cap height to try (default 46); lower it to "
+                         "give the center disc and its text more room")
     ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
     ap.add_argument("--font", default=None)
     ap.add_argument(
@@ -1818,6 +1821,7 @@ def main():
         diameter_mm=a.diameter_mm,
         shape=a.shape,
         rows=a.rows,
+        **({"cap_h_max_mm": a.cap_max_mm} if a.cap_max_mm is not None else {}),
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
