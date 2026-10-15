@@ -560,3 +560,29 @@ def test_reconcile_letter_pockets_makes_shared_edge_single():
     once = sum(e.length for e in extract_unique_edges(fixed))
     assert once == pytest.approx(400 + 80)  # panel + pocket, each cut once
     assert raw > once + 70  # before: the letter ring was cut as a second line
+
+
+def test_cut_bridges_gaps_closed_loop_once():
+    from emitter import cut_bridges
+
+    sq = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+    out = cut_bridges([sq], [(5.0, 0.0)], 0.5)
+    assert len(out) == 1  # loop opened at the gap, not split in two
+    length = sum(math.dist(a, b) for a, b in zip(out[0], out[0][1:]))
+    assert abs(length - 39.5) < 1e-6
+    assert math.dist(out[0][0], (5.25, 0)) < 1e-6 and math.dist(out[0][-1], (4.75, 0)) < 1e-6
+
+
+def test_cut_bridges_three_faces_and_untouched_chain():
+    from emitter import cut_bridges
+
+    tri = [(0, 0), (10, 0), (5, 8), (0, 0)]
+    other = [(20, 0), (30, 0)]
+    mids = [(5, 0), (7.5, 4), (2.5, 4)]
+    out = cut_bridges([tri, other], mids, 0.5)
+    assert other in [list(map(tuple, c)) for c in out]
+    tri_parts = [c for c in out if c != other]
+    assert len(tri_parts) == 3
+    total = sum(math.dist(a, b) for c in tri_parts for a, b in zip(c, c[1:]))
+    perim = 10 + 2 * math.dist((0, 0), (5, 8))
+    assert abs(total - (perim - 3 * 0.5)) < 1e-6
