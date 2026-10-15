@@ -2170,25 +2170,71 @@ def letter_union_of(pieces):
     return unary_union([p["polygon"] for p in pieces if p["kind"] == "letter"])
 
 
-def add_counter_bridges(idxs, nonletter, letters, cfg, max_faces=3):
-    """For each nonletter[i] (i in idxs) that is a letter counter -- a piece
-    lying inside a hole of a letter -- record breakaway bridge points
-    (image px) at the midpoints of its longest straight faces in
-    p["bridges"]. The emitter leaves a short uncut gap of the cut line there.
-    Returns the set of indices bridged."""
+def _corner_arcpos(ring, min_turn_deg=30.0):
+    """Arc-length positions of a closed ring's corners (vertices turning by
+    more than min_turn_deg after simplification)."""
+    pts = list(ring.coords)[:-1]
+    out, pos = [], 0.0
+    n = len(pts)
+    cum = [0.0]
+    for k in range(n):
+        cum.append(cum[-1] + math.dist(pts[k], pts[(k + 1) % n]))
+    for k in range(n):
+        a, b, c = pts[k - 1], pts[k], pts[(k + 1) % n]
+        a1 = math.atan2(b[1] - a[1], b[0] - a[0])
+        a2 = math.atan2(c[1] - b[1], c[0] - b[0])
+        if abs(math.degrees(math.remainder(a2 - a1, 2 * math.pi))) > min_turn_deg:
+            out.append(cum[k])
+    return out, cum[-1]
+
+
+def counter_bridge_points(poly, ppm, n=3):
+    """n points round a counter's edge, evenly spaced and placed as far from
+    its corners as that spacing allows (an A's triangle gets one near the
+    middle of each side)."""
+    ring = poly.simplify(0.3 * ppm).exterior
+    corners, P = _corner_arcpos(ring)
+    if P <= 0:
+        return []
+    step = P / n
+
+    def gap(s_):  # arc distance to the nearest corner
+        return min((min(abs(s_ - c), P - abs(s_ - c)) for c in corners), default=P)
+
+    best = max((o * 0.25 * ppm for o in range(max(1, int(step / (0.25 * ppm))))),
+               key=lambda o: min(gap((o + k * step) % P) for k in range(n)))
+    out = []
+    for k in range(n):
+        q = ring.interpolate((best + k * step) % P)
+        out.append((q.x, q.y))
+    return out
+
+
+def add_counter_bridges(idxs, nonletter, letters, cfg, small_mm=10.0, n=3):
+    """Hold letter counters in place with breakaway bridges, recorded as
+    image-px points in p["bridges"] (the emitter leaves a short uncut gap of
+    the cut line at each). Bridged: every counter -- a piece lying inside a
+    hole of a letter -- that is in `idxs` (too thin to survive loose) or whose
+    minimum rotated rectangle fits within small_mm x small_mm (small enough to
+    drop through the cutting bed). Each gets n bridges, evenly spaced and away
+    from corners. Returns the set of indices bridged."""
     ppm = cfg.px_per_mm
     holes = [Polygon(r) for g in getattr(letters, "geoms", [letters]) for r in g.interiors]
     done = set()
-    for i in idxs:
-        poly = nonletter[i]["polygon"]
+    for i, p in enumerate(nonletter):
+        poly = p["polygon"]
         if not any(h.buffer(0.2 * ppm).contains(poly) for h in holes):
-            continue  # not a counter: a real defect, leave it reported
-        ring = list(poly.simplify(0.3 * ppm).exterior.coords)
-        faces = sorted(zip(ring, ring[1:]), key=lambda e: -math.dist(*e))
-        pts = [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-               for a, b in faces[:max_faces] if math.dist(a, b) >= 2.0 * ppm]
+            continue  # not a counter
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mrr = poly.minimum_rotated_rectangle
+        xs, ys = mrr.exterior.coords.xy
+        sides = [math.hypot(xs[k + 1] - xs[k], ys[k + 1] - ys[k]) / ppm for k in range(2)]
+        if i not in idxs and max(sides) > small_mm:
+            continue
+        pts = counter_bridge_points(poly, ppm, n)
         if pts:
-            nonletter[i]["bridges"] = pts
+            p["bridges"] = pts
             done.add(i)
     return done
 
@@ -2252,6 +2298,10 @@ def main():
     ap.add_argument("--hub-ring-mm", type=float, default=None,
                     help="min radial depth of the ring band between the outer letters "
                          "and the center disc (default 4.4 x min_feature_mm)")
+    ap.add_argument("--letter-clearance-mm", type=float, default=None,
+                    help="min wood between a cut and a letter (default min_feature_mm)")
+    ap.add_argument("--border-floor-mm", type=float, default=None,
+                    help="min wood between a tab and the disc edge (default min_feature_mm)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("letterfirst", "hull", "medallion", "flat", "ring"),
@@ -2311,6 +2361,8 @@ def main():
         center_cap_target_mm=a.center_cap_mm,
         **({"hub_ring_min_mm": a.hub_ring_mm} if a.hub_ring_mm is not None else {}),
         **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
+        **({"letter_clearance_mm": a.letter_clearance_mm} if a.letter_clearance_mm is not None else {}),
+        **({"border_floor_mm": a.border_floor_mm} if a.border_floor_mm is not None else {}),
     )
     tag = "-".join(words)
     pieces, cfg, L, st, _panel, _C = generate(words, a.seed, rp)
