@@ -437,11 +437,20 @@ def center_letters(rp, ppm, r_h, C):
 def _center_layout(rp, ppm, r_h, C, cap_mm, track):
     """One layout attempt at a given cap height and tracking; None if it
     doesn't fit the hub."""
-    w1, w2 = rp.center_text
     limit = r_h * rp.center_text_fit_frac
     font = _center_font(rp, cap_mm, ppm)
     cap = cap_mm * ppm
     out = []
+    if rp.center_style == "flat" and len(rp.center_text) == 1:
+        # one line (a long family name on its own), centred on the hub
+        g1, x1, _t1 = _word_advances(rp.center_text[0], font, track)
+        out = [affinity.translate(g, C[0] + x, C[1] + cap / 2) for g, x in zip(g1, x1)]
+        r = max(
+            math.hypot(px - C[0], py - C[1])
+            for g in out for px, py in g.convex_hull.exterior.coords
+        )
+        return out if r <= limit else None
+    w1, w2 = rp.center_text
     if rp.center_style == "flat":
         # the strip between the two lines is wood too -- same floor applies
         gap = max(rp.center_text_gap_mm, rp.center_min_gap_mm) * ppm + 1
