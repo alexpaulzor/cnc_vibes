@@ -97,6 +97,13 @@ class RingParams:
     cap_h_max_mm: float = 46.0  # == banner_letter_h_mm (upper bound)
     cap_h_min_mm: float = 18.0
     min_gap_mm: float = 14.0  # tab fit (tab_height + 2R = 11) + letter_gap_extra 3
+    # Letters inside a name keep (about) the minimum gap; all spare angle goes
+    # to the gaps on either side of the ornaments instead of spreading every
+    # letter out evenly.
+    pack_words: bool = False
+    # After assembly, split any piece whose longest side exceeds this (mm)
+    # with a tabbed cross seam (0 = off).
+    split_mm: float = 0.0
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
     hub_ring_min_mm: float = 26.0  # min radial thickness of the hub ring
     hub_r_min_mm: float = 22.0
@@ -738,14 +745,21 @@ def fit_ring(words, rp: RingParams, ppm):
         ext = [ang_extent(solid_of(g), Rin) for g in locs]
         span = sum(l + r for l, r in ext)
         beta = (2 * math.pi - span) / n  # equal angular gap
+        gaps_ang = [beta] * n
+        if rp.pack_words and rp.ornament:
+            wide = [k for k in range(n) if labels[k] == "*" or labels[(k + 1) % n] == "*"]
+            tight = 1.3 * rp.min_gap_mm * ppm / Rin
+            spare = 2 * math.pi - span - tight * (n - len(wide))
+            if wide and spare / len(wide) > tight:
+                gaps_ang = [spare / len(wide) if k in wide else tight for k in range(n)]
         # hub sizing
         r_h = max(rp.hub_r_min_mm * ppm, n * rp.hub_arc_mm * ppm / (2 * math.pi))
         r_h = min(r_h, Rin - rp.hub_ring_min_mm * ppm)
         ths, t = [], 0.0
-        for l, r in ext:
+        for k, (l, r) in enumerate(ext):
             t += l
             ths.append(t)
-            t += r + beta
+            t += r + gaps_ang[k]
         # rotate so the ornament (or the join) is at the bottom, text centred on top
         join = ths[-1] if rp.ornament else ths[-1] + ext[-1][1] + beta / 2
         ths = [(x - join + math.pi) % (2 * math.pi) for x in ths]
@@ -826,6 +840,57 @@ def inward_normal(panel, p, C):
     if nx * (C[0] - p[0]) + ny * (C[1] - p[1]) < 0:
         nx, ny = -nx, -ny
     return (nx, ny)
+
+
+def split_seams(pieces, letter_union, panel, rp, ppm, curved):
+    """A cross seam through the middle of every piece whose longest side
+    exceeds rp.split_mm, square to that side; ends land on the piece's own
+    boundary (another seam, a letter, or the rim)."""
+    out = []
+    lim = rp.split_mm * ppm
+    for poly in pieces:
+        if poly.is_empty:
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mrr = poly.minimum_rotated_rectangle
+        xs, ys = mrr.exterior.coords.xy
+        e = [((xs[k], ys[k]), (xs[k + 1], ys[k + 1])) for k in range(2)]
+        long_e = max(e, key=lambda q: math.dist(*q))
+        if math.dist(*long_e) <= lim:
+            continue
+        ux = (long_e[1][0] - long_e[0][0]) / math.dist(*long_e)
+        uy = (long_e[1][1] - long_e[0][1]) / math.dist(*long_e)
+        c = poly.centroid
+        if not poly.contains(c):
+            c = poly.representative_point()
+        far = 400 * ppm
+        cut = LineString([(c.x + uy * far, c.y - ux * far), (c.x - uy * far, c.y + ux * far)])
+        hit = cut.intersection(poly)
+        segs = [g for g in getattr(hit, "geoms", [hit]) if g.geom_type == "LineString"]
+        if not segs:
+            continue
+        seg = min(segs, key=lambda g: g.distance(c))
+        a, b = seg.coords[0], seg.coords[-1]
+        if math.dist(a, b) < 8 * ppm:
+            continue
+        halves = poly.difference(seg.buffer(0.5))
+        parts = sorted(getattr(halves, "geoms", [halves]), key=lambda g: -g.area)
+        if len(parts) < 2 or parts[1].area < (15 * ppm) ** 2:
+            continue
+
+        def kind(q):
+            if panel.exterior.distance(Point(q)) < 1.0:
+                return "B"
+            if letter_union.distance(Point(q)) < 1.0:
+                return "L"
+            return "T"
+
+        pts = [a, b]
+        n = max(4, int(math.dist(a, b) / (2 * ppm)))
+        pts = [(a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n) for i in range(n + 1)]
+        out.append(dict(pts=curved(pts), kind="split", plain_ok=True, ends=(kind(a), kind(b))))
+    return out
 
 
 def n_sub(length_px, rp, ppm):
@@ -1211,6 +1276,17 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
+        for _round in range(3 if rp.split_mm > 0 else 0):
+            extra = split_seams(surround, letter_union, panel, rp, ppm, curved)
+            if not extra:
+                break
+            seams += extra
+            with _oriented_oversized():
+                surround, counters, st = assemble_qa(
+                    seams, letter_union, tab_solids, background, panel, cfg, C,
+                    distinct_tabs=rp.distinct_tabs,
+                    untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
+                )
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
@@ -1787,6 +1863,10 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--pack-words", action="store_true",
+                    help="keep letters inside a name tight; put the spare room either side of the ornaments")
+    ap.add_argument("--split-mm", type=float, default=0.0,
+                    help="split any piece longer than this (mm) with a tabbed cross seam (0 = off)")
     ap.add_argument("--target-w-mm", type=float, default=None,
                     help="target piece width (default 46); lower it to cut wide gaps between "
                          "few, small names into regular-size pieces")
@@ -1841,6 +1921,8 @@ def main():
         **({"cap_h_max_mm": a.cap_max_mm} if a.cap_max_mm is not None else {}),
         **({"hub_r_min_mm": a.hub_r_min_mm} if a.hub_r_min_mm is not None else {}),
         **({"target_w_mm": a.target_w_mm} if a.target_w_mm is not None else {}),
+        pack_words=a.pack_words,
+        split_mm=a.split_mm,
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
