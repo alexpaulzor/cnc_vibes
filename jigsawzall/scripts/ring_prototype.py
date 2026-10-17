@@ -1047,9 +1047,11 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="rimsub", ends=("T", eb)))
         # --- middle-band subdivisions (wide gaps on short names) ---------------
-        if len(levels) == 2:
+        # every band between two neighbouring ring seams (1 band with rows=2,
+        # 2 with rows=3) gets cross seams when its gap is wide
+        for lv in range(len(levels) - 1):
             for g in range(n):
-                lo_h, up_h = ring_seams.get((g, 0)), ring_seams.get((g, 1))
+                lo_h, up_h = ring_seams.get((g, lv)), ring_seams.get((g, lv + 1))
                 if lo_h is None or up_h is None:
                     continue
                 w = (LineString(lo_h).length + LineString(up_h).length) / 2
@@ -1776,6 +1778,9 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--target-w-mm", type=float, default=None,
+                    help="target piece width (default 46); lower it to cut wide gaps between "
+                         "few, small names into regular-size pieces")
     ap.add_argument("--hub-r-min-mm", type=float, default=None,
                     help="smallest center-disc radius (default 22); raise it for bigger center text "
                          "when there are few outer names")
@@ -1826,6 +1831,7 @@ def main():
         rows=a.rows,
         **({"cap_h_max_mm": a.cap_max_mm} if a.cap_max_mm is not None else {}),
         **({"hub_r_min_mm": a.hub_r_min_mm} if a.hub_r_min_mm is not None else {}),
+        **({"target_w_mm": a.target_w_mm} if a.target_w_mm is not None else {}),
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
         font=a.font,
