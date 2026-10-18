@@ -101,6 +101,7 @@ class RingParams:
     # to the gaps on either side of the ornaments instead of spreading every
     # letter out evenly.
     pack_words: bool = False
+    keep_seams: bool = False  # cut seams plain rather than dropping them
     ornament_scale: float = 1.0  # heart/dot/star size relative to the default
     # After assembly, split any piece whose longest side exceeds this (mm)
     # with a tabbed cross seam (0 = off).
@@ -1293,6 +1294,12 @@ def build_ring(words, seed, rp: RingParams, cfg):
             )
 
         _snap_notch_ends(seams, tab_solids, ppm)
+        if rp.keep_seams:
+            # never drop a seam for want of a tab: cut it plain instead of
+            # merging two cells into one big piece
+            for sm in seams:
+                sm["keep"] = True
+                sm["plain_ok"] = True
         # split long cells on the raw (untabbed) seam lines, so split ends
         # land exactly on the seams they meet; repeat until nothing is long.
         # Splits go first so they get first pick of tab positions.
@@ -1301,6 +1308,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
                                 letter_union, panel, rp, ppm, curved)
             if not extra:
                 break
+            if rp.keep_seams:
+                for sm in extra:
+                    sm["keep"] = True
             seams[:0] = extra
         with _oriented_oversized():
             surround, counters, st = assemble_qa(
@@ -1601,7 +1611,8 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             # keep the seam untabbed only if it's needed for structure (hub
             # arcs, spokes); otherwise drop it like wave-grid does.
             cand = LineString(rs)
-            if ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand):
+            if s.get("keep") or (((ea, eb) == ("J", "J") or s.get("plain_ok"))
+                                 and not conflict(cand)):
                 tabbed.append(rs)
                 accepted.append(cand)
                 s["final"] = cand
@@ -1884,6 +1895,8 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--keep-seams", action="store_true",
+                    help="never drop a seam that found no tab -- cut it plain (no merged pieces)")
     ap.add_argument("--ornament-scale", type=float, default=1.0,
                     help="scale the ornaments (hearts etc.) up or down; 1.0 = default size")
     ap.add_argument("--pack-words", action="store_true",
@@ -1946,6 +1959,7 @@ def main():
         **({"target_w_mm": a.target_w_mm} if a.target_w_mm is not None else {}),
         pack_words=a.pack_words,
         ornament_scale=a.ornament_scale,
+        keep_seams=a.keep_seams,
         split_mm=a.split_mm,
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
