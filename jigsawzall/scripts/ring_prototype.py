@@ -847,6 +847,24 @@ def inward_normal(panel, p, C):
     return (nx, ny)
 
 
+def raw_cells(seams, letter_union, background, panel):
+    """Background cells cut by the raw seam lines (no tabs yet)."""
+    lines = []
+    for sm in seams:
+        pts = [tuple(p) for p in sm["pts"]]
+        if len(pts) < 2:
+            continue
+        ea, eb = sm["ends"]
+        if ea in ("L", "T", "B"):
+            pts = _extend(pts, 0, 2)
+        if eb in ("L", "T", "B"):
+            pts = _extend(pts, 1, 2)
+        lines.append(LineString(pts))
+    net = shapely.union_all(lines + [panel.boundary, letter_union.boundary], grid_size=0.1)
+    return [f for f in polygonize(net)
+            if background.contains(f.representative_point()) and f.area > 1.0]
+
+
 def split_seams(pieces, letter_union, panel, rp, ppm, curved):
     """A cross seam through the middle of every piece whose longest side
     exceeds rp.split_mm, square to that side; ends land on the piece's own
@@ -1275,23 +1293,21 @@ def build_ring(words, seed, rp: RingParams, cfg):
             )
 
         _snap_notch_ends(seams, tab_solids, ppm)
+        # split long cells on the raw (untabbed) seam lines, so split ends
+        # land exactly on the seams they meet; repeat until nothing is long.
+        # Splits go first so they get first pick of tab positions.
+        for _round in range(4 if rp.split_mm > 0 else 0):
+            extra = split_seams(raw_cells(seams, letter_union, background, panel),
+                                letter_union, panel, rp, ppm, curved)
+            if not extra:
+                break
+            seams[:0] = extra
         with _oriented_oversized():
             surround, counters, st = assemble_qa(
                 seams, letter_union, tab_solids, background, panel, cfg, C,
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
-        for _round in range(3 if rp.split_mm > 0 else 0):
-            extra = split_seams(surround, letter_union, panel, rp, ppm, curved)
-            if not extra:
-                break
-            seams += extra
-            with _oriented_oversized():
-                surround, counters, st = assemble_qa(
-                    seams, letter_union, tab_solids, background, panel, cfg, C,
-                    distinct_tabs=rp.distinct_tabs,
-                    untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
-                )
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
