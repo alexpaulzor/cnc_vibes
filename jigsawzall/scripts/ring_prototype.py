@@ -101,6 +101,7 @@ class RingParams:
     # to the gaps on either side of the ornaments instead of spreading every
     # letter out evenly.
     pack_words: bool = False
+    ornament_scale: float = 1.0  # heart/dot/star size relative to the default
     # After assembly, split any piece whose longest side exceeds this (mm)
     # with a tabbed cross seam (0 = off).
     split_mm: float = 0.0
@@ -738,7 +739,11 @@ def fit_ring(words, rp: RingParams, ppm):
                 word_of.append(i)
             orn = orn_kinds[i % len(orn_kinds)]
             if orn:
-                locs.append(ornament_local(orn, cap))
+                o_ = ornament_local(orn, cap)
+                if rp.ornament_scale != 1.0:
+                    o_ = affinity.scale(o_, rp.ornament_scale, rp.ornament_scale,
+                                        origin=(0, -cap / 2))
+                locs.append(o_)
                 labels.append("*")
                 word_of.append(None)
         n = len(locs)
@@ -1863,6 +1868,8 @@ def main():
                     help="refuse to write GCode with any X/Y coordinate outside [0, this]; "
                          "the machine hard-stops near Y=297")
     ap.add_argument("--rows", type=int, choices=(2, 3), default=3)
+    ap.add_argument("--ornament-scale", type=float, default=1.0,
+                    help="scale the ornaments (hearts etc.) up or down; 1.0 = default size")
     ap.add_argument("--pack-words", action="store_true",
                     help="keep letters inside a name tight; put the spare room either side of the ornaments")
     ap.add_argument("--split-mm", type=float, default=0.0,
@@ -1922,6 +1929,7 @@ def main():
         **({"hub_r_min_mm": a.hub_r_min_mm} if a.hub_r_min_mm is not None else {}),
         **({"target_w_mm": a.target_w_mm} if a.target_w_mm is not None else {}),
         pack_words=a.pack_words,
+        ornament_scale=a.ornament_scale,
         split_mm=a.split_mm,
         variants=a.variants,
         ornament=None if a.ornament == "none" else a.ornament,
