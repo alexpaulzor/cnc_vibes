@@ -1304,8 +1304,11 @@ def build_ring(words, seed, rp: RingParams, cfg):
         # land exactly on the seams they meet; repeat until nothing is long.
         # Splits go first so they get first pick of tab positions.
         for _round in range(4 if rp.split_mm > 0 else 0):
-            extra = split_seams(raw_cells(seams, letter_union, background, panel),
-                                letter_union, panel, rp, ppm, curved)
+            # the hub disc keeps its own spokes: splitting a wedge would land
+            # T-junctions mid-spoke and leave the spokes no room for tabs
+            cells = [c_ for c_ in raw_cells(seams, letter_union, background, panel)
+                     if Point(C).distance(c_.representative_point()) > r_h]
+            extra = split_seams(cells, letter_union, panel, rp, ppm, curved)
             if not extra:
                 break
             if rp.keep_seams:
