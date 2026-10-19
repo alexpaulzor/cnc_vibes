@@ -2,5 +2,5 @@ WARNING outline etch: letter at (121,178)mm: 1.0mm inset splits it into 2 part(s
 WARNING outline etch: letter at (201,178)mm: 1.0mm inset splits it into 2 part(s) -- stroke too thin
 WARNING outline etch: letter at (169,160)mm: 1.0mm inset splits it into 2 part(s) -- stroke too thin
 WARNING outline etch: letter at (218,178)mm: 1.0mm inset splits it into 3 part(s) -- stroke too thin
--> out/reuters_k/h68_s3.gcode  (12183 lines), toolpath out/reuters_k/h68_s3.png
-ADAM-JOYCE: cap 27.0mm, min letter gap 18.6mm, hub r 68mm, 72 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 7) -> out/reuters_k/h68_s3.png
+-> out/reuters_k2/h68_s3.gcode  (11992 lines), toolpath out/reuters_k2/h68_s3.png
+ADAM-JOYCE: cap 27.0mm, min letter gap 18.6mm, hub r 68mm, 68 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 3) -> out/reuters_k2/h68_s3.png

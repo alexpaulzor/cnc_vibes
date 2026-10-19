@@ -1,2 +1,0 @@
--> out/reuters_r2/s3.gcode  (12503 lines), toolpath out/reuters_r2/s3.png
-ADAM-JOYCE: cap 20.0mm, min letter gap 18.4mm, hub r 75mm, 73 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 1, 0, 0, 5) -> out/reuters_r2/s3.png
