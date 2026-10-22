@@ -81,3 +81,39 @@ the orpot/jigsawzall tools use). `--feed/--power/--passes` override the profile.
 ```bash
 uv run --with pytest python -m pytest quickcut/tests -q
 ```
+
+## grbl_model.py — what speed does the head actually reach?
+
+Under static M3 the diode's power is constant, so energy per mm is
+power / **actual** speed. `grbl_model.py` replays G-code through a model of
+the sender link (char-counting RX buffer, ping-pong, a lines/s ceiling, or
+SD-card), GRBL's planner (N-block lookahead, `$11` junction deviation,
+`$110/$111` max rate, `$120/$121` accel, newest block ends at rest), `$12`
+arc segmentation, and the M3/M4/M5 sync stops. It reports, per laser-on
+stroke, the predicted average/min speed and **energy factor** (time spent /
+time at commanded F; 2.0 = double the dose), commands/s, and hotspots.
+
+```bash
+python quickcut/grbl_model.py job.gcode                     # UNVERIFIED defaults
+python quickcut/grbl_model.py job.gcode --dollars dump.txt  # saved `$$` + `$I`
+python quickcut/grbl_model.py job.gcode --accel 2000 --sender ping_pong --latency-ms 10
+```
+
+Every value not read from a dump/flag is printed as `UNVERIFIED default`
+(GRBL 1.1 stock values, not this machine's). `scale_power_to_speed()` is a
+software M4 for controllers where M4 doesn't fire: per-move `S` scaled to the
+predicted speed.
+
+## arcfit.py — polylines to G2/G3
+
+Greedy ArcWelder-style fit (no maintained Python package does this): grows
+arcs through exact endpoints while every vertex stays within `tol_mm` and no
+chord bulges more than `tol_mm + source_tol_mm`. GRBL re-chops each arc into
+fine `$12` chords, so this cuts the streamed line count and the junction
+angles, not the planner's block count.
+
+`smooth_polyline()` + `fit_smooth_arcs()` go further for traced (staircase)
+outlines: a smoothing spline kept within a max shape change of the trace,
+then tangent-continuous biarcs, so consecutive moves join without corners
+(GRBL's `$11` junction slowdowns disappear). Needs scipy. In the etch
+emitter: `emit_etch_gcode(smooth_mm=0.10)` / `ring_prototype.py --etch-smooth-mm 0.10`.

@@ -85,6 +85,12 @@ def _parse_paths(gcode: str):
             paths.append(cur)
         elif line.startswith("M5"):
             on = False
+        if on and line.startswith(("G2 X", "G3 X")):
+            from jigsaw import _arc_pts
+
+            cur.extend(_arc_pts((x, y), line))
+            x, y = cur[-1]
+            continue
         m = dict(re.findall(r"([XY])(-?[\d.]+)", line))
         if m:
             x = float(m.get("X", x))
@@ -357,6 +363,32 @@ class PieceFinding:
 # a neck too narrow to survive being picked up.
 MIN_PROVEN_TAB_STEM_PX = 22.0
 MIN_PROVEN_TAB_R_PX = 11.0
+
+
+def lint_motion(gcode: str, threshold: float = 1.3, machine=None, sender=None) -> list:
+    """Predicted over-burn under static M3: strokes the GRBL motion model
+    (quickcut/grbl_model.py) expects to run slower than their commanded F by
+    more than `threshold` on average (energy/mm = power / actual speed), or
+    1.5x that in their worst 2mm. Severity "info" while the model's machine
+    profile is UNVERIFIED -- the motion test plate is what promotes it."""
+    import sys
+    from pathlib import Path
+
+    qc = str(Path(__file__).resolve().parents[2] / "quickcut")
+    if qc not in sys.path:
+        sys.path.insert(0, qc)
+    import grbl_model
+
+    res = grbl_model.simulate(gcode, machine, sender)
+    sev = "info" if res.machine.unverified() else "defect"
+    return [
+        GcodeFinding(
+            kind="motion_slowdown", severity=sev, path_idx=f.stroke, point=f.at,
+            detail=f"{f.name}: energy/mm x{f.factor:.2f} (worst 2mm x{f.worst_window:.2f}), "
+                   f"{f.detail}",
+        )
+        for f in sorted(grbl_model.lint_motion(res, threshold), key=lambda f: -f.factor)
+    ]
 
 
 def lint_tab_hardware(cfg, min_class: float = 1.0) -> list:
