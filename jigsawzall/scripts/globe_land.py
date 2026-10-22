@@ -313,22 +313,32 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
     def too_big(g):
         return oversized(g) or _mrr_sides(g)[1] > max_len_mm * ppm
 
-    stuck = []
-    for _round in range(60):
-        k = next((k for k, p in enumerate(pcs) if too_big(p["polygon"])), None)
-        if k is None:
+    # splitting and the final neck/strip clean-up can each undo the other
+    # (a clean-up fold can regrow a piece; a cut can pinch a neck): alternate
+    st["trimmed"] = 0
+    for _pass in range(3):
+        stuck = []
+        for _round in range(60):
+            k = next((k for k, p in enumerate(pcs) if too_big(p["polygon"])), None)
+            if k is None:
+                break
+            p = pcs.pop(k)
+            parts = _graticule_split(p["polygon"], lon0, lat0, R, C, ppm,
+                                     min_part_mm=min_piece_mm, r=r)
+            if not parts:
+                stuck.append(p)
+                continue
+            pcs += [{"polygon": q, "names": list(p["names"])} for q in parts]
+            st["split"] += 1
+        pcs += stuck
+        moved = _final_clean(pcs, r, ppm)
+        st["trimmed"] += moved
+        if not moved and not stuck:
             break
-        p = pcs.pop(k)
-        parts = _graticule_split(p["polygon"], lon0, lat0, R, C, ppm, min_part_mm=min_piece_mm, r=r)
-        if not parts:
-            st.setdefault("unsplit_names", []).append("/".join(p["names"]))
-            stuck.append(p)
-            continue
-        pcs += [{"polygon": q, "names": list(p["names"])} for q in parts]
-        st["split"] += 1
-    pcs += stuck
+    stuck = [p for p in pcs if too_big(p["polygon"])]
     st["unsplittable"] = len(stuck)
-    st["trimmed"] = _final_clean(pcs, r, ppm)
+    if stuck:
+        st["unsplit_names"] = ["/".join(p["names"]) for p in stuck]
     for p in pcs:
         p["polygon"] = p["polygon"].buffer(0)
         # borders of the countries merged into this piece: etch, not cut
@@ -346,8 +356,9 @@ def piece_issues(q, r, ppm):
     every strip an r-opening removes (rounding a cut's corner loses a little
     triangle -- fine; a strip is long). Same idea as ring qa_defects."""
     out = []
-    lobes = sorted(_parts(q.buffer(-r)), key=lambda p: -p.area)
-    out += [p for p in lobes[1:] if p.area > 2 * ppm ** 2]
+    for rr in (r, 1.5 * ppm):  # 1.5mm = ring qa_defects' own neck test
+        lobes = sorted(_parts(q.buffer(-rr)), key=lambda p: -p.area)
+        out += [p for p in lobes[1:] if p.area > 2 * ppm ** 2]
     lost = q.difference(_open(q, r)).buffer(-0.2 * ppm).buffer(0.2 * ppm)
     out += [p for p in _parts(lost) if p.area > 2 * ppm ** 2 and p.length / 2 > 4 * ppm]
     return out
@@ -379,6 +390,17 @@ def _final_clean(pcs, r, ppm, rounds=3):
             o = sorted(_parts(_open(q, r)), key=lambda g: -g.area)
             if not o:
                 continue
+            if len(o) == 1:
+                # a waist the opening re-closes (two lobes close together):
+                # cut straight across it
+                parts = _cut_neck(q, r, ppm)
+                if parts:
+                    pcs[i]["polygon"] = parts[0]
+                    pcs.extend({"polygon": g, "names": list(pcs[i]["names"]), "borders": []}
+                               for g in parts[1:])
+                    moved += 1
+                    changed = True
+                    continue
             # a neck splits off a real lobe: that lobe is its own piece
             lobes = [g for g in o[1:] if _mrr_sides(g)[0] >= 4 * r]
             pcs[i]["polygon"] = o[0]
@@ -403,10 +425,43 @@ def _final_clean(pcs, r, ppm, rounds=3):
     return moved
 
 
-def _repair_split(res, r, ppm):
+def _cut_neck(q, r, ppm):
+    """Split q across its narrowest waist: between the two biggest lobes an
+    erosion leaves, square to the line joining them. Returns the parts
+    (largest first) or None."""
+    from shapely.ops import nearest_points
+
+    for rr in (r, 1.5 * ppm):
+        lobes = sorted(_parts(q.buffer(-rr)), key=lambda p: -p.area)
+        if len(lobes) > 1 and lobes[1].area > 2 * ppm ** 2:
+            break
+    else:
+        return None
+    a, b = nearest_points(lobes[0], lobes[1])
+    mx, my = (a.x + b.x) / 2, (a.y + b.y) / 2
+    d = max(math.dist((a.x, a.y), (b.x, b.y)), 1e-6)
+    ux, uy = (b.x - a.x) / d, (b.y - a.y) / d
+    h = 2 * rr + d
+    line = LineString([(mx - uy * h, my + ux * h), (mx + uy * h, my - ux * h)])
+    try:
+        res = sorted((g for g in split(q, line).geoms if g.area > 0), key=lambda g: -g.area)
+    except Exception:
+        return None
+    return res if len(res) >= 2 else None
+
+
+def _repair_split(res, r, ppm, min_part_mm=0.0):
     """Give each part's thin bits (where the cut grazed the coast or a
-    letter pocket) to the other part they touch most."""
-    res = list(res)
+    letter pocket), and any whole part narrower than min_part_mm, to the
+    other part they touch most."""
+    res = sorted(res, key=lambda q: -q.area)
+    for q in [q for q in res[1:] if _mrr_sides(q)[0] < min_part_mm * ppm]:
+        res.remove(q)
+        j = max(range(len(res)), key=lambda k: _shared(q, res[k], 0.1 * ppm))
+        u = unary_union([res[j], q])
+        res[j] = u if isinstance(u, Polygon) else max(_parts(u), key=lambda g: g.area)
+    if len(res) < 2:
+        return res
     for i in range(len(res)):
         o = _open(res[i], r)
         bits = [b for b in _parts(res[i].difference(o)) if b.area > 0.05 * ppm ** 2]
@@ -461,7 +516,9 @@ def _graticule_split(poly, lon0, lat0, R, C, ppm, snap_deg=5.0, min_part_mm=7.0,
                     continue
                 res = sorted(res, key=lambda q: -q.area)
                 if not _clean_split(res, r, ppm, min_part_mm, line):
-                    res = sorted(_repair_split(res, r, ppm), key=lambda q: -q.area)
+                    res = sorted(_repair_split(res, r, ppm, min_part_mm), key=lambda q: -q.area)
+                    if len(res) < 2:
+                        continue
                     if (abs(sum(q.area for q in res) - poly.area) > 0.01 * poly.area
                             or not _clean_split(res, r, ppm, min_part_mm, line)):
                         continue
