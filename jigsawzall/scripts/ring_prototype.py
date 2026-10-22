@@ -198,7 +198,7 @@ class RingParams:
     center_loose_cap_max_mm: float = 30.0
     # Print one line per variant (score + elapsed + ETA) while generating.
     progress: bool = False
-    # Globe land as CUT pieces (RING_SPEC.md §13.13): (lon0, lat0) of an
+    # Globe land as CUT pieces (RING_SPEC.md §13.14): (lon0, lat0) of an
     # orthographic globe view, or None. Countries become tabless drop-in
     # pieces like letters: seams stop at the coast, land is carved out of
     # the ocean pieces as pockets, and the letters cut their own pockets

@@ -486,7 +486,7 @@ def lint_pieces(pieces, cfg, panel, seams=None, center_medallion="_unset") -> li
 
     for p in pieces:
         if p["kind"] == "land":
-            # globe land (RING_SPEC §13.13): tabless drop-in pieces -- held to
+            # globe land (RING_SPEC §13.14): tabless drop-in pieces -- held to
             # the piece-size limit and the 3mm veneer neck/strip floor, not
             # to the background's sliver/aspect rules (a country is what it is)
             poly = p["polygon"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Globe LAND as cut pieces (RING_SPEC.md §13.13): countries projected onto
+"""Globe LAND as cut pieces (RING_SPEC.md §13.14): countries projected onto
 the same orthographic globe as globe_etch.py, clipped to the visible
 hemisphere, then cleaned into pieces that survive 3mm veneer -- no tabs,
 they drop into pockets in the ocean pieces the way letters do.
@@ -111,13 +111,15 @@ def project_country(polys, lon0, lat0, R, cx, cy):
         return None
     g = unary_union(parts)
 
-    def squash(x, y, z=None):
-        rho = math.hypot(x, y)
-        k = math.sin(rho) / rho if rho > 1e-12 else 1.0
-        return cx + x * k * R, cy - y * k * R
+    def squash(xy):
+        import numpy as np
 
-    from shapely.ops import transform
-    out = transform(lambda xs, ys, zs=None: tuple(zip(*[squash(x, y) for x, y in zip(xs, ys)])), g)
+        rho = np.hypot(xy[:, 0], xy[:, 1])
+        k = np.where(rho > 1e-12, np.sin(rho) / np.maximum(rho, 1e-12), 1.0)
+        return np.column_stack((cx + xy[:, 0] * k * R, cy - xy[:, 1] * k * R))
+
+    import shapely
+    out = shapely.transform(g, squash)
     return out.buffer(0)
 
 
@@ -455,8 +457,11 @@ def _repair_split(res, r, ppm, min_part_mm=0.0):
     letter pocket), and any whole part narrower than min_part_mm, to the
     other part they touch most."""
     res = sorted(res, key=lambda q: -q.area)
-    for q in [q for q in res[1:] if _mrr_sides(q)[0] < min_part_mm * ppm]:
-        res.remove(q)
+    while len(res) > 1:
+        small = [k for k in range(1, len(res)) if _mrr_sides(res[k])[0] < min_part_mm * ppm]
+        if not small:
+            break
+        q = res.pop(small[-1])
         j = max(range(len(res)), key=lambda k: _shared(q, res[k], 0.1 * ppm))
         u = unary_union([res[j], q])
         res[j] = u if isinstance(u, Polygon) else max(_parts(u), key=lambda g: g.area)

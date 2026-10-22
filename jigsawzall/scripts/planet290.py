@@ -4,7 +4,7 @@ veneer settings.
 
 Usage: planet290.py SEED OUTDIR [LON LAT] [--land]
 
---land: countries are CUT as tabless drop-in pieces (RING_SPEC.md §13.13)
+--land: countries are CUT as tabless drop-in pieces (RING_SPEC.md §13.14)
 instead of etched coastlines; the etch keeps the graticule + limb, the
 borders of countries merged into one piece, and the ornament art."""
 import math
