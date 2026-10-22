@@ -166,12 +166,20 @@ def _lines(g):
     return [] if m is None else ([m] if m.geom_type == "LineString" else list(m.geoms))
 
 
-def chop_seams(seams, land, ppm, min_mm=3.0):
-    """Seams run UNDER the land: each seam is cut where it crosses land, and
-    every remaining stretch of at least min_mm becomes its own seam ending
-    on the coast ("L", like a seam ending on a letter). Stretches touching
-    an original end keep that end's type; structural ("J", "J") seams stay
-    cuttable plain (never force-dropped) after the chop."""
+def chop_seams(seams, land, ppm, min_mm=3.0, approach_mm=3.0):
+    """Seams run UNDER the land: each seam is cut where it comes within
+    approach_mm of land, and every remaining stretch of at least min_mm
+    becomes its own seam whose cut end steps straight onto the nearest coast
+    point ("L", like a seam ending on a letter) -- so a seam meets the coast
+    roughly square instead of grazing it and leaving a thin wedge of ocean.
+    Stretches touching an original end keep that end's type. Chopped seams
+    may cut plain (plain_ok) when no tab fits -- merging their two ocean
+    pieces instead is what makes oversized pieces around a continent. (A
+    plain cut can leave a rim piece with no grip at all: build_ring scores
+    those -- ring_prototype.loose_rim_pieces -- as QA defects.)"""
+    from shapely.ops import nearest_points
+
+    zone = land.buffer(approach_mm * ppm, quad_segs=6)
     out = []
     for s in seams:
         pts = [tuple(p) for p in s["pts"]]
@@ -179,22 +187,23 @@ def chop_seams(seams, land, ppm, min_mm=3.0):
             out.append(s)
             continue
         ls = LineString(pts)
-        if not ls.intersects(land):
+        if not ls.intersects(zone):
             out.append(s)
             continue
         p0, p1 = Point(pts[0]), Point(pts[-1])
-        for g in _lines(ls.difference(land)):
-            if g.length < min_mm * ppm:
-                continue
+        for g in _lines(ls.difference(zone)):
             q = list(g.coords)
-            if Point(q[0]).distance(p1) < Point(q[0]).distance(p0) and Point(q[-1]).distance(p0) < 0.5:
+            if Point(q[-1]).distance(p0) < 0.5 or Point(q[0]).distance(p1) < 0.5:
                 q = q[::-1]
             ea = s["ends"][0] if Point(q[0]).distance(p0) < 0.5 else "L"
             eb = s["ends"][1] if Point(q[-1]).distance(p1) < 0.5 else "L"
-            ns = dict(s, pts=q, ends=(ea, eb), land_chopped=True)
-            if s["ends"] == ("J", "J"):
-                ns["plain_ok"] = True
-            out.append(ns)
+            if ea == "L":
+                q.insert(0, tuple(nearest_points(land, Point(q[0]))[0].coords[0]))
+            if eb == "L":
+                q.append(tuple(nearest_points(land, Point(q[-1]))[0].coords[0]))
+            if LineString(q).length < min_mm * ppm + 2 * approach_mm * ppm * (ea == eb == "L"):
+                continue
+            out.append(dict(s, pts=q, ends=(ea, eb), land_chopped=True, plain_ok=True))
     return out
 
 
@@ -218,13 +227,15 @@ def _open(g, r):
     return g.buffer(-r, quad_segs=6).buffer(r, quad_segs=6).intersection(g)
 
 
-def _clean_mass(land, obstacles, r, rounds=3):
+def _clean_mass(land, obstacles, r, rounds=3, r_close=None):
     """Close then open the whole land mass, with the letters (obstacles)
-    counting as solid for the closing, so neither land nor the ocean left
-    between land and letters keeps a feature narrower than 2r."""
+    counting as solid for the closing, so neither land (opening radius r)
+    nor the ocean left between land and letters (closing radius r_close)
+    keeps a feature narrower than twice that radius."""
+    r_close = r if r_close is None else r_close
     for _ in range(rounds):
         solid = unary_union([land, obstacles])
-        closed = solid.buffer(r, quad_segs=6).buffer(-r, quad_segs=6)
+        closed = solid.buffer(r_close, quad_segs=6).buffer(-r_close, quad_segs=6)
         land = closed.difference(obstacles).buffer(0)
         land = _open(land, r).buffer(0)
     return land
@@ -232,7 +243,7 @@ def _clean_mass(land, obstacles, r, rounds=3):
 
 def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
                 min_feature_mm=3.0, min_piece_mm=7.0, island_min_mm=4.0,
-                merge_area_mm2=120.0, max_len_mm=64.0):
+                merge_area_mm2=120.0, max_len_mm=64.0, min_ocean_mm=6.0):
     """Returns (pieces, stats): pieces = [{"polygon", "names"}] in image px.
     `obstacles` = the letters' solid union (land never overlaps a letter);
     `disc` = where land may exist (the globe disc minus its ocean margin);
@@ -248,7 +259,10 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
         g = g.intersection(disc).difference(obstacles)
         if not g.is_empty:
             raw.append((c["name"], g))
-    land = _clean_mass(unary_union([g for _n, g in raw]), obstacles, r)
+    # ocean narrower than min_ocean_mm between land and land / letters would
+    # be a strip no seam layout can tile: it becomes land
+    land = _clean_mass(unary_union([g for _n, g in raw]), obstacles, r,
+                       r_close=(min_ocean_mm / 2 + 0.2) * ppm)
     st = {"countries": len(raw), "merged": 0, "split": 0, "dropped_islands": 0}
 
     def big_enough(q):
@@ -305,7 +319,7 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
         if k is None:
             break
         p = pcs.pop(k)
-        parts = _graticule_split(p["polygon"], lon0, lat0, R, C, ppm, min_part_mm=min_piece_mm)
+        parts = _graticule_split(p["polygon"], lon0, lat0, R, C, ppm, min_part_mm=min_piece_mm, r=r)
         if not parts:
             st.setdefault("unsplit_names", []).append("/".join(p["names"]))
             stuck.append(p)
@@ -314,6 +328,7 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
         st["split"] += 1
     pcs += stuck
     st["unsplittable"] = len(stuck)
+    st["trimmed"] = _final_clean(pcs, r, ppm)
     for p in pcs:
         p["polygon"] = p["polygon"].buffer(0)
         # borders of the countries merged into this piece: etch, not cut
@@ -326,7 +341,94 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
     return pcs, st
 
 
-def _graticule_split(poly, lon0, lat0, R, C, ppm, snap_deg=5.0, min_part_mm=7.0):
+def piece_issues(q, r, ppm):
+    """Breakable spots of q: every neck (an r-erosion splits off a lobe) and
+    every strip an r-opening removes (rounding a cut's corner loses a little
+    triangle -- fine; a strip is long). Same idea as ring qa_defects."""
+    out = []
+    lobes = sorted(_parts(q.buffer(-r)), key=lambda p: -p.area)
+    out += [p for p in lobes[1:] if p.area > 2 * ppm ** 2]
+    lost = q.difference(_open(q, r)).buffer(-0.2 * ppm).buffer(0.2 * ppm)
+    out += [p for p in _parts(lost) if p.area > 2 * ppm ** 2 and p.length / 2 > 4 * ppm]
+    return out
+
+
+def piece_ok(q, r, ppm, min_part_mm=0.0, near=None):
+    """At least min_part_mm across and no piece_issues (only those within
+    3r of `near`, if given -- e.g. a new cut line)."""
+    if _mrr_sides(q)[0] < min_part_mm * ppm:
+        return False
+    iss = piece_issues(q, r, ppm)
+    if near is not None:
+        iss = [p for p in iss if p.distance(near) < 3 * r]
+    return not iss
+
+
+def _final_clean(pcs, r, ppm, rounds=3):
+    """Last pass over the finished pieces: a thin bit (neck side-lobe or
+    strip) left where a border or fold-in pinched a piece goes to the
+    neighbouring land piece it touches most when that leaves both clean,
+    else back to the ocean. Returns the number of bits moved."""
+    moved = 0
+    for _ in range(rounds):
+        changed = False
+        for i in range(len(pcs)):
+            q = pcs[i]["polygon"]
+            if not piece_issues(q, r, ppm):
+                continue
+            o = sorted(_parts(_open(q, r)), key=lambda g: -g.area)
+            if not o:
+                continue
+            # a neck splits off a real lobe: that lobe is its own piece
+            lobes = [g for g in o[1:] if _mrr_sides(g)[0] >= 4 * r]
+            pcs[i]["polygon"] = o[0]
+            pcs.extend({"polygon": g, "names": list(pcs[i]["names"]), "borders": []}
+                       for g in lobes)
+            bits = [b for b in _parts(q.difference(unary_union([o[0]] + lobes)))
+                    if b.area > 0.05 * ppm ** 2]
+            for b in bits:
+                cand = sorted(((_shared(b, p["polygon"], 0.1 * ppm), j) for j, p in enumerate(pcs)
+                               if j != i), reverse=True)
+                for sh, j in cand[:2]:
+                    if sh <= 0:
+                        break
+                    u = unary_union([pcs[j]["polygon"], b])
+                    if isinstance(u, Polygon) and not piece_issues(u, r, ppm):
+                        pcs[j]["polygon"] = u
+                        break
+                moved += 1
+                changed = True
+        if not changed:
+            break
+    return moved
+
+
+def _repair_split(res, r, ppm):
+    """Give each part's thin bits (where the cut grazed the coast or a
+    letter pocket) to the other part they touch most."""
+    res = list(res)
+    for i in range(len(res)):
+        o = _open(res[i], r)
+        bits = [b for b in _parts(res[i].difference(o)) if b.area > 0.05 * ppm ** 2]
+        if not bits or not _parts(o):
+            continue
+        res[i] = max(_parts(o), key=lambda q: q.area)
+        for b in bits:
+            j = max((k for k in range(len(res)) if k != i),
+                    key=lambda k: _shared(b, res[k], 0.1 * ppm), default=None)
+            if j is None or _shared(b, res[j], 0.1 * ppm) <= 0:
+                j = i
+            u = unary_union([res[j], b])
+            res[j] = max(_parts(u), key=lambda q: q.area) if not isinstance(u, Polygon) else u
+    return res
+
+
+def _clean_split(res, r, ppm, min_part_mm, line=None):
+    """A split is usable only if every part passes piece_ok near the cut."""
+    return all(piece_ok(q, r, ppm, min_part_mm, near=line) for q in res)
+
+
+def _graticule_split(poly, lon0, lat0, R, C, ppm, snap_deg=5.0, min_part_mm=7.0, r=None):
     """Split poly in two along the projected meridian or parallel through it
     that best balances the halves (preferring a 5-degree graticule line), cut
     across its long axis. Returns the parts, or None."""
@@ -358,8 +460,11 @@ def _graticule_split(poly, lon0, lat0, R, C, ppm, snap_deg=5.0, min_part_mm=7.0)
                 if len(res) < 2:
                     continue
                 res = sorted(res, key=lambda q: -q.area)
-                if any(_mrr_sides(q)[0] < min_part_mm * ppm for q in res):
-                    continue
+                if not _clean_split(res, r, ppm, min_part_mm, line):
+                    res = sorted(_repair_split(res, r, ppm), key=lambda q: -q.area)
+                    if (abs(sum(q.area for q in res) - poly.area) > 0.01 * poly.area
+                            or not _clean_split(res, r, ppm, min_part_mm, line)):
+                        continue
                 cut_len = line.intersection(poly).length
                 bal = res[1].area / poly.area if len(res) == 2 else res[-1].area / poly.area
                 snapped = abs(v / snap_deg - round(v / snap_deg)) < 1e-6
@@ -367,11 +472,11 @@ def _graticule_split(poly, lon0, lat0, R, C, ppm, snap_deg=5.0, min_part_mm=7.0)
                 cost = (abs(0.5 - bal) * 4) + cut_len / (poly.length / 2) - (0.15 if snapped else 0)
                 cands.append((cost, res))
     if not cands:
-        return _straight_split(poly, ppm, min_part_mm)
+        return _straight_split(poly, ppm, min_part_mm, r)
     return min(cands, key=lambda t: t[0])[1]
 
 
-def _straight_split(poly, ppm, min_part_mm):
+def _straight_split(poly, ppm, min_part_mm, r):
     """Fallback for a strip the graticule only runs along (land hugging the
     limb): a straight cut square to its long axis, through its middle."""
     with warnings.catch_warnings():
@@ -388,7 +493,7 @@ def _straight_split(poly, ppm, min_part_mm):
         line = LineString([(c[0] - uy * 2 * L_, c[1] + ux * 2 * L_),
                            (c[0] + uy * 2 * L_, c[1] - ux * 2 * L_)])
         res = [q for q in split(poly, line).geoms if q.area > 0]
-        if len(res) >= 2 and all(_mrr_sides(q)[0] >= min_part_mm * ppm for q in res):
+        if len(res) >= 2 and _clean_split(res, r, ppm, min_part_mm, line):
             return res
     return None
 

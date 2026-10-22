@@ -345,7 +345,7 @@ def lint_gcode(
 
 @dataclass
 class PieceFinding:
-    kind: str  # "oversized" | "thin_bridge" | "sliver" | "border_nub" | "no_tab"
+    kind: str  # "oversized" | "thin_bridge" | "sliver" | "border_nub" | "no_tab" | "land_*" | "loose_rim"
     serial: int | None
     centroid: tuple[float, float]
     detail: str
@@ -485,6 +485,19 @@ def lint_pieces(pieces, cfg, panel, seams=None, center_medallion="_unset") -> li
     )
 
     for p in pieces:
+        if p["kind"] == "land":
+            # globe land (RING_SPEC §13.13): tabless drop-in pieces -- held to
+            # the piece-size limit and the 3mm veneer neck/strip floor, not
+            # to the background's sliver/aspect rules (a country is what it is)
+            poly = p["polygon"]
+            cen = poly.representative_point()
+            cen = (cen.x, cen.y)
+            if R.oversized_oriented(poly, cfg):
+                findings.append(PieceFinding("oversized", p["serial"], cen, "land piece exceeds the target piece size"))
+            for k, q, _i in R.qa_defects([poly], [], cfg.px_per_mm):
+                findings.append(PieceFinding(f"land_{k}", p["serial"], (q.x, q.y),
+                                             "land piece has a sub-3mm neck/strip"))
+            continue
         if p["kind"] != "cell":
             continue
         poly = p["polygon"]

@@ -69,8 +69,14 @@ J.render_preview(pieces, cfg, f"{tag}  cap {L['cap_mm']:.0f}mm  {len(pieces)}pc"
                  + (f" ({n_land} land)" if LAND else "") + f"  score {st['score']}", out)
 draw_strokes(out, strokes)
 bad = st.get("defects", []) + st.get("defects_final", [])
+bad += [("loose_rim", q) for q in st.get("loose_rim", [])]
 if bad:
     print("QA FAILED:", ", ".join(f"{k} ({x/ppm:.0f},{y/ppm:.0f})mm" for k, (x, y) in bad))
+import ring_lint as RL  # noqa: E402
+pf = [f for f in RL.lint_pieces(pieces, cfg, panel, st.get("seams"), st.get("center_medallion"))
+      if f.kind not in ("no_tab",)]
+print("lint_pieces:", ", ".join(f"{f.kind} #{f.serial}" for f in pf) or "clean")
+print("etch coverage:", ", ".join(f"#{f.serial}" for f in RL.lint_etch_coverage(pieces, strokes)) or "clean")
 material = load_material("plywood_veneer_3ply_3mm")
 cut = J._emit_cut_for(pieces, material, cfg, "PLANET", "ring", mode="static",
                       power_percent=100.0, min_segment_mm=0.3, max_backtrack_ms=2000.0)
@@ -81,6 +87,8 @@ R._check_xy_envelope(cut, 290.0)
 open(f"{D}/s{seed}_cut_only.gcode", "w").write(cut)
 R._check_xy_envelope(g, 290.0)
 open(f"{D}/s{seed}.gcode", "w").write(g)
+print("lint_gcode cut:", RL.lint_gcode(cut, diameter_mm=290.0).summary())
+print("lint_gcode etch:", RL.lint_gcode(etch, diameter_mm=290.0, is_etch=True).summary())
 J.render_gcode_previews(g, cfg, Path(f"{D}/s{seed}_toolpath"), title=f"{tag} cut")
 print(f"{tag}: cap {L['cap_mm']:.1f}mm, hub r {L['r_h']/ppm:.0f}mm, {len(pieces)} pieces "
       f"({n_land} land, {st.get('bridged_land', 0)} bridged), "

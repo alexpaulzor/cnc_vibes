@@ -1360,6 +1360,18 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
+        land_v = land
+        if land:
+            surround, land_v = absorb_ocean_into_land(surround, land, st["bulbs"], cfg,
+                                                      rp.land_min_feature_mm)
+            st["defects"] = [(k, (q.x, q.y)) for k, q, _i in
+                             qa_defects(surround + [p["polygon"] for p in land_v],
+                                        st["bulbs"], ppm)]
+        st["land"] = land_v
+        if land:
+            # a coast-chopped seam may cut plain: never leave a rim piece gripless
+            st["defects"] += [("loose_rim", q) for q in loose_rim_pieces(
+                [{"kind": "cell", "polygon": g} for g in surround], st["bulbs"], panel, cfg)]
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
@@ -1381,7 +1393,6 @@ def build_ring(words, seed, rp: RingParams, cfg):
     # for lint_pieces here) can still pass it through and get the same
     # oversized-check exemption, instead of silently losing it.
     st["center_medallion"] = _center_medallion
-    st["land"] = land
     return pieces, letter_union, cfg, L, st, panel, C
 
 
@@ -1679,6 +1690,84 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
     return surround, counters, st
 
 
+def absorb_ocean_into_land(surround, land, bulbs, cfg, min_feature_mm=3.0):
+    """Ocean scraps a seam layout can't make whole -- a sliver or thin
+    piece wedged between the coast and a seam or letter -- become part of
+    the land piece they share the most border with (the coast grows by the
+    scrap; nothing is cut there). Only tab-free scraps sharing at least a
+    tenth of their outline with that land piece, and only when the grown
+    land piece stays a clean, not-oversized piece. Returns (surround, land)
+    as new lists; `land` items are copied, never mutated."""
+    import globe_land as GL
+
+    ppm = cfg.px_per_mm
+    r = (min_feature_mm / 2 + 0.2) * ppm
+    eps = 0.05 * ppm
+    land = [dict(p) for p in land]
+    tabs = unary_union([b.buffer(1.0 * ppm) for b in bulbs]) if bulbs else None
+    keep = []
+    for f in sorted(surround, key=lambda g: g.area):
+        bad = G._vg_sliver(f, cfg) or G._vg_thin_bridge(f, cfg) or qa_defects([f], [], ppm)
+        if not bad or (tabs is not None and f.intersects(tabs)):
+            keep.append(f)
+            continue
+        best = max(((GL._shared(f, p["polygon"], 0.1 * ppm), k) for k, p in enumerate(land)),
+                   default=(0.0, None))
+        if best[1] is None or best[0] < f.length / 10:
+            keep.append(f)
+            continue
+        # faces come off a 0.1px-snapped polygonize: close the hairline gap
+        u = unary_union([land[best[1]]["polygon"].buffer(eps), f.buffer(eps)]).buffer(-eps)
+        if (not isinstance(u, Polygon) or oversized_oriented(u, cfg)
+                or not GL.piece_ok(u, r, ppm)):
+            keep.append(f)
+            continue
+        land[best[1]]["polygon"] = u
+    # a neck / strip on an ocean piece where it meets the coast (a seam end
+    # stepping onto land, two capes nearly closing a bay): the thin part
+    # goes to the land it touches, the ocean piece keeps its solid body
+    out = []
+    for f in keep:
+        if not qa_defects([f], bulbs, ppm):
+            out.append(f)
+            continue
+        # the solid parts: the body, plus any real lobe a sub-3mm neck joins
+        # to it -- that lobe becomes its own (tabless, drop-in) ocean piece
+        solid = sorted(GL._parts(GL._open(f, r)), key=lambda g: -g.area)
+        solid = solid[:1] + [g for g in solid[1:] if g.area >= (10 * ppm) ** 2]
+        if not solid:
+            out.append(f)
+            continue
+        whole = f
+        for b in GL._parts(whole.difference(unary_union(solid))):
+            if b.area < 0.05 * ppm ** 2 or (tabs is not None and b.intersects(tabs)):
+                continue
+            sh, k = max(((GL._shared(b, p["polygon"], 0.1 * ppm), k) for k, p in enumerate(land)),
+                        default=(0.0, None))
+            if k is None or sh < b.length / 5:
+                continue
+            base = land[k]["polygon"]
+            u = unary_union([base.buffer(eps), b.buffer(eps)]).buffer(-eps)
+            if not isinstance(u, Polygon):
+                continue
+            if not GL.piece_ok(u, r, ppm):
+                # only the part of the scrap that doesn't give the coast a
+                # spit of its own; the rest stays ocean
+                add = b.intersection(GL._open(u, r))
+                u = unary_union([base.buffer(eps), add.buffer(eps)]).buffer(-eps)
+                if add.area < 0.5 * ppm ** 2 or not isinstance(u, Polygon) or not GL.piece_ok(u, r, ppm):
+                    continue
+                b = add
+            f2 = f.difference(b.buffer(eps))
+            if oversized_oriented(u, cfg) or (len(qa_defects(GL._parts(f2), bulbs, ppm))
+                                              >= len(qa_defects([f], bulbs, ppm))):
+                continue
+            land[k]["polygon"] = u
+            f = f2
+        out += [g for g in GL._parts(f) if g.area > ppm ** 2]
+    return out, land
+
+
 def oversized_oriented(poly, cfg):
     """Rotation-invariant _vg_oversized: ring pieces sit at every angle, so the
     axis-aligned bbox test would flag diagonal pieces falsely."""
@@ -1833,6 +1922,7 @@ def generate(words, seed, rp):
     st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
     st["land_oversized"] = sum(1 for p in nonletter
                                if p["kind"] == "land" and oversized_oriented(p["polygon"], cfg))
+    st["loose_rim"] = loose_rim_pieces(nonletter, st.get("bulbs", []), panel, cfg)
     return pieces, cfg, L, st, panel, C
 
 
@@ -1910,6 +2000,24 @@ def add_counter_bridges(idxs, nonletter, letters, cfg, small_mm=10.0, n=3):
 
 
 
+
+
+def loose_rim_pieces(nonletter, bulbs, panel, cfg):
+    """Centroids of background pieces on the outer edge with no tab or
+    socket at all: nothing holds them in the disc. (An enclosed tabless
+    piece -- a letter counter, an ocean "lake" ringed by land -- is held by
+    its surroundings like a letter is; only the rim can let one slide out.)"""
+    ppm = cfg.px_per_mm
+    tabs = unary_union([b.buffer(1.0 * ppm) for b in bulbs]) if bulbs else None
+    out = []
+    for p in nonletter:
+        g = p["polygon"]
+        if p["kind"] != "cell" or g.buffer(0.6).intersection(panel.boundary).length < 1.0 * ppm:
+            continue
+        if tabs is None or not g.intersects(tabs):
+            c = g.representative_point()
+            out.append((c.x, c.y))
+    return out
 
 
 def add_land_bridges(nonletter, cfg, small_mm=10.0, n=3):
