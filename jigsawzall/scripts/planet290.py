@@ -17,6 +17,18 @@ pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
 ppm = cfg.px_per_mm
 Rp = rp.diameter_mm / 2 * ppm
 strokes = GE.build_globe(-122.4, 37.7, Rp, C[0], C[1], GE.load_coastlines())
+import math
+def _len(st):
+    return sum(math.dist(a, b) for a, b in zip(st, st[1:]))
+def _keep(st):
+    L_ = _len(st) / ppm
+    closed = len(st) > 2 and math.dist(st[0], st[-1]) < 0.05 * ppm
+    # tiny islands: a closed loop gets warm-up laps (~83mm at F5000), so a
+    # 2mm island is etched dozens of times over with tiny moves -> stalls
+    return L_ >= 2.0 and not (closed and L_ < 20.0)
+n0 = len(strokes)
+strokes = [st for st in strokes if _keep(st)]
+print(f"dropped {n0 - len(strokes)} tiny globe strokes of {n0}")
 strokes = strokes + GE.ensure_full_coverage(pieces, strokes)
 # the ornament's own p + ring art, upright, on its disc
 for k, lab in enumerate(L["labels"]):
@@ -37,6 +49,8 @@ cut = J._emit_cut_for(pieces, material, cfg, "PLANET", "ring", mode="static",
 etch = emit_etch_gcode(strokes, material, cfg, "PLANET globe + logo art", min_segment_mm=0.3,
                        arc_tolerance_mm=0.05)
 g = combine_passes(etch, cut)
+R._check_xy_envelope(cut, 290.0)
+open(f"{D}/s{seed}_cut_only.gcode", "w").write(cut)
 R._check_xy_envelope(g, 290.0)
 open(f"{D}/s{seed}.gcode", "w").write(g)
 from pathlib import Path
