@@ -376,6 +376,8 @@ def _emit_cut_for(
 _WOOD_LIGHT = (228, 204, 168)
 _LETTER_FILL = (200, 90, 90)
 _CELL_FILL_BASE = (210, 215, 230)
+# globe land pieces (ring_prototype globe_land): earthy, so the map reads
+_LAND_FILLS = ((150, 190, 110), (186, 170, 112), (124, 168, 98), (170, 150, 96), (138, 182, 132))
 _CUT_LINE = (230, 0, 0)  # bright red: cut lines; etch overlays draw black
 
 
@@ -437,7 +439,9 @@ def render_preview(pieces, cfg, title: str, out_path: Path, origins=None):
     n = len(pieces)
     for piece in pieces:
         kind = piece.get("kind", "cell")
-        fill = _LETTER_FILL if kind == "letter" else _pastel(piece["serial"], n)
+        fill = (_LETTER_FILL if kind == "letter"
+                else _LAND_FILLS[piece["serial"] % len(_LAND_FILLS)] if kind == "land"
+                else _pastel(piece["serial"], n))
         draw_geom(piece["polygon"], fill)
 
     title_font = _load_font(36)

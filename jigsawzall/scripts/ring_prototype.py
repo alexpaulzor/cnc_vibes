@@ -198,6 +198,18 @@ class RingParams:
     center_loose_cap_max_mm: float = 30.0
     # Print one line per variant (score + elapsed + ETA) while generating.
     progress: bool = False
+    # Globe land as CUT pieces (RING_SPEC.md §13.13): (lon0, lat0) of an
+    # orthographic globe view, or None. Countries become tabless drop-in
+    # pieces like letters: seams stop at the coast, land is carved out of
+    # the ocean pieces as pockets, and the letters cut their own pockets
+    # into the land. The globe's limb sits globe_margin_mm inside the rim so
+    # the ocean band outside the land is never thinner than a rim piece.
+    globe_land: tuple | None = None
+    globe_margin_mm: float = 16.0
+    land_min_feature_mm: float = 3.0  # no land neck / strait narrower (3mm veneer floor)
+    land_min_piece_mm: float = 7.0  # smaller countries fold into a neighbour
+    land_island_min_mm: float = 4.0  # islands narrower than this aren't cut at all
+    land_bridge_mm: float = 10.0  # land pieces within this square get breakaway bridges
 
 
 # --------------------------------------------------------------------------
@@ -993,7 +1005,31 @@ def build_ring(words, seed, rp: RingParams, cfg):
     letters_solid = unary_union(solids)
     # tabs/face classification must also keep clear of loose center letters
     tab_solids = unary_union(solids + center_solids) if center_solids else letters_solid
-    background = panel.difference(letter_union)
+    # Globe land (rp.globe_land): fixed pieces, computed once for all
+    # variants. cut_union = everything the background is carved around.
+    land = []
+    land_union = None
+    cut_union = letter_union
+    letter_tab_solids = tab_solids
+    if rp.globe_land is not None:
+        import globe_land as GL
+
+        lon0, lat0 = rp.globe_land
+        R_g = D / 2 - rp.globe_margin_mm * ppm
+        obst = unary_union(solids + center_solids + ([world[-1]] if _center_medallion else []))
+        land, lst = GL.land_pieces(
+            GL.load_countries(), lon0, lat0, R_g, C, Point(C).buffer(R_g, quad_segs=128),
+            obst, ppm, lambda g: oversized_oriented(g, cfg),
+            min_feature_mm=rp.land_min_feature_mm, min_piece_mm=rp.land_min_piece_mm,
+            island_min_mm=rp.land_island_min_mm,
+        )
+        L["globe_r_px"] = R_g
+        L["land_stats"] = lst
+        if land:
+            land_union = unary_union([p["polygon"] for p in land])
+            cut_union = unary_union([letter_union, land_union])
+            tab_solids = unary_union([tab_solids, land_union])
+    background = panel.difference(cut_union)
     far = 2 * D
     # Square stock: a circle of radius Rc (inscribed + corner_ring_mm) clipped by
     # the square fences off the 4 deep corners; radial rim seams stop on it (T)
@@ -1293,7 +1329,10 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ),
             )
 
-        _snap_notch_ends(seams, tab_solids, ppm)
+        # letters only: a coastline's bays are not letter notches
+        _snap_notch_ends(seams, letter_tab_solids, ppm)
+        if land_union is not None:
+            seams = GL.chop_seams(seams, land_union, ppm)
         if rp.keep_seams:
             # never drop a seam for want of a tab: cut it plain instead of
             # merging two cells into one big piece
@@ -1306,9 +1345,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
         for _round in range(4 if rp.split_mm > 0 else 0):
             # the hub disc keeps its own spokes: splitting a wedge would land
             # T-junctions mid-spoke and leave the spokes no room for tabs
-            cells = [c_ for c_ in raw_cells(seams, letter_union, background, panel)
+            cells = [c_ for c_ in raw_cells(seams, cut_union, background, panel)
                      if Point(C).distance(c_.representative_point()) > r_h]
-            extra = split_seams(cells, letter_union, panel, rp, ppm, curved)
+            extra = split_seams(cells, cut_union, panel, rp, ppm, curved)
             if not extra:
                 break
             if rp.keep_seams:
@@ -1317,7 +1356,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
             seams[:0] = extra
         with _oriented_oversized():
             surround, counters, st = assemble_qa(
-                seams, letter_union, tab_solids, background, panel, cfg, C,
+                seams, cut_union, tab_solids, background, panel, cfg, C,
                 distinct_tabs=rp.distinct_tabs,
                 untabbed_kinds=("hubarc",) if rp.hub_rotates else (),
             )
@@ -1342,6 +1381,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
     # for lint_pieces here) can still pass it through and get the same
     # oversized-check exemption, instead of silently losing it.
     st["center_medallion"] = _center_medallion
+    st["land"] = land
     return pieces, letter_union, cfg, L, st, panel, C
 
 
@@ -1722,7 +1762,10 @@ def generate(words, seed, rp):
     piece_polys, letter_union, cfg, L, st, panel, C = build_ring(
         words, seed, rp, cfg
     )
-    frags = G.carve_letter_pockets(piece_polys, letter_union)
+    land = st.get("land") or []
+    cut_union = (unary_union([letter_union] + [p["polygon"] for p in land])
+                 if land else letter_union)
+    frags = G.carve_letter_pockets(piece_polys, cut_union)
     frags = G.fuse_counter_fragments(frags, letter_union, cfg)
     if rp.shape == "square":
         frags = G.round_panel_corners(frags, cfg)
@@ -1737,6 +1780,10 @@ def generate(words, seed, rp):
     ]
     pieces = list(frags) + [
         {"parent": None, "polygon": g, "kind": "letter"} for g in lp
+    ] + [
+        {"parent": None, "polygon": p["polygon"], "kind": "land", "names": p["names"],
+         "borders": p.get("borders", [])}
+        for p in land
     ]
     pieces = G.absorb_letter_slivers(pieces, letter_union, cfg)
     # jigsaw.render_preview's draw_geom always paints a piece's holes WHITE,
@@ -1780,7 +1827,12 @@ def generate(words, seed, rp):
     bridged = add_counter_bridges(
         {i for _k, _q, i in defects}, nonletter, letter_union_of(pieces), cfg)
     st["bridged_counters"] = len(bridged)
+    # small land pieces (islands, micro-countries) stay in place on
+    # breakaway bridges too, like small letter counters
+    st["bridged_land"] = add_land_bridges(nonletter, cfg, rp.land_bridge_mm)
     st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
+    st["land_oversized"] = sum(1 for p in nonletter
+                               if p["kind"] == "land" and oversized_oriented(p["polygon"], cfg))
     return pieces, cfg, L, st, panel, C
 
 
@@ -1858,6 +1910,28 @@ def add_counter_bridges(idxs, nonletter, letters, cfg, small_mm=10.0, n=3):
 
 
 
+
+
+def add_land_bridges(nonletter, cfg, small_mm=10.0, n=3):
+    """Breakaway bridges (p["bridges"], as add_counter_bridges) on every land
+    piece whose minimum rotated rectangle fits within small_mm x small_mm --
+    a tabless island that small would drop through the cutting bed."""
+    ppm = cfg.px_per_mm
+    k = 0
+    for p in nonletter:
+        if p["kind"] != "land":
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mrr = p["polygon"].minimum_rotated_rectangle
+        xs, ys = mrr.exterior.coords.xy
+        if max(math.hypot(xs[q + 1] - xs[q], ys[q + 1] - ys[q]) for q in range(2)) > small_mm * ppm:
+            continue
+        pts = counter_bridge_points(p["polygon"], ppm, n)
+        if pts:
+            p["bridges"] = pts
+            k += 1
+    return k
 
 
 def render_debug_overlay(png_path, seams):
