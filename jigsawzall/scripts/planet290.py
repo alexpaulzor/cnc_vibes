@@ -1,6 +1,6 @@
 """PLANET 290mm on the stable branch: real wordmark + brand-ring ornament,
 globe etch (SF-centred) + the ornament's p/ring art, MICHELS/RIEDELS
-veneer settings. Usage: planet290.py SEED OUTDIR"""
+veneer settings. Usage: planet290.py SEED OUTDIR [LON LAT]"""
 import sys, os
 J_DIR = "/home/user/michels_good/jigsawzall"
 sys.path.insert(0, J_DIR + "/scripts"); sys.path.insert(0, J_DIR)
@@ -10,13 +10,17 @@ from emitter import load_material, emit_etch_gcode, combine_passes
 from letter_outline_etch import draw_strokes
 
 seed, D = int(sys.argv[1]), sys.argv[2]
+# globe centre (lon, lat); default near San Francisco
+LON, LAT = (float(sys.argv[3]), float(sys.argv[4])) if len(sys.argv) > 4 else (-122.4, 37.7)
+# globe centre (lon, lat); default near San Francisco
+LON, LAT = (float(sys.argv[3]), float(sys.argv[4])) if len(sys.argv) > 4 else (-122.4, 37.7)
 rp = R.RingParams(diameter_mm=290, rim_mm=27.0, hub_ring_min_mm=30.0,
                   font=R.PLANET_LOGO_FONT, ornament=R.PLANET_LOGO_ORNAMENT,
                   distinct_tabs=True, variants=12)
 pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
 ppm = cfg.px_per_mm
 Rp = rp.diameter_mm / 2 * ppm
-strokes = GE.build_globe(-122.4, 37.7, Rp, C[0], C[1], GE.load_coastlines())
+strokes = GE.build_globe(LON, LAT, Rp, C[0], C[1], GE.load_coastlines())
 import math
 def _len(st):
     return sum(math.dist(a, b) for a, b in zip(st, st[1:]))
