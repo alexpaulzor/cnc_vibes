@@ -205,7 +205,7 @@ class RingParams:
     # into the land. The globe's limb sits globe_margin_mm inside the rim so
     # the ocean band outside the land is never thinner than a rim piece.
     globe_land: tuple | None = None
-    globe_margin_mm: float = 16.0
+    globe_margin_mm: float = 24.0
     land_min_feature_mm: float = 3.0  # no land neck / strait narrower (3mm veneer floor)
     land_min_piece_mm: float = 7.0  # smaller countries fold into a neighbour
     land_island_min_mm: float = 4.0  # islands narrower than this aren't cut at all
