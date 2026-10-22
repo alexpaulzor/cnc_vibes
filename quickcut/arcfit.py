@@ -480,6 +480,16 @@ def _corner_indices(pts, corner_deg, closed):
 
 
 def _smooth_piece(points, max_dev_mm, closed, spacing_mm, iterations):
+    """_smooth_piece_fit, or the piece unchanged if the spline fit rejects it
+    (scipy splprep raises on degenerate input, e.g. a short corner-split
+    piece whose densified points nearly coincide)."""
+    try:
+        return _smooth_piece_fit(points, max_dev_mm, closed, spacing_mm, iterations)
+    except ValueError:
+        return [tuple(p) for p in points]
+
+
+def _smooth_piece_fit(points, max_dev_mm, closed, spacing_mm, iterations):
     import numpy as np
     from scipy.interpolate import splev, splprep
 
