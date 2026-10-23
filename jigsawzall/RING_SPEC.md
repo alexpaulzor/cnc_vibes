@@ -1220,6 +1220,31 @@ weight seats it, but glue or 4 feet if it feels loose.
   bisects its search (capped at 40mm of path per biarc): it was quadratic
   in stroke length (minutes per graticule meridian).
 
+### 13.17 Stand feet nested on their own sheet (`scripts/stand_feet_sheet.py`)
+
+Alex's tilt test: the puzzle stays in its frame to at least 88deg from
+horizontal, and a third sheet is fine as long as one sheet makes feet for
+many puzzles. Steeper display = less reach: the tray's centre of mass sits
+150*cos(angle) behind the slot (75mm at 60deg, 39mm at 75deg), so the foot
+shrinks. Profile: a low wedge -- 6mm of wood under the slot, a 6mm lip in
+front of the tray, the slot's back wall resting 25mm up the tray's back,
+the base reaching `margin_mm` (25) behind the COM (~10deg knock-back
+before it tips, at any angle). Feet nest head-to-tail in pairs.
+
+| angle | foot (mm)   | feet / 300mm sheet | stands at 2 feet |
+|-------|-------------|--------------------|------------------|
+| 60    | 108.8 x 27.5 | 27 | 13 |
+| 70    | 85.3 x 29.2  | 36 | 18 |
+| 75 (default) | 72.9 x 29.8 | 36 | 18 |
+| 80    | 60.2 x 30.1  | 54 | 27 |
+| 85    | 47.3 x 30.0  | 63 | 31 |
+
+(script output, margin 25mm.) The frame is no longer cut: it stays the
+full 300 square, and its straight bottom edge (MDF + frame) sits in the
+slots. Same unverified points as §13.15: slot fit vs real stock thickness
+(test-cut a slot first), and a single 3mm foot can wobble sideways a
+little before the tray seats it.
+
 ## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
 
 A colleague's name for a full-size (300mm default) ring puzzle: "PRINCIPAL"
