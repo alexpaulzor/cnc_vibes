@@ -70,7 +70,8 @@ if LAND:
     strokes += [b for p in pieces if p["kind"] == "land" for b in p.get("borders", [])]
 else:
     Rg = rp.diameter_mm / 2 * ppm
-    strokes = GE.build_globe(LON, LAT, Rg, C[0], C[1], GE.load_coastlines())
+    strokes = GE.build_globe(LON, LAT, Rg, C[0], C[1], GE.load_coastlines(),
+                             meridian_lat_max=75)  # the cut pole starburst burnt
 
 
 def _len(st):

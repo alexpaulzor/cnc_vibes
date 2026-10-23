@@ -58,9 +58,29 @@ def _load_planet_logo_glyphs():
 
         path = Path(__file__).resolve().parent.parent / "data" / "planet_logo_glyphs.json"
         data = json.loads(path.read_text())
-        glyphs = {k: _wkt.loads(v) for k, v in data["glyphs"].items()}
+        glyphs = {k: _smooth_traced(_wkt.loads(v)) for k, v in data["glyphs"].items()}
         _planet_logo_glyphs_cache = (glyphs, data["cap_ref_px"], data["ring"])
     return _planet_logo_glyphs_cache
+
+
+# The logo glyphs were traced from a photo at 133px cap height: raw 1px
+# staircase outlines (150-190 turns over 25deg per round letter) that cut as a
+# visibly ragged edge on the real PLANET cut. Spline-smooth each ring (genuine
+# corners kept) within this many SOURCE px -- 0.6px = 0.21mm at a 46mm cap.
+PLANET_GLYPH_SMOOTH_PX = 0.6
+
+
+def _smooth_traced(poly):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "quickcut"))
+    import arcfit
+
+    def sm(r):
+        return arcfit.smooth_polyline(list(r.coords), max_dev_mm=PLANET_GLYPH_SMOOTH_PX,
+                                      spacing_mm=0.5, corner_deg=60)
+
+    polys = poly.geoms if isinstance(poly, MultiPolygon) else [poly]
+    out = [Polygon(sm(p.exterior), [sm(r) for r in p.interiors]).buffer(0) for p in polys]
+    return out[0] if len(out) == 1 else unary_union(out)
 
 
 def planet_logo_ornament_artwork(cap_h):

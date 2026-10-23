@@ -123,12 +123,12 @@ def graticule(lon0, lat0, R, cx, cy, lon_step=30, lat_step=30, lat_max=80, merid
     return strokes
 
 
-def build_globe(lon0, lat0, R, cx, cy, coastlines=None):
+def build_globe(lon0, lat0, R, cx, cy, coastlines=None, meridian_lat_max=90):
     coastlines = coastlines if coastlines is not None else load_coastlines()
     strokes = []
     for ring in coastlines:
         strokes += project_ring(ring, lon0, lat0, R, cx, cy)
-    strokes += graticule(lon0, lat0, R, cx, cy)
+    strokes += graticule(lon0, lat0, R, cx, cy, meridian_lat_max=meridian_lat_max)
     return strokes
 
 
