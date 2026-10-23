@@ -443,13 +443,29 @@ def _refill_gaps(pcs, obstacles, r, r_close, ppm):
     for b in _parts(closed.difference(solid)):
         if b.area < 0.05 * ppm ** 2:
             continue
-        sh, k = max(((_shared(b, p["polygon"], 0.1 * ppm), k) for k, p in enumerate(pcs)),
-                    default=(0.0, None))
-        if k is None or sh <= 0:
+        nb = sorted(((_shared(b, p["polygon"], 0.1 * ppm), k) for k, p in enumerate(pcs)),
+                    reverse=True)
+        nb = [k for sh, k in nb if sh > 0]
+        done = False
+        for k in nb:  # whole gap to one shore, best shore first
+            u = unary_union([pcs[k]["polygon"], b])
+            if isinstance(u, Polygon) and not piece_issues(u, r, ppm):
+                pcs[k]["polygon"] = u
+                n += 1
+                done = True
+                break
+        if done or len(nb) < 2:
             continue
-        u = unary_union([pcs[k]["polygon"], b])
-        if isinstance(u, Polygon) and not piece_issues(u, r, ppm):
-            pcs[k]["polygon"] = u
+        # a strait between two shores: each takes the half nearer it
+        k1, k2 = nb[:2]
+        g1, g2 = pcs[k1]["polygon"], pcs[k2]["polygon"]
+        d = max(g1.distance(g2), 0.1 * ppm) / 2 + 0.05 * ppm
+        h1 = b.intersection(g1.buffer(d)).difference(g2)
+        h2 = b.difference(h1)
+        u1, u2 = unary_union([g1, h1]), unary_union([g2, h2])
+        if (isinstance(u1, Polygon) and isinstance(u2, Polygon)
+                and not piece_issues(u1, r, ppm) and not piece_issues(u2, r, ppm)):
+            pcs[k1]["polygon"], pcs[k2]["polygon"] = u1, u2
             n += 1
     return n
 
