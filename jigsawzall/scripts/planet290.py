@@ -89,7 +89,16 @@ def _keep(st):
 n0 = len(strokes)
 strokes = [st_ for st_ in strokes if _keep(st_)]
 print(f"dropped {n0 - len(strokes)} tiny globe strokes of {n0}")
-strokes = strokes + GE.ensure_full_coverage(pieces, strokes)
+# A tick under MIN_TICK_MM can't get the head near the etch feed before it
+# stops again (M3 power doesn't slow with it): x2.7 energy/mm predicted on a
+# 3.5mm one. Those only land on tiny pieces (bridged islands), which are
+# their own orientation mark -- leave them blank rather than scorch them.
+MIN_TICK_MM = 10.0
+ticks = GE.ensure_full_coverage(pieces, strokes)
+short = [t for t in ticks if _len(t) / ppm < MIN_TICK_MM]
+if short:
+    print(f"{len(short)} piece(s) too small for a >= {MIN_TICK_MM:.0f}mm etch tick: left un-etched")
+strokes = strokes + [t for t in ticks if _len(t) / ppm >= MIN_TICK_MM]
 # the ornament's own p + ring art, upright, on its disc
 for k, lab in enumerate(L["labels"]):
     if lab == "*":

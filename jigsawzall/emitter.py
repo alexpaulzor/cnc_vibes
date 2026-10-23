@@ -450,7 +450,10 @@ def emit_etch_gcode(
             tail = _loop_follow_through(pts, lead_in_mm)
         else:
             warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
-            if path_len < 1.0:  # sub-mm stub: one trip, not a stall-y shuttle
+            if path_len < max(1.0, lead_in_mm / 4):
+                # short stroke (a coverage tick): ONE out-and-back, not the
+                # ~lead_in/length laps the full warmup would ping-pong over it
+                # -- that piled x2.7 energy/mm onto a 3mm tick at 100%/F5000
                 warm = list(pts[1:]) + list(reversed(pts))[1:]
         x0, y0 = pts[0]
         lines.append(f"; --- etch stroke {i} ({'loop' if closed else 'open'}) ---")

@@ -1,0 +1,12 @@
+1 piece(s) too small for a >= 10mm etch tick: left un-etched
+lint_pieces: clean
+etch coverage: #80
+lint_gcode cut: clean: 62 laser-on paths, 10924 moves, no defects found
+motion QA cut: clean
+motion QA etch: 56 stroke(s) > x1.3 energy/mm; worst: etch stroke 55 (loop): energy/mm x1.84 (worst 2mm x5.14), avg 2712 of F5000 (75 lines/s needed, vmin 0mm/min); etch stroke 51 (loop): energy/mm x1.48 (worst 2mm x5.01), avg 3372 of F5000 (56 lines/s needed, vmin 0mm/min); etch stroke 46 (open): energy/mm x1.40 (worst 2mm x1.40), avg 3571 of F5000 (12 lines/s needed, vmin 0mm/min)
+lint_gcode etch: 224 defect(s): 224 short_segment
+PLANET seed 3 land: cap 46.0mm, hub r 33mm, 102 pieces (62 land, 3 bridged), 0 bridged counters, score (0, 1, 0, 1, 0, 9), 58 etch strokes, 15132 lines
+land: {'countries': 156, 'merged': 774, 'split': 17, 'dropped_islands': 0, 'trimmed': 120, 'gaps_filled': 93, 'unsplittable': 0, 'pieces': 62} land oversized: 0
+foot: 157.2 x 77.0mm (footprint 157.2mm), slot 6.2mm wide at 60 deg, slot bottom 19.8mm up; frame ring 7.0mm (R 152mm)
+tray COM at x=38.5, y=151.2mm; ground contact x -78.6..78.6; COM is 40.1mm in front of the rear contact
+16 cut paths (12 feet, 4 frame arcs); G-code X -5.0..295.0, Y -5.0..295.0 -> /tmp/claude-0/-home-user-cnc-vibes/6d4def3a-eab4-5ecc-a637-2ddc981432f1/scratchpad/stand/stand.gcode
