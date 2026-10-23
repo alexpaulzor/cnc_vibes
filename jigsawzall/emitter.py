@@ -1005,6 +1005,35 @@ def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
     return out
 
 
+def _drop_short_dangles(edges, max_len_px, tol_px=0.05):
+    """Drop dead-end edges shorter than max_len_px: a hairline spike where
+    two near-coincident outlines meet (a seam stepping onto a coast) is a
+    0.3-0.4mm spur that separates nothing, and routing into it and back is
+    a shuttle in place (ring_lint)."""
+    from collections import Counter
+
+    def key(p):
+        return (round(p[0] / tol_px), round(p[1] / tol_px))
+
+    while True:
+        deg = Counter()
+        for e in edges:
+            c = list(e.coords)
+            if len(c) >= 2 and key(c[0]) != key(c[-1]):
+                deg[key(c[0])] += 1
+                deg[key(c[-1])] += 1
+        keep = []
+        for e in edges:
+            c = list(e.coords)
+            dangling = len(c) >= 2 and (deg[key(c[0])] == 1 or deg[key(c[-1])] == 1)
+            if dangling and e.length < max_len_px and key(c[0]) != key(c[-1]):
+                continue
+            keep.append(e)
+        if len(keep) == len(edges):
+            return keep
+        edges = keep
+
+
 def cut_bridges(chains, bridges_mm, gap_mm, tol_mm=0.3):
     """Leave an uncut `gap_mm` of cut line centred on each bridge point.
     Every pass of a chain within tol_mm of a point is split there (a re-trace
@@ -1101,7 +1130,7 @@ def emit_cut_gcode_full(
 
     bridges_mm = [img_to_machine_mm(x, y, cfg) for p in pieces for x, y in p.get("bridges", ())]
     pieces = reconcile_letter_pockets(pieces, cfg.px_per_mm)
-    edges = extract_unique_edges(pieces)
+    edges = _drop_short_dangles(extract_unique_edges(pieces), 0.5 * cfg.px_per_mm)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
     letters, interior, panel = [], [], []
     for e in edges:

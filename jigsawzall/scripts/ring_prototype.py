@@ -1748,6 +1748,36 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
     return surround, counters, st
 
 
+def _fold_ocean_scraps(pieces, cfg, max_mm=8.0):
+    """Last word on globe-land rings: an ocean scrap still under max_mm x
+    max_mm after carving (a hairline pocket left where coast, seam and
+    letter meet) joins the land or ocean neighbour it shares the most edge
+    with -- never a letter, never a letter counter."""
+    import globe_land as GL
+
+    ppm = cfg.px_per_mm
+    holes = unary_union([Polygon(r) for p in pieces if p["kind"] == "letter"
+                         for g in GL._parts(p["polygon"]) for r in g.interiors])
+    out = list(pieces)
+    for p in sorted([q for q in pieces if q["kind"] == "cell"], key=lambda q: q["polygon"].area):
+        g = p["polygon"]
+        if p not in out or GL._mrr_sides(g)[1] > max_mm * ppm:
+            continue
+        if not holes.is_empty and holes.buffer(0.2 * ppm).contains(g):
+            continue  # a letter counter
+        nb = [(GL._shared(g, q["polygon"], 0.1 * ppm), k) for k, q in enumerate(out)
+              if q is not p and q["kind"] in ("land", "cell")]
+        sh, k = max(nb, default=(0.0, None))
+        if k is None or sh <= 0:
+            continue
+        eps = 0.05 * ppm
+        u = unary_union([out[k]["polygon"].buffer(eps), g.buffer(eps)]).buffer(-eps)
+        if isinstance(u, Polygon):
+            out[k] = {**out[k], "polygon": u}
+            out.remove(p)
+    return out
+
+
 def absorb_ocean_into_land(surround, land, bulbs, cfg, min_feature_mm=3.0):
     """Ocean scraps a seam layout can't make whole -- a sliver or thin
     piece wedged between the coast and a seam or letter -- become part of
@@ -1786,12 +1816,15 @@ def absorb_ocean_into_land(surround, land, bulbs, cfg, min_feature_mm=3.0):
     # goes to the land it touches, the ocean piece keeps its solid body
     out = []
     for f in keep:
-        if not qa_defects([f], bulbs, ppm):
+        thin = G._vg_thin_bridge(f, cfg)  # ring_lint's 4mm floor, not just QA's 3mm
+        if not qa_defects([f], bulbs, ppm) and not thin:
             out.append(f)
             continue
-        # the solid parts: the body, plus any real lobe a sub-3mm neck joins
-        # to it -- that lobe becomes its own (tabless, drop-in) ocean piece
-        solid = sorted(GL._parts(GL._open(f, r)), key=lambda g: -g.area)
+        # the solid parts: the body, plus any real lobe a sub-3mm (sub-4mm if
+        # lint calls it thin) neck joins to it -- that lobe becomes its own
+        # (tabless, drop-in) ocean piece
+        rr = max(r, 2.1 * ppm) if thin else r
+        solid = sorted(GL._parts(GL._open(f, rr)), key=lambda g: -g.area)
         solid = solid[:1] + [g for g in solid[1:] if g.area >= (10 * ppm) ** 2]
         if not solid:
             out.append(f)
@@ -1963,6 +1996,8 @@ def generate(words, seed, rp):
         p["polygon"] = shapely.set_precision(p["polygon"], 0.01 * cfg.px_per_mm)
         if isinstance(p["polygon"], MultiPolygon) and len(p["polygon"].geoms) == 1:
             p["polygon"] = p["polygon"].geoms[0]  # 1-part Multi: plain Polygon for consumers
+    if land:
+        pieces = _fold_ocean_scraps(pieces, cfg)
     for i, p in enumerate(pieces, 1):
         p["serial"] = i
     # QA again on the FINAL pieces (after pocket carving / counter fusing /
