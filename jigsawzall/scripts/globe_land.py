@@ -339,6 +339,7 @@ def land_pieces(countries, lon0, lat0, R, C, disc, obstacles, ppm, oversized,
         st["trimmed"] += moved
         if not moved and not stuck:
             break
+    st["gaps_filled"] = _refill_gaps(pcs, obstacles, r, (min_ocean_mm / 2 + 0.2) * ppm, ppm)
     stuck = [p for p in pcs if too_big(p["polygon"])]
     st["unsplittable"] = len(stuck)
     if stuck:
@@ -427,6 +428,30 @@ def _final_clean(pcs, r, ppm, rounds=3):
         if not changed:
             break
     return moved
+
+
+def _refill_gaps(pcs, obstacles, r, r_close, ppm):
+    """The clean-up passes hand bits they can't place back to the ocean,
+    which can re-open a strait the mass-level closing had shut (a cape's tip
+    1-2mm off a letter: a hair-thin neck joining two ocean lobes). Close the
+    finished land against the letters once more and give each gap to the
+    land piece it touches most, where that piece stays clean."""
+    land = unary_union([p["polygon"] for p in pcs])
+    solid = unary_union([land, obstacles])
+    closed = solid.buffer(r_close, quad_segs=6).buffer(-r_close, quad_segs=6)
+    n = 0
+    for b in _parts(closed.difference(solid)):
+        if b.area < 0.05 * ppm ** 2:
+            continue
+        sh, k = max(((_shared(b, p["polygon"], 0.1 * ppm), k) for k, p in enumerate(pcs)),
+                    default=(0.0, None))
+        if k is None or sh <= 0:
+            continue
+        u = unary_union([pcs[k]["polygon"], b])
+        if isinstance(u, Polygon) and not piece_issues(u, r, ppm):
+            pcs[k]["polygon"] = u
+            n += 1
+    return n
 
 
 def _cut_neck(q, r, ppm):
