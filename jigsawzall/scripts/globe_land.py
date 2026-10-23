@@ -168,12 +168,14 @@ def _lines(g):
     return [] if m is None else ([m] if m.geom_type == "LineString" else list(m.geoms))
 
 
-def chop_seams(seams, land, ppm, min_mm=3.0, approach_mm=3.0):
+def chop_seams(seams, land, ppm, min_mm=3.0, approach_mm=4.5):
     """Seams run UNDER the land: each seam is cut where it comes within
     approach_mm of land, and every remaining stretch of at least min_mm
     becomes its own seam whose cut end steps straight onto the nearest coast
     point ("L", like a seam ending on a letter) -- so a seam meets the coast
-    roughly square instead of grazing it and leaving a thin wedge of ocean.
+    roughly square instead of grazing it and leaving a thin wedge of ocean
+    (approach_mm 4.5 > ring_lint's 4mm thin-bridge floor: a seam running
+    alongside the coast just outside a 3mm zone left a 3-4mm ocean strip).
     Stretches touching an original end keep that end's type. Chopped seams
     may cut plain (plain_ok) when no tab fits -- merging their two ocean
     pieces instead is what makes oversized pieces around a continent. (A
