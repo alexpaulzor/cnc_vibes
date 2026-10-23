@@ -42,7 +42,10 @@ rp = R.RingParams(diameter_mm=290, rim_mm=27.0, hub_ring_min_mm=30.0,
                   globe_land=(LON, LAT) if LAND else None,
                   # Alex: the centre disc needn't turn -- tab it in like the
                   # rest (spokes kept); no ring seams, polar sectors instead
-                  hub_rotates=False, ring_seams=False)
+                  hub_rotates=False, ring_seams=False,
+                  # a hub-to-rim sector runs ~80-110mm: one tabbed cross cut
+                  # through any piece longer than this keeps it in size
+                  split_mm=70.0)
 pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
 ppm = cfg.px_per_mm
 if LAND:

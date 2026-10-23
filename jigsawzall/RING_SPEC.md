@@ -1095,6 +1095,131 @@ floor size are both unverified assumptions, same status the original
 `etch_matrix_cal.py` version's `1.5x` margin had before it was corrected
 here.
 
+### 13.14 Globe land as CUT pieces (`RingParams.globe_land`, `scripts/globe_land.py`)
+
+Alex: "rework it so the continents act like the PLANET letters -- cut
+along country or land boundaries instead of just etch, so countries
+become counters that set in with no tabs". Also the reason it's worth
+doing: the SF-globe cut's etched coastlines scorched / burnt through in
+places (§13.16).
+
+**Data.** Natural Earth 1:110m admin-0 countries (public domain),
+cached as `data/ne_110m_countries.json` (~160KB, lon/lat rounded to
+0.01deg -- 25 microns on this globe). `globe_land.py --refresh-cache
+GEOJSON` rebuilds it from `ne_110m_admin_0_countries.geojson`.
+
+**Projection.** Each country is clipped to the visible hemisphere ON THE
+SPHERE: projected azimuthal-equidistant about the view centre (the
+hemisphere is exactly the disc rho <= pi/2 there, the map continuous up to
+the antipode), clipped, then squashed rho -> sin(rho) = orthographic. A
+country containing the antipode is refused (it would turn inside out).
+The globe's limb sits `globe_margin_mm` (24) inside the rim: land stays
+out of the rim band (letters' tops are 27mm in), so rim pieces keep their
+ordinary tabs -- at 16mm, coast-chopped rim seams lost their tabs and
+left rim pieces with no grip at all.
+
+**Cleaning (land_pieces).** Letters are subtracted (they cut their own
+pockets into the land, exactly as into wood); then the whole land mass is
+closed (ocean narrower than `min_ocean_mm`=6 between land and land/letters
+becomes land -- no seam layout can tile it) and opened at
+`land_min_feature_mm`=3 (no land neck / spit thinner). Countries are cut
+back out of the cleaned mass; a country that isn't `land_min_piece_mm`
+(7) across and 120mm^2 after its own 3mm opening folds, with every enclave
+/ thin border strip / closed strait, into the neighbour it shares the most
+border with (Europe's micro-states join their big neighbours; the merged
+countries' old borders are ETCHED). Pieces over the ring's size limit
+(`oversized_oriented`, or any side > 64mm) are split along a projected
+meridian or parallel through them -- a 5-degree graticule line when one
+balances the halves -- else straight across their long axis; a cut that
+grazes the coast has its thin bits handed to the other half. A final pass
+cuts any sub-3mm waist (two lobes an opening re-closes) straight across
+and hands thin bits to a neighbour; split and clean alternate until
+neither changes anything. Result: SF view 24 pieces, Berlin view 61, none
+oversized, none with a neck/strip (tests/test_globe_land.py checks
+this on the SF view).
+
+**Seams.** Land joins the letters as the thing the background is carved
+around (`cut_union`) and as tab clearance (`tab_solids`), but NOT as a
+routing obstacle: `chop_seams` cuts every seam where it comes within 3mm
+of land and steps each remaining stretch straight onto the nearest coast
+point ("L" end, like a seam ending on a letter) -- a seam grazing the
+coast at a shallow angle would leave a thin wedge of ocean. Chopped
+stretches may cut plain when no tab fits (merging their ocean pieces
+instead made oversized pieces round every continent); a rim piece left
+with no tab or socket at all (`loose_rim_pieces`) counts as a QA defect
+in the variant score. Letter notch-snapping still sees letters only (a
+bay is not a letter notch).
+
+**Ocean scraps.** Per variant, `absorb_ocean_into_land` gives an ocean
+sliver/thin piece wedged against the coast (tab-free, >=1/10 of its
+outline on land) to that land piece, and cuts a sub-3mm neck off an ocean
+piece where it meets the coast (the neck goes to the land, a real lobe
+beyond it becomes its own drop-in piece) -- only when the grown land
+piece stays clean and in size. An ocean region ringed by land (Hudson
+Bay, the Mediterranean once Gibraltar closes) is a tabless drop-in "lake",
+held like a letter counter.
+
+**Pieces.** Land pieces are `kind="land"`: tabless, no sliver/aspect
+rules (a country is what it is) but held to the oversized limit and the
+3mm neck/strip floor (`ring_lint.lint_pieces`: `land_bridge`,
+`land_strip`, `oversized`). Under 10x10mm -> 3 breakaway bridges like a
+small letter counter (`add_land_bridges`). Rendered in earthy fills.
+
+### 13.15 Display stand from the corner offcuts (`scripts/display_stand.py`)
+
+Alex glues the leftover frame (300 stock minus the 290 disc) to a 300x300
+3mm MDF back; the puzzle sits back in it. The stand tilts that tray back
+for display, from the four corner offcuts:
+
+* **Frame outline**: circle R = 145 + `frame_w_mm` (7) clipped by the
+  stock -- a 7mm ring round the disc (5mm at the four flats where the
+  circle runs off the stock), the four corners coming away identically,
+  so the frame reads as a deliberate round frame. The MDF back can stay
+  square (the tray's straight bottom edge is the MDF's: the feet can sit
+  anywhere along it; trimming the MDF to the frame outline would leave
+  only the 49mm flats to stand on).
+* **Feet** (4 identical, 2 are enough): each corner crescent stood on its
+  two trimmed tips like an arch, apex up -- 157 x 77mm. Its roof is the
+  stock's own edge and its underside the frame cut, so only the slot, the
+  tip pads and the lip are extra cuts. The slot (tray 6.0 + 0.2mm; kerf
+  adds ~0.15) runs up at the display angle from in front of the apex, so
+  the tray's back face rests on the slot's back wall all the way up to the
+  apex and the short front lip stops it sliding off.
+* **Stability, computed**: at 60deg from horizontal the tray's centre of
+  mass (uniform 300mm plate) projects 40mm in front of the feet's rear
+  ground contact (footprint 157mm). The script warns under 15mm.
+  Gravity's normal component (cos 60 = 0.5 g) presses the puzzle into the
+  MDF, so pieces can't fall out of the recess.
+* Same machine frame as the puzzle job (disc bbox 0..290), so it runs on
+  the same sheet without moving it: coordinates reach -5 / 295 (the stock
+  edges). Feet first, frame outline last.
+
+**Unverified**: no physical cut yet. Slot fit depends on the real
+veneer + MDF thickness (test-cut a slot in scrap first); a single 3mm foot
+can wobble sideways ~atan(0.35/3) in its slot before it binds -- the tray
+weight seats it, but glue or 4 feet if it feels loose.
+
+### 13.16 PLANET: tabbed hub, polar sectors, letter outlines, smoothed etch
+
+* `hub_rotates=False`: the centre disc is tabbed in like everything else
+  (Alex: it needn't turn); the pinwheel spokes stay.
+* `ring_seams=False` (new): no ring seams between letters; each gap is
+  split by sector seams from the hub circle to the rim, bending
+  `sector_twist_deg` (12) off radial by the rim, growing with radius (a
+  pinwheel that keeps going past the spokes). A hub-to-rim sector runs
+  80-110mm, over the 64mm size limit, so the PLANET driver also sets
+  `split_mm=70` (one tabbed cross cut through any piece longer).
+* Inner + outer letter outline etch (1.0mm, as on MICHELS) is back in the
+  PLANET driver -- it was missing on the last PLANET cut.
+* Every etch stroke is SMOOTHED (`smooth_mm=0.10`: spline + tangent G2/G3
+  biarcs). The old coastline etch was hundreds of short G1 chords; the
+  motion model (quickcut/grbl_model.py) predicts x3.96 energy/mm on its
+  worst stroke at F5000 M3 -- the head slows, M3 power doesn't, which is
+  the scorching / burn-through seen on the cut. The driver now prints the
+  motion verdict for both passes. `arcfit.fit_smooth_arcs` gallops +
+  bisects its search (capped at 40mm of path per biarc): it was quadratic
+  in stroke length (minutes per graticule meridian).
+
 ## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
 
 A colleague's name for a full-size (300mm default) ring puzzle: "PRINCIPAL"
