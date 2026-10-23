@@ -197,13 +197,22 @@ def primitives_to_points(start: Point, prims, step_mm: float = 0.05) -> list[Poi
     return pts
 
 
+MIN_ARC_R_MM = 0.5
+
+
 def prims_to_gcode(prims, s_words=None, fmt="{:.3f}") -> list[str]:
-    """G-code lines for primitives; `s_words[k]` (optional) appends S to line k."""
+    """G-code lines for primitives; `s_words[k]` (optional) appends S to line k.
+    An arc tighter than MIN_ARC_R_MM goes out as a G1 chord: at 0.001mm I/J
+    rounding its end radius no longer matches its start (GRBL error 33),
+    and under GRBL's arc tolerance it can't even be segmented."""
     out = []
     for k, pr in enumerate(prims):
         x, y = pr[1]
-        line = f"{pr[0]} X{fmt.format(x)} Y{fmt.format(y)}"
-        if pr[0] != "G1":
+        g = pr[0]
+        if g != "G1" and math.hypot(*pr[2]) < MIN_ARC_R_MM:
+            g = "G1"
+        line = f"{g} X{fmt.format(x)} Y{fmt.format(y)}"
+        if g != "G1":
             line += f" I{fmt.format(pr[2][0])} J{fmt.format(pr[2][1])}"
         if s_words is not None and s_words[k] is not None:
             line += f" S{s_words[k]}"

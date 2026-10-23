@@ -73,6 +73,16 @@ class GcodeReport:
         )
 
 
+class _Path(list):
+    """Laser-on polyline; `arc_idx` = indices of points that come from
+    expanding a G2/G3 (GRBL segments an arc itself -- those chords are not
+    streamed lines, so short_segment ignores them)."""
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.arc_idx = set()
+
+
 def _parse_paths(gcode: str):
     paths = []
     x = y = 0.0
@@ -81,14 +91,16 @@ def _parse_paths(gcode: str):
     for line in gcode.splitlines():
         if line.startswith("M3"):
             on = True
-            cur = [(x, y)]
+            cur = _Path([(x, y)])
             paths.append(cur)
         elif line.startswith("M5"):
             on = False
         if on and line.startswith(("G2 X", "G3 X")):
             from jigsaw import _arc_pts
 
-            cur.extend(_arc_pts((x, y), line))
+            ap = _arc_pts((x, y), line)
+            cur.arc_idx.update(range(len(cur), len(cur) + len(ap)))
+            cur.extend(ap)
             x, y = cur[-1]
             continue
         m = dict(re.findall(r"([XY])(-?[\d.]+)", line))
@@ -238,7 +250,7 @@ def lint_gcode(
                     )
             else:
                 run = 0
-            if l1 < short_segment_mm and not is_reversal:
+            if l1 < short_segment_mm and not is_reversal and k not in getattr(pts, "arc_idx", ()):
                 rep.findings.append(
                     GcodeFinding(
                         "short_segment", "defect", pi, a, f"{l1:.3f}mm chord"

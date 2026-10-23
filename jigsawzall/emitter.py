@@ -981,6 +981,27 @@ def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
             out.append(p)
         else:
             out.append({**p, "polygon": pocket})
+    # Globe land pieces (ring_prototype globe_land) are drop-in pieces like
+    # letters, and their coast / borders are carved and re-joined through
+    # buffers, so they can disagree with their neighbours by hairlines in the
+    # same way -- each one becomes exactly the pocket ALL its neighbours
+    # leave (other land, letters, ocean), with the same safety band.
+    if any(p.get("kind") == "land" for p in out):
+        from shapely.strtree import STRtree
+
+        polys = [p["polygon"] for p in out]
+        tree = STRtree(polys)
+        for k, p in enumerate(out):
+            if p.get("kind") != "land":
+                continue
+            g = p["polygon"]
+            near = [polys[j] for j in tree.query(g.buffer(tol)) if j != k]
+            pocket = g.buffer(tol).difference(unary_union(near)).buffer(0) if near else g
+            if isinstance(pocket, MultiPolygon):
+                pocket = max(pocket.geoms, key=lambda q: q.intersection(g).area)
+            if not pocket.is_empty and g.symmetric_difference(pocket).area <= g.length * tol:
+                out[k] = {**p, "polygon": pocket}
+                polys[k] = pocket
     return out
 
 
@@ -1195,7 +1216,9 @@ def emit_cut_gcode_full(
         # the start or end of a path connects to nothing -- the laser restarts
         # (full warmup) anyway -- so strip it.
         coords_mm = _trim_recut_ends(coords_mm, cut_segs)
-        if len(coords_mm) < 2:
+        if len(coords_mm) < 2 or LineString(coords_mm).length < 0.1:
+            # a hairline stub between two near-coincident outlines: the
+            # kerf (~0.15mm) covers it, and its warmup would shuttle in place
             continue
         cut_segs.add(coords_mm)
         warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]

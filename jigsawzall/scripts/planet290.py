@@ -2,7 +2,10 @@
 globe (SF-centred by default) + the ornament's p/ring art, MICHELS/RIEDELS
 veneer settings.
 
-Usage: planet290.py SEED OUTDIR [LON LAT] [--land] [--variants=N]
+Usage: planet290.py SEED OUTDIR [LON LAT] [--land] [--variants=N] [--reuse]
+
+--reuse: load OUTDIR/sSEED_pieces.pkl (saved by every run) instead of
+regenerating -- for re-emitting G-code / etch after an emitter change.
 
 --land: countries are CUT as tabless drop-in pieces (RING_SPEC.md §13.14)
 instead of etched coastlines; the etch keeps the graticule + limb, the
@@ -46,12 +49,24 @@ rp = R.RingParams(diameter_mm=290, rim_mm=27.0, hub_ring_min_mm=30.0,
                   # a hub-to-rim sector runs ~80-110mm: one tabbed cross cut
                   # through any piece longer than this keeps it in size
                   split_mm=70.0)
-pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
+import pickle  # noqa: E402
+
+pk = Path(f"{D}/s{seed}_pieces.pkl")
+if "--reuse" in sys.argv and pk.exists():  # re-emit without regenerating
+    pieces, cfg, L, st, panel, C = pickle.loads(pk.read_bytes())
+else:
+    pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
+    Path(D).mkdir(parents=True, exist_ok=True)
+    pk.write_bytes(pickle.dumps((pieces, cfg, L, st, panel, C)))
 ppm = cfg.px_per_mm
 if LAND:
     # land is cut: etch only the graticule + limb, on the land's own globe
     Rg = L["globe_r_px"]
-    strokes = GE.build_globe(LON, LAT, Rg, C[0], C[1], coastlines=[])
+    # 15deg graticule: with the coastlines cut, not etched, a 30deg grid misses
+    # a dozen pieces, and the coverage tick each then gets is a ~3mm stroke the
+    # warmup ping-pongs ~25 times (x2.7 energy/mm predicted: a scorch)
+    strokes = GE.graticule(LON, LAT, Rg, C[0], C[1], lon_step=15, lat_step=15, lat_max=75,
+                           meridian_lat_max=75)  # no 24-line starburst on the pole
     strokes += [b for p in pieces if p["kind"] == "land" for b in p.get("borders", [])]
 else:
     Rg = rp.diameter_mm / 2 * ppm
