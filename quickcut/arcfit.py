@@ -403,14 +403,17 @@ def _tangents(pts):
 
 def fit_smooth_arcs(points: list[Point], max_dev_mm: float = 0.02,
                     max_radius_mm: float = 500.0, step_mm: float = 0.05,
-                    max_misses: int = 4) -> list[tuple]:
+                    max_misses: int = 4, max_span_mm: float = 40.0) -> list[tuple]:
     """Biarc fit of a densely sampled SMOOTH polyline (use smooth_polyline()
     first on traced data): from each fitted point, the longest biarc to a
     later point -- matching the curve's position and tangent at both ends,
     so consecutive moves join without a corner -- whose two-sided distance
     to the polyline stays within max_dev_mm. Where none fits (a real corner)
     a short G1 bridges to the next point. Same primitive format as
-    fit_arcs()."""
+    fit_arcs(). The search for that longest biarc tries every end point a
+    few steps out, then gallops (doubling the span while it fits) and
+    bisects back, never past max_span_mm of path: testing every end point
+    of a long smooth stroke is quadratic and took minutes per stroke."""
     import numpy as np
 
     pts = [tuple(points[0])]
@@ -423,27 +426,63 @@ def fit_smooth_arcs(points: list[Point], max_dev_mm: float = 0.02,
     T = _tangents(pts)
     arr = np.array(pts)
     A, B = arr[:-1], arr[1:]
+    cum = np.concatenate(([0.0], np.cumsum(np.hypot(*(B - A).T))))
+
+    def reach(i):
+        """Last index a primitive from i may end at: max_span_mm of path
+        (the fit check is quadratic in the span; a 40mm biarc is already far
+        longer than GRBL's planner lookahead needs)."""
+        return max(i + 2, int(np.searchsorted(cum, cum[i] + max_span_mm, side="right")) - 1)
+
+    def attempt(i, j):
+        ba = _biarc(pts[i], T[i], pts[j], T[j], max_radius_mm)
+        if ba is None:
+            return None
+        S = np.array(_sample(pts[i], ba[0], step_mm) + _sample(ba[0][1], ba[1], step_mm)[1:])
+        V = arr[i: j + 1]
+        ok = (_pt_seg_dist(V, S[:-1], S[1:]).max() <= max_dev_mm
+              and _pt_seg_dist(S, A[i:j], B[i:j]).max() <= max_dev_mm)
+        return ba if ok else None
+
     out = []
     i = 0
     while i < n - 1:
         best = None
         misses = 0
-        for j in range(i + 2, n):
-            ba = _biarc(pts[i], T[i], pts[j], T[j], max_radius_mm)
-            ok = False
+        # short reach: every end point (tolerates a few misses, as fits are
+        # not monotone at the start of a curve)
+        for j in range(i + 2, min(n, i + 2 + 4 * (max_misses + 1))):
+            ba = attempt(i, j)
             if ba is not None:
-                S = _sample(pts[i], ba[0], step_mm) + _sample(ba[0][1], ba[1], step_mm)[1:]
-                S = np.array(S)
-                V = arr[i: j + 1]
-                lo, hi = i, j
-                ok = (_pt_seg_dist(V, S[:-1], S[1:]).max() <= max_dev_mm
-                      and _pt_seg_dist(S, A[lo:hi], B[lo:hi]).max() <= max_dev_mm)
-            if ok:
                 best, misses = (j, ba), 0
             else:
                 misses += 1
                 if misses > max_misses:
                     break
+        # long reach: gallop (double the span while it still fits), then
+        # bisect back to the last fitting end -- testing every end point is
+        # quadratic in the stroke length (minutes on a long smooth stroke)
+        last = min(n - 1, reach(i))
+        if best is not None and best[0] == min(n, i + 2 + 4 * (max_misses + 1)) - 1 < last:
+            ok_j, bad_j = best[0], None
+            span = ok_j - i
+            while bad_j is None:
+                span *= 2
+                j = min(last, i + span)
+                ba = attempt(i, j)
+                if ba is None:
+                    bad_j = j
+                else:
+                    best, ok_j = (j, ba), j
+                    if j == last:
+                        break
+            while bad_j is not None and bad_j - ok_j > 1:
+                j = (ok_j + bad_j) // 2
+                ba = attempt(i, j)
+                if ba is None:
+                    bad_j = j
+                else:
+                    best, ok_j = (j, ba), j
         if best is None:
             out.append(("G1", pts[i + 1]))
             i += 1

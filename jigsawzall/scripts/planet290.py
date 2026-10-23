@@ -39,7 +39,10 @@ LON, LAT = (float(args[2]), float(args[3])) if len(args) > 3 else (-122.4, 37.7)
 rp = R.RingParams(diameter_mm=290, rim_mm=27.0, hub_ring_min_mm=30.0,
                   font=R.PLANET_LOGO_FONT, ornament=R.PLANET_LOGO_ORNAMENT,
                   distinct_tabs=True, variants=VARIANTS,
-                  globe_land=(LON, LAT) if LAND else None)
+                  globe_land=(LON, LAT) if LAND else None,
+                  # Alex: the centre disc needn't turn -- tab it in like the
+                  # rest (spokes kept); no ring seams, polar sectors instead
+                  hub_rotates=False, ring_seams=False)
 pieces, cfg, L, st, panel, C = R.generate(["PLANET"], seed, rp)
 ppm = cfg.px_per_mm
 if LAND:

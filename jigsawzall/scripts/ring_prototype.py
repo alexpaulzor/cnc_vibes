@@ -210,6 +210,11 @@ class RingParams:
     land_min_piece_mm: float = 7.0  # smaller countries fold into a neighbour
     land_island_min_mm: float = 4.0  # islands narrower than this aren't cut at all
     land_bridge_mm: float = 10.0  # land pieces within this square get breakaway bridges
+    # False: no ring seams between letters -- the background is polar
+    # sectors from the hub circle to the rim, each bending sector_twist_deg
+    # off radial by the rim (growing with radius, like the hub pinwheel).
+    ring_seams: bool = True
+    sector_twist_deg: float = 12.0
 
 
 # --------------------------------------------------------------------------
@@ -1120,7 +1125,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 row.append(min(max(y, lo), hi) if hi > lo else (miny + maxy) / 2)
             H.append(row)
         ring_seams = {}  # (gap, level) -> pts
-        for g in range(n):
+        for g in range(n if rp.ring_seams else 0):
             i, j = g, (g + 1) % n
             for lv in range(len(levels)):
                 ea = G._letter_edge_point(solids_l[i], "right", H[i][lv], ppm)
@@ -1136,6 +1141,32 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 pts = curved(pts)
                 ring_seams[(g, lv)] = pts
                 seams.append(dict(pts=pts, kind="ring", ends=("L", "L")))
+        # --- no ring seams (rp.ring_seams False): polar sectors instead -------
+        # Each gap between letters is split by seams running from the hub
+        # circle (T) out to the rim, bending further off radial the further
+        # out they get (a pinwheel that keeps going past the hub spokes);
+        # with no ring seams to T onto, the rim/mid/hub subdivisions below
+        # find no hosts and are skipped.
+        if not rp.ring_seams:
+            sdir = rng.choice((-1, 1))
+            r_out = Rp if rp.frame_mm <= 0 else Rc
+            for g in range(n):
+                i, j = g, (g + 1) % n
+                a0 = ths[i] + ang_extent(solids_l[i], Rin)[1]
+                a1 = ths[j] - ang_extent(solids_l[j], Rin)[0]
+                d = (a1 - a0) % (2 * math.pi)
+                k = n_sub(r_out * d, rp, ppm)
+                for s_ in range(1, k + 1):
+                    phi0 = a0 + d * s_ / (k + 1) + math.radians(rng.uniform(-2, 2))
+                    pts = []
+                    for q in range(41):
+                        r = r_h + (r_out - r_h) * q / 40
+                        f = (r - r_h) / (r_out - r_h)
+                        phi = phi0 + sdir * math.radians(rp.sector_twist_deg) * f * f
+                        pts.append((C[0] + r * math.sin(phi), C[1] - r * math.cos(phi)))
+                    pts[-1] = boundary_hit(panel, C, ang_of(pts[-1], C), far)
+                    hub_ends.append(ang_of(pts[0], C) % (2 * math.pi))
+                    seams.append(dict(pts=pts, kind="sector", ends=("T", "B")))
         # --- rim subdivisions: T off the outermost ring seam up to the rim ----
         top_lv = len(levels) - 1
         for g in range(n):
@@ -1331,6 +1362,13 @@ def build_ring(words, seed, rp: RingParams, cfg):
 
         # letters only: a coastline's bays are not letter notches
         _snap_notch_ends(seams, letter_tab_solids, ppm)
+        if not rp.ring_seams:
+            # a twisted sector seam that clips a letter stops on it instead
+            import globe_land as GL_
+
+            seams = ([sm for sm in seams if sm["kind"] != "sector"]
+                     + GL_.chop_seams([sm for sm in seams if sm["kind"] == "sector"],
+                                      letter_tab_solids, ppm))
         if land_union is not None:
             seams = GL.chop_seams(seams, land_union, ppm)
         if rp.keep_seams:
