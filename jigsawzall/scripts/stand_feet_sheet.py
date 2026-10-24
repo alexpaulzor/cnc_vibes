@@ -98,17 +98,19 @@ def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
     g = Polygon(pts).buffer(0)
     g = max(_parts(g), key=lambda q: q.area)
     # convex NOSE instead of a free-standing lip finger (Alex: the hook
-    # looked flimsy): a circle as tall as the lip top, sitting in front of
-    # the tray's front face, hulled with the lip so the whole top-front is
-    # one convex face -- trimmed only where the MDF channel and the frame
-    # (above its notch) must stay clear
+    # looked flimsy): a semicircle as tall as the lip top, flat side on the
+    # tray's front face, hulled with the lip so the whole top-front is one
+    # convex face -- trimmed only where the MDF channel and the frame (above
+    # its notch) must stay clear
     R = L2[1] / 2
     far = 400.0
     P6 = (B0[0] + (w + frame_t) * nf[0], B0[1] + (w + frame_t) * nf[1])  # front-face line
-    Q = (P6[0] + R * nf[0], P6[1] + R * nf[1])
-    sgo = (R - Q[1]) / u[1]
-    cx = Q[0] + sgo * u[0]
-    circle = Point(cx, R).buffer(R, quad_segs=32)
+    # a SEMIcircle: flat side upright on the tray's front face at half the
+    # lip-top height, round side forward (a full circle stuck out too far)
+    sgo = (R - P6[1]) / u[1]
+    xd = P6[0] + sgo * u[0]
+    circle = Point(xd, R).buffer(R, quad_segs=32).intersection(box(xd - R - 1, -1, xd, 2 * R + 1))
+    cx = xd - R  # its front-most point
     lip = Polygon([F0, L1, L2, L3, (L3[0], 0.0), (F0[0], 0.0)]).buffer(0)
     channel = Polygon([B0, F0, (F0[0] + far * u[0], F0[1] + far * u[1]),
                        (B0[0] + far * u[0], B0[1] + far * u[1])])
@@ -118,11 +120,13 @@ def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
                           (N0[0] + (frame_t + clear) * nf[0] + far * u[0],
                            N0[1] + (frame_t + clear) * nf[1] + far * u[1]),
                           (N0[0] + far * u[0], N0[1] + far * u[1])])
-    nose = unary_union([circle, lip]).convex_hull.intersection(box(-far, 0, far, far))
+    toe = box(min(x_front, xd - R), 0.0, xd, toe_h)  # the hull sweeps down to the toe
+    nose = unary_union([circle, lip, toe]).convex_hull.intersection(box(-far, 0, far, far))
     nose = nose.difference(channel).difference(frame_zone)
     g = max(_parts(unary_union([g, nose])), key=lambda q: q.area)
-    if cx < x_front:  # the nose's ground point is the new front contact
-        x_front = cx
+    ground_front = min(x for x, y in nose.exterior.coords if y < 0.5) if not nose.is_empty else x_front
+    if ground_front < x_front:  # the nose's ground edge is the new front contact
+        x_front = ground_front
     flat = g.intersection(box(x_front - 1, -1, x_back + 1, 0.6))
     g = unary_union([g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1), flat])
     g = max(_parts(g), key=lambda q: q.area)

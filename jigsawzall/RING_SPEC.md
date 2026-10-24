@@ -1260,23 +1260,23 @@ makes a KEYED foot:
   frame band there is 47mm deep, so a 12mm notch leaves 35mm.
 * **Stair-step slot, convex nose.** A 3.2mm channel takes the MDF alone;
   in front of it the foot rises 11mm into the frame notch (1mm clear of
-  its top). The front is one solid convex nose -- a circle as tall as the
-  lip top (diameter = lip-top-to-table height), sitting against the tray's
-  front face and hulled with the lip, trimmed only where the MDF channel
-  and the frame above its notch must stay clear (Alex: the earlier
-  free-standing lip "hook" looked flimsy). The notch walls grip the foot's
+  its top). The front is one solid convex nose -- a SEMIcircle whose
+  diameter is the lip-top-to-table height, flat side upright on the tray's
+  front face, round side forward, hulled with the lip and the toe and
+  trimmed only where the MDF channel and the frame above its notch must
+  stay clear (Alex: the free-standing lip "hook" looked flimsy; a full
+  circle stuck out too far). The notch walls grip the foot's
   own 3mm thickness 12mm up the tray: the foot can't lean sideways or
   slide along the edge, and the notches set a 200mm stance.
 * **Stability, searched.** For each foot length and back-rest height the
   script computes how far the stand can be rocked forward / back before
   the tray's centre of mass passes a ground contact, and keeps the design
   with the best worst case that still nests >= 32 feet. At 75deg with the
-  convex nose: 103.3 x 23.2mm foot, **18.7deg forward / 15.7deg back**,
-  33 feet = 16 stands (the nose spends ~15mm of the sheet's length budget
-  in front of the tray; with the old lip hook it was 19.1 / 19.1; the v2
-  plain wedge tipped back at 9.4deg).
+  semicircle nose: 105 x 23.2mm foot, **19.1deg either way**, 33 feet = 16
+  stands (a full-circle nose cost ~15mm of length in front: 18.7 / 15.7;
+  the v2 plain wedge tipped back at 9.4deg).
 * **Decoration**: a row of round cut-outs down each foot's taper, shrinking
-  toward the tail (at 75deg: 11.3 / 8.3 / 5.8 / 3.8mm) -- the first
+  toward the tail (at 75deg: 11.5 / 8.8 / 6.5 / 4.6 / 3.0mm) -- the first
   is the biggest the body allows, each next one the biggest that fits there
   but never bigger than the one before, with 5mm of wood to every edge and
   between holes, clear of the slot and the back-rest load path. Generic,
