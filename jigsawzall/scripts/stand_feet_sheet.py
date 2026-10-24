@@ -17,8 +17,7 @@ notch. So
     tray, so a foot can't lean sideways or slide along the edge -- the
     weak point of a plain slotted foot -- and the notches set the stance
     (feet ~2/3 of the tray width apart, where the frame is deep);
-  * notches go on all four edges (the puzzle job's frame reaches -10mm,
-    and they stop at -5.3 / 295.3), so the frame stands on any edge.
+  * notches go along the bottom (X-axis) edge only, cut from y = -10.
 
 Side view of a foot (front at left), tray leaning back into it:
 
@@ -244,14 +243,14 @@ def notch_positions(stance_mm=200.0):
 REACH_MIN_MM, REACH_MAX_MM = -10.0, 295.5
 
 
-def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=0.3,
-                      edges=(0, 1, 2, 3)):
-    """U-shaped cut paths for notches on the stock edges (0 bottom, 1 right,
-    2 top, 3 left -- default all four, so the frame stands on any edge; the
-    round puzzle sits in its round recess at any turn). In the puzzle job's
-    frame the edges are at -5 / 295mm and each notch starts overrun_mm past
-    the edge (-5.3 / 295.3, inside REACH_MIN/MAX_MM). Each notch is width_mm
-    wide (the foot's 3mm + fit) and depth_mm deep."""
+def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5.0,
+                      edges=(0,)):
+    """U-shaped cut paths for notches on the stock's bottom edge (the
+    X-axis edge, y = -5mm in the puzzle job's frame; edges 1/2/3 = right /
+    top / left are available but off by default -- Alex: notches along X
+    only). Each notch is width_mm wide (the foot's 3mm + fit), depth_mm
+    deep, and its cut starts overrun_mm past the stock edge (y = -10 with
+    the default 5mm, inside REACH_MIN_MM)."""
     c = DISC_MM / 2
     h = STOCK_MM / 2
     paths = []
@@ -312,9 +311,9 @@ def main():
         npaths, band = frame_notch_paths(a.notch_depth, a.notch_w, a.stance)
         ng = DS.emit_gcode(npaths, material, "frame notches for keyed stand feet")
         ng = ng.replace("display stand: 4 feet from the corner offcuts, then the frame outline (last)",
-                        f"frame notches: 8 ({a.notch_w}mm wide, {a.notch_depth}mm deep, "
-                        f"{a.stance:.0f}mm apart) on all four stock edges, puzzle-job "
-                        "frame (disc bbox 0..290, notches reach -5.3 / 295.3) -- the MDF back is not cut")
+                        f"frame notches: 2 ({a.notch_w}mm wide, {a.notch_depth}mm deep, "
+                        f"{a.stance:.0f}mm apart) along the bottom (X) stock edge, puzzle-job "
+                        "frame (disc bbox 0..290, cut from y=-10) -- the MDF back is not cut")
         (out / "frame_notches.gcode").write_text(ng)
     _render(out, g, info, feet)
     b = g.bounds
@@ -326,7 +325,7 @@ def main():
     print(f"tip tolerance at {a.angle:.0f} deg: {fwd:.1f} deg forward, {back:.1f} deg back")
     print(f"{len(feet)} feet on one 300mm sheet = {len(feet) // 2} stands -> {out}/stand_feet.gcode")
     if info["keyed"]:
-        print(f"frame notches: {a.notch_w}mm x {a.notch_depth}mm, {a.stance:.0f}mm apart, all four edges; "
+        print(f"frame notches: {a.notch_w}mm x {a.notch_depth}mm, {a.stance:.0f}mm apart, bottom (X) edge only, cut from y=-10; "
               f"frame band there {band:.0f}mm deep -> {out}/frame_notches.gcode")
 
 

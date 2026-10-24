@@ -1251,15 +1251,13 @@ Alex: maximise foot stability first, durability next, at >= 16 stands per
 sheet; and the MDF back shouldn't need cutting. `stand_feet_sheet.py` now
 makes a KEYED foot:
 
-* **Frame notches, MDF uncut.** The veneer frame gets 8 notches (3.2 x 12mm,
-  200mm apart, two per edge) on all four stock edges, cut in the puzzle
+* **Frame notches, MDF uncut.** The veneer frame gets 2 notches (3.2 x 12mm,
+  200mm apart) along its bottom (X-axis) stock edge only, cut in the puzzle
   job itself (`planet290.py` appends them before the cut: the frame is on
-  the bed anyway), so the frame stands on any edge (the round puzzle sits
-  in its round recess at any turn). Machine reach in the puzzle job's
-  frame: -10mm X/Y confirmed by Alex; the Y hard stop is at ~297 (a 300mm
-  job hit it), so the notches stop at -5.3 / 295.3 and `_check_xy_envelope`
-  takes a min as well as a max. The frame band there is 47mm deep, so a
-  12mm notch leaves 35mm.
+  the bed anyway). Each cut starts at y = -10 (5mm past the stock edge at
+  -5); Alex confirmed -10mm X/Y is reachable, and the Y hard stop at ~297
+  is untouched. `_check_xy_envelope` takes a min as well as a max. The
+  frame band there is 47mm deep, so a 12mm notch leaves 35mm.
 * **Stair-step slot.** A 3.2mm channel takes the MDF alone; in front of it
   the foot's lip rises 11mm into the frame notch (1mm clear of its top) and
   3mm proud of the frame face. The notch walls grip the foot's own 3mm

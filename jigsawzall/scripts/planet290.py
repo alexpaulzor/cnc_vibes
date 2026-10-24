@@ -132,8 +132,8 @@ cut = J._emit_cut_for(pieces, material, cfg, "PLANET", "ring", mode="static",
 etch = emit_etch_gcode(strokes, material, cfg, "PLANET globe + logo art + letter outlines",
                        min_segment_mm=0.3, smooth_mm=ETCH_SMOOTH_MM)
 # frame notches for the keyed display-stand feet (stand_feet_sheet.py): cut
-# with the puzzle -- the frame is on the bed anyway -- on all four stock
-# edges (-5.3 / 295.3mm in this frame), before the rim frees the disc
+# with the puzzle -- the frame is on the bed anyway -- along the bottom (X)
+# stock edge only, cut from y=-10, before the rim frees the disc
 import stand_feet_sheet as SF  # noqa: E402
 import display_stand as DS  # noqa: E402
 

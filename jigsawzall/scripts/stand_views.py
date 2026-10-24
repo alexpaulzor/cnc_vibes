@@ -83,12 +83,10 @@ def build(pieces_pkl=None, angle=75.0):
             tile = box(-half + i * 50, j * 50, -half + (i + 1) * 50, (j + 1) * 50)
             sc.slab(tile, lambda a, b, n: tray(a, b, n), 0.0, 3.0, (0.55, 0.42, 0.30),
                     sides=(i in (0, 5) or j in (0, 5)))
-    # veneer frame: square minus the disc minus the notches (all four edges)
+    # veneer frame: square minus the disc minus the two bottom notches
     frame = box(-half, 0, half, 2 * half).difference(Point(0, half).buffer(145, quad_segs=48))
-    for k in range(4):
-        for sx in (-stance / 2, stance / 2):
-            nb = box(sx - notch_w / 2, -1, sx + notch_w / 2, notch_d)
-            frame = frame.difference(shapely.affinity.rotate(nb, 90 * k, origin=(0, half)))
+    for sx in (-stance / 2, stance / 2):  # bottom (X-axis) edge only
+        frame = frame.difference(box(sx - notch_w / 2, -1, sx + notch_w / 2, notch_d))
     for q in SF._parts(frame):
         sc.slab(q, lambda a, b, n: tray(a, b, n), 3.0, 6.0, (0.86, 0.75, 0.56))
     # puzzle face in the recess
