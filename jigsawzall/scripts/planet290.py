@@ -132,8 +132,8 @@ cut = J._emit_cut_for(pieces, material, cfg, "PLANET", "ring", mode="static",
 etch = emit_etch_gcode(strokes, material, cfg, "PLANET globe + logo art + letter outlines",
                        min_segment_mm=0.3, smooth_mm=ETCH_SMOOTH_MM)
 # frame notches for the keyed display-stand feet (stand_feet_sheet.py): cut
-# with the puzzle -- the frame is on the bed anyway -- on the top + right
-# stock edges (<= 295.3mm in this frame), before the rim frees the disc
+# with the puzzle -- the frame is on the bed anyway -- on all four stock
+# edges (-5.3 / 295.3mm in this frame), before the rim frees the disc
 import stand_feet_sheet as SF  # noqa: E402
 import display_stand as DS  # noqa: E402
 
@@ -142,7 +142,7 @@ notches = DS.emit_gcode(npaths, material, "frame notches for the keyed stand fee
 g = combine_passes(etch, notches, cut)
 R._check_xy_envelope(cut, 290.0)
 open(f"{D}/s{seed}_cut_only.gcode", "w").write(cut)
-R._check_xy_envelope(g, 295.5)  # the notches reach the top/right stock edges (295.3)
+R._check_xy_envelope(g, SF.REACH_MAX_MM, SF.REACH_MIN_MM)  # notches reach the stock edges
 open(f"{D}/s{seed}.gcode", "w").write(g)
 print("lint_gcode cut:", RL.lint_gcode(cut, diameter_mm=290.0).summary())
 for name, gc in (("cut", cut), ("etch", etch)):

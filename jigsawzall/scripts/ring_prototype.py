@@ -2335,20 +2335,21 @@ def _center_word_index(spec, words):
     return words.index(spec.upper())
 
 
-def _check_xy_envelope(gcode, max_xy_mm):
+def _check_xy_envelope(gcode, max_xy_mm, min_xy_mm=0.0):
     """Hard stop before writing: every X/Y word (G0 travel included) must lie
-    in [0, max_xy_mm]. A 300mm job ran into the Y hard stop at ~297mm."""
+    in [min_xy_mm, max_xy_mm]. A 300mm job ran into the Y hard stop at
+    ~297mm; -10mm X/Y is confirmed reachable (frame notches use -5.3)."""
     import re
 
     bad = []
     for n, line in enumerate(gcode.splitlines(), 1):
         code = line.split(";")[0]
         for ax, v in re.findall(r"([XY])(-?[\d.]+)", code):
-            if not (0.0 <= float(v) <= max_xy_mm):
+            if not (min_xy_mm <= float(v) <= max_xy_mm):
                 bad.append(f"line {n}: {ax}{v}")
     if bad:
         raise SystemExit(
-            f"REFUSING to write GCode: {len(bad)} coordinate(s) outside 0..{max_xy_mm}mm "
+            f"REFUSING to write GCode: {len(bad)} coordinate(s) outside {min_xy_mm}..{max_xy_mm}mm "
             f"(first: {bad[0]}). Use a smaller --diameter-mm."
         )
 

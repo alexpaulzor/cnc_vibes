@@ -1251,15 +1251,15 @@ Alex: maximise foot stability first, durability next, at >= 16 stands per
 sheet; and the MDF back shouldn't need cutting. `stand_feet_sheet.py` now
 makes a KEYED foot:
 
-* **Frame notches, MDF uncut.** The veneer frame gets 4 notches (3.2 x 12mm,
-  200mm apart) on its top and right stock edges, cut in the puzzle job
-  itself (`planet290.py` appends them before the cut: the frame is on the
-  bed anyway). Only top/right: in the puzzle job's frame the bottom/left
-  stock edges are at -5mm, which a machine zeroed 5mm in from the corner
-  may not reach, and a 300mm job once hit the Y stop at ~297 -- the notches
-  stop at 295.3. Either notched edge stands at the bottom (the round
-  puzzle sits in its round recess at any turn). The frame band there is
-  47mm deep, so a 12mm notch leaves 35mm.
+* **Frame notches, MDF uncut.** The veneer frame gets 8 notches (3.2 x 12mm,
+  200mm apart, two per edge) on all four stock edges, cut in the puzzle
+  job itself (`planet290.py` appends them before the cut: the frame is on
+  the bed anyway), so the frame stands on any edge (the round puzzle sits
+  in its round recess at any turn). Machine reach in the puzzle job's
+  frame: -10mm X/Y confirmed by Alex; the Y hard stop is at ~297 (a 300mm
+  job hit it), so the notches stop at -5.3 / 295.3 and `_check_xy_envelope`
+  takes a min as well as a max. The frame band there is 47mm deep, so a
+  12mm notch leaves 35mm.
 * **Stair-step slot.** A 3.2mm channel takes the MDF alone; in front of it
   the foot's lip rises 11mm into the frame notch (1mm clear of its top) and
   3mm proud of the frame face. The notch walls grip the foot's own 3mm
@@ -1294,8 +1294,9 @@ focus block), `focus_ramp` (a 10mm-tilted scrap: where focus really is
 and how deep the beam still cuts). With the keyed foot the MDF needs no
 cutting at all, so the stack question only matters for other jobs.
 
-`display_stand.py` (corner-offcut feet, §13.15) is superseded; its G-code
-reached -5mm and has been removed from out/final.
+`display_stand.py` (corner-offcut feet, §13.15) is superseded (its G-code,
+which reached -5mm before that was known to be safe, was removed from
+out/final).
 
 ## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
 
