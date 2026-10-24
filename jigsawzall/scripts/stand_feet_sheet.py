@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
 """Display-stand feet for 290mm ring puzzles, nested many-up on their OWN
-300mm sheet (RING_SPEC.md §13.17). Replaces the corner-offcut feet of
-§13.15 (display_stand.py) when a third sheet is fine: small feet, many
-stands per sheet.
+300mm sheet (RING_SPEC.md §13.17-13.18).
 
-The tray (leftover 300 square frame + 3mm MDF back, puzzle in it) stands
-on its straight bottom edge in a slot in each foot, leaning back at the
-display angle (degrees from HORIZONTAL; Alex's tilt test: the puzzle stays
-in the frame to at least 88). Foot profile, side view (front at left):
+The tray = the leftover 300mm square veneer frame (puzzle cut out of it)
+glued to an UNCUT 3mm MDF back, puzzle sitting in the recess. It stands
+on its bottom edge in two feet, leaning back at the display angle
+(degrees from horizontal; Alex's tilt test: the puzzle stays in to >=88).
 
-        lip  slot  back rest
-         _   / /\\
-        | | / /   \\___________
-        |_|/_/_______________|   <- table
-         ^ front              ^ rear contact
+v3 "keyed" foot (default): the frame gets NOTCHES at its bottom edge
+(frame_notch_gcode(), cut with the puzzle -- that sheet is CNC'd anyway),
+the MDF gets nothing. Each foot's slot is a STAIR STEP: a 3.2mm channel for
+the MDF alone, and in front of it a lip that rises up into the frame's
+notch. So
+  * the MDF back is never cut (no extra setup, no batch of backplates);
+  * the notch walls grip the foot's own 3mm thickness ~notch_depth up the
+    tray, so a foot can't lean sideways or slide along the edge -- the
+    weak point of a plain slotted foot -- and the notches set the stance
+    (feet ~2/3 of the tray width apart, where the frame is deep);
+  * notches go on the top and right edges (reachable in the puzzle job's
+    frame: <= 295.3mm), so the frame can stand on either.
 
-The slot's back wall carries the tray's back face up to the back rest's
-top; the lip stops it sliding forward. The foot reaches back behind the
-tray's centre of mass by `margin_mm` -- the steeper the angle, the less
-reach (the COM sits 150*cos(angle) behind the slot), so the smaller the
-foot. Two feet per stand hold it; three or four steady a big name ring.
+Side view of a foot (front at left), tray leaning back into it:
 
-    PYTHONPATH=. python3 scripts/stand_feet_sheet.py OUTDIR [--angle 75]
+          lip in notch   back rest
+     toe    ┌┐ ╱╱ ╲
+    ___┌────┘│╱╱    ╲___________
+    |__|_____|╱_________________|   <- table
+
+Stability (computed, not assumed): the base reaches as far IN FRONT of the
+tray's centre of mass as BEHIND it, so it tolerates the same knock either
+way; the foot length is the largest that still nests >= min_sets x 2 feet
+on one 300mm sheet. Durability: >= wall_mm of wood round the slot and the
+decorative cut-out, a solid ground bar, 1mm rounded outside corners.
+
+    PYTHONPATH=. python3 scripts/stand_feet_sheet.py OUTDIR [--angle 75] [--min-sets 16]
 """
 import argparse
 import math
@@ -33,127 +45,279 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
 
 from shapely import affinity  # noqa: E402
-from shapely.geometry import Polygon, box  # noqa: E402
-
-import display_stand as DS  # noqa: E402
+from shapely.geometry import LineString, Point, Polygon, box  # noqa: E402
+from shapely.ops import unary_union  # noqa: E402
 
 TRAY_MM = 300.0
+STOCK_MM = 300.0
+DISC_MM = 290.0
 
 
-def foot(angle_deg=75.0, tray_t_mm=6.0, slot_clear_mm=0.2, base_mm=6.0, lip_mm=6.0,
-         lip_h_mm=8.0, rest_mm=25.0, margin_mm=25.0, tail_h_mm=6.0):
-    """Foot polygon (x back, y up, front-bottom corner at the origin) and
-    the info dict display_stand.stability() reads. base_mm: wood under the
-    slot; lip_mm: lip thickness; lip_h_mm: how far up the tray's front face
-    the lip reaches (along the tray); rest_mm: back-wall contact length up
-    the tray; margin_mm: rear ground contact behind the tray's COM."""
+def _parts(g):
+    if g.is_empty:
+        return []
+    return list(g.geoms) if hasattr(g, "geoms") else [g]
+
+
+def jigsaw_piece(size):
+    """Unit jigsaw-piece silhouette (one knob out, one socket in on each
+    axis), `size` mm square body, centred on the origin."""
+    s = size / 2
+    r = size * 0.18
+    body = box(-s, -s, s, s)
+    body = body.union(Point(s + r * 0.6, 0).buffer(r, quad_segs=24))      # knob right
+    body = body.union(Point(0, s + r * 0.6).buffer(r, quad_segs=24))      # knob top
+    body = body.difference(Point(-s + r * 0.6, 0).buffer(r, quad_segs=24))  # socket left
+    body = body.difference(Point(0, -s + r * 0.6).buffer(r, quad_segs=24))  # socket bottom
+    return body.buffer(0.6).buffer(-0.6)  # soften the necks
+
+
+def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
+         notch_depth=12.0, base_mm=6.0, toe_h=8.0, tail_h=8.0, rest_mm=30.0,
+         lip_proud=3.0, wall_mm=5.0, keyed=True, hole=True):
+    """Foot polygon (x back, y up, ground y=0) and info for stability().
+    keyed: stair-step slot (MDF channel + lip into the frame notch);
+    else a plain slot for the whole 6mm tray with a lip in front of it.
+    length_mm: front contact to rear contact; split evenly about the
+    tray's centre of mass."""
     th = math.radians(angle_deg)
     u = (math.cos(th), math.sin(th))
     nf = (-math.sin(th), math.cos(th))  # tray normal, toward the front
-    w = tray_t_mm + slot_clear_mm
-    # slot bottom: front corner F0 is lip_mm behind the front face
-    F0 = (lip_mm + 0.0, base_mm)
-    B0 = (F0[0] - w * nf[0], F0[1] - w * nf[1])  # back corner, same height-ish
-    if B0[1] < base_mm:  # keep base_mm of wood under the lower corner
-        dy = base_mm - B0[1]
-        F0, B0 = (F0[0], F0[1] + dy), (B0[0], B0[1] + dy)
-    F1 = (F0[0] + lip_h_mm * u[0], F0[1] + lip_h_mm * u[1])  # lip top
+    tray_t = mdf_t + frame_t
+    w = (mdf_t if keyed else tray_t) + clear  # slot (channel) width
+    # slot bottom back corner B0 (MDF back face meets the slot bottom)
+    B0 = (0.0, base_mm)
+    F0 = (B0[0] + w * nf[0], B0[1] + w * nf[1])
+    if F0[1] < base_mm:  # keep base_mm of wood under the lower corner
+        dy = base_mm - F0[1]
+        B0, F0 = (B0[0], B0[1] + dy), (F0[0], F0[1] + dy)
+    lip_h = (notch_depth - 1.0) if keyed else 8.0  # 1mm clear of the notch top
+    lip_t = (frame_t + lip_proud) if keyed else 6.0  # in the notch + proud of the face
+    L1 = (F0[0] + lip_h * u[0], F0[1] + lip_h * u[1])  # lip top, back edge
+    L2 = (L1[0] + lip_t * nf[0], L1[1] + lip_t * nf[1])  # lip top, front edge
     A = (B0[0] + rest_mm * u[0], B0[1] + rest_mm * u[1])  # back-rest top
-    info = dict(B0=B0, F0=F0, u=u, nf=nf, w=w, angle_deg=angle_deg, tray_t_mm=tray_t_mm,
-                y_ground=0.0, R_o=0.0, H=A[1])
-    com, _xf, _xb, _m = DS.stability(Polygon([(0, 0), (1, 0), (0, 1)]), info, tray_mm=TRAY_MM)
-    x_back = com[0] + margin_mm
-    pts = [(0.0, 0.0), (x_back, 0.0), (x_back, tail_h_mm), A, B0, F0, F1,
-           (F1[0] - lip_mm * 0.5, F1[1]), (0.0, F1[1])]
+    # tray COM: mid-plane tray_t/2 in front of the back face, TRAY_MM/2 up
+    M = (B0[0] + tray_t / 2 * nf[0], B0[1] + tray_t / 2 * nf[1])
+    com = (M[0] + TRAY_MM / 2 * u[0], M[1] + TRAY_MM / 2 * u[1])
+    x_front, x_back = com[0] - length_mm / 2, com[0] + length_mm / 2
+    # lip front face runs down (along -u) to the toe height
+    t_down = (L2[1] - toe_h) / u[1]
+    L3 = (L2[0] - t_down * u[0], toe_h)
+    if L3[0] < x_front:  # the base can't stop short of the lip: give the rest to the back
+        x_front = L3[0]
+        x_back = x_front + length_mm
+    x_back = max(x_back, A[0] + 5.0)
+    pts = [(x_front, 0.0), (x_back, 0.0), (x_back, tail_h), A, B0, F0, L1, L2, L3,
+           (x_front, toe_h)]
     g = Polygon(pts).buffer(0)
-    # round the outside corners a little (1mm) -- no sharp tips to snap off
-    g = g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1).union(
-        g.intersection(box(-1, -1, x_back + 1, 0.5)))  # keep the ground edge flat
+    g = max(_parts(g), key=lambda q: q.area)
+    flat = g.intersection(box(x_front - 1, -1, x_back + 1, 0.6))
+    g = unary_union([g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1), flat])
+    g = max(_parts(g), key=lambda q: q.area)
+    info = dict(B0=B0, F0=F0, u=u, nf=nf, w=w, angle_deg=angle_deg, tray_t=tray_t, rest_mm=rest_mm,
+                com=com, x_front=x_front, x_back=x_back, keyed=keyed,
+                notch_depth=notch_depth, lip_h=lip_h, A=A, L1=L1)
+    if hole:
+        g, info["hole"] = _add_hole(g, info, wall_mm)
     return g, info
 
 
-def nest(g, sheet_mm=300.0, margin_mm=5.0, gap_mm=2.0):
-    """Feet in rows across the sheet as head-to-tail PAIRS (a foot is a
-    wedge: one turned 180deg slides into the other's empty corner), then a
-    lone foot where a row has room for one more. Returns placed polygons
-    (sheet frame: 0..sheet_mm)."""
+def _add_hole(g, info, wall_mm):
+    """The biggest jigsaw-piece cut-out that keeps wall_mm of wood all round
+    it and stays clear of the slot and the back rest's load path."""
+    keep_out = Polygon([info["B0"], info["F0"], info["L1"], info["A"]]).buffer(wall_mm)
+    room = g.buffer(-wall_mm).difference(keep_out)
+    best = None
+    for q in _parts(room):
+        # largest inscribed square-ish spot: try the pole of inaccessibility
+        from shapely.ops import polylabel
+
+        c = polylabel(q, tolerance=0.2)
+        rad = q.exterior.distance(c)
+        for hq in q.interiors:
+            rad = min(rad, hq.distance(c))
+        size = rad * 2 / 1.45  # knobs reach ~1.45x the half-size out
+        if size >= 7.0 and (best is None or size > best[0]):
+            best = (size, c)
+    if best is None:
+        return g, None
+    size, c = best
+    piece = affinity.translate(jigsaw_piece(size), c.x, c.y)
+    if not g.buffer(-wall_mm + 0.5).contains(piece):
+        return g, None
+    return g.difference(piece), piece
+
+
+def stability(info):
+    """Tip-over tolerance (degrees) forward and back: how far the stand can
+    be rocked before the tray's centre of mass passes a ground contact."""
+    com = info["com"]
+    back = math.degrees(math.atan2(info["x_back"] - com[0], com[1]))
+    fwd = math.degrees(math.atan2(com[0] - info["x_front"], com[1]))
+    return fwd, back
+
+
+def nest(g, sheet_mm=STOCK_MM, margin_mm=5.0, gap_mm=2.0):
+    """Feet in rows as head-to-tail PAIRS (a foot is roughly a wedge: one
+    turned 180deg slides into the other's empty corner), plus a lone foot
+    where a row has room. Returns placed polygons (sheet frame 0..sheet_mm)."""
     g = affinity.translate(g, -g.bounds[0], -g.bounds[1])
     r = affinity.rotate(g, 180, origin=(0, 0))
     r = affinity.translate(r, -r.bounds[0], -r.bounds[1])
     W, H = g.bounds[2], g.bounds[3]
-    # the rotated copy slides left / down until it is gap_mm from the first
     best = None
     for dy in [k * 0.5 for k in range(int(H * 2) + 1)]:
-        for k in range(int(W * 10) + 1):
-            dx = W + gap_mm - k * 0.1
-            if affinity.translate(r, dx, -dy).distance(g) < gap_mm:
-                break
-        cand = (dx + 0.1, -dy)
-        pair = [g, affinity.translate(r, *cand)]
-        bx = min(q.bounds[0] for q in pair), min(q.bounds[1] for q in pair), \
-            max(q.bounds[2] for q in pair), max(q.bounds[3] for q in pair)
+        lo, hi = 0.0, W + gap_mm  # bisect the slide-in distance
+        for _ in range(30):
+            mid = (lo + hi) / 2
+            if affinity.translate(r, mid, -dy).distance(g) < gap_mm:
+                lo = mid
+            else:
+                hi = mid
+        pair = [g, affinity.translate(r, hi, -dy)]
+        bx = (min(q.bounds[0] for q in pair), min(q.bounds[1] for q in pair),
+              max(q.bounds[2] for q in pair), max(q.bounds[3] for q in pair))
         area = (bx[2] - bx[0]) * (bx[3] - bx[1])
         if best is None or area < best[0]:
             best = (area, pair, bx)
     _a, pair, bx = best
     pair = [affinity.translate(q, -bx[0], -bx[1]) for q in pair]
     PW, PH = bx[2] - bx[0], bx[3] - bx[1]
+    usable = sheet_mm - margin_mm
     placed = []
     y = margin_mm
-    while y + PH <= sheet_mm - margin_mm + 1e-9:
+    while y + PH <= usable + 1e-9:
         x = margin_mm
-        while x + PW <= sheet_mm - margin_mm + 1e-9:
+        while x + PW <= usable + 1e-9:
             placed += [affinity.translate(q, x, y) for q in pair]
             x += PW + gap_mm
-        if x + W <= sheet_mm - margin_mm:  # room for one more on its own
+        if x + W <= usable:
             placed.append(affinity.translate(g, x, y))
         y += PH + gap_mm
-    # a last row of single feet if a pair row doesn't fit but a foot does
-    if y + H <= sheet_mm - margin_mm:
+    if y + H <= usable:
         x = margin_mm
-        while x + W <= sheet_mm - margin_mm:
+        while x + W <= usable:
             placed.append(affinity.translate(g, x, y))
             x += W + gap_mm
     return placed
+
+
+def best_foot(angle_deg, min_feet, rests=(18.0, 22.0, 26.0, 30.0), **kw):
+    """Most stable foot that still nests min_feet on one sheet: searches
+    foot length and back-rest height (the rest sets the foot's height, and
+    so how many rows fit) for the largest worst-case tip tolerance
+    (min of forward / back). Returns (foot, info, placed)."""
+    best = None
+    for rest in rests:
+        for L10 in range(500, 2001, 25):
+            L = L10 / 10
+            g, info = foot(angle_deg, L, rest_mm=rest, **kw)
+            placed = nest(g)
+            if len(placed) < min_feet:
+                continue
+            score = (round(min(stability(info)), 1), rest, len(placed))
+            if best is None or score > best[0]:
+                best = (score, g, info, placed)
+    return None if best is None else best[1:]
+
+
+# ---------------------------------------------------------------------------
+# frame notches (cut with the puzzle, in ITS machine frame: disc bbox 0..290,
+# stock -5..295) -- the MDF back is never cut
+# ---------------------------------------------------------------------------
+
+
+def notch_positions(stance_mm=200.0):
+    """Notch centres along an edge, measured from the edge's middle."""
+    return (-stance_mm / 2, stance_mm / 2)
+
+
+def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=0.3):
+    """U-shaped cut paths for notches on the TOP and RIGHT stock edges (in
+    the puzzle job's frame those are at 295mm; the bottom/left edges are at
+    -5mm, which a machine zeroed 5mm in from the stock corner may not be
+    able to reach -- and a 300mm job once hit the Y hard stop at ~297mm, so
+    the overrun past the edge is kept to overrun_mm). Either notched edge can
+    stand at the bottom: the round puzzle sits in its round recess at any
+    turn. Each notch is width_mm wide (the foot's 3mm + fit), depth_mm deep."""
+    c = DISC_MM / 2
+    h = STOCK_MM / 2
+    paths = []
+    for k in (1, 2):  # bottom edge rotated onto the right (k=1) and top (k=2) edges
+        for s in notch_positions(stance_mm):
+            # bottom edge, then rotate by k*90 about the disc centre
+            x0, x1 = c + s - width_mm / 2, c + s + width_mm / 2
+            ye = c - h  # stock edge
+            pts = [(x0, ye - overrun_mm), (x0, ye + depth_mm), (x1, ye + depth_mm),
+                   (x1, ye - overrun_mm)]
+            ln = affinity.rotate(LineString(pts), 90 * k, origin=(c, c))
+            paths.append(list(ln.coords))
+    # the frame band must stay deep enough above every notch
+    band = h - math.sqrt(max(0.0, c ** 2 - (stance_mm / 2 + width_mm / 2) ** 2))
+    return paths, band
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir")
     ap.add_argument("--angle", type=float, default=75.0, help="display angle, degrees from horizontal")
-    ap.add_argument("--tray-t-mm", type=float, default=6.0)
-    ap.add_argument("--slot-clear-mm", type=float, default=0.2)
-    ap.add_argument("--margin-mm", type=float, default=25.0,
-                    help="rear contact behind the tray COM (25mm: ~10deg knock back before it tips)")
-    ap.add_argument("--feet-per-stand", type=int, default=2)
+    ap.add_argument("--min-sets", type=int, default=16, help="stands per sheet, 2 feet each")
+    ap.add_argument("--plain", action="store_true", help="v2 plain 6mm slot (no frame notches)")
+    ap.add_argument("--notch-depth", type=float, default=12.0)
+    ap.add_argument("--notch-w", type=float, default=3.2, help="frame notch width (foot 3mm + fit)")
+    ap.add_argument("--stance", type=float, default=200.0, help="foot spacing along the tray edge")
+    ap.add_argument("--mdf-clear", type=float, default=0.2, help="slot = MDF 3mm + this")
+    ap.add_argument("--no-hole", action="store_true")
     ap.add_argument("--material", default="plywood_veneer_3ply_3mm")
     a = ap.parse_args()
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    g, info = foot(a.angle, a.tray_t_mm, a.slot_clear_mm, margin_mm=a.margin_mm)
-    com, xf, xb, margin = DS.stability(g, info, tray_mm=TRAY_MM)
-    feet = nest(g)
-    paths = [list(f.exterior.coords) for f in feet]
+    import display_stand as DS
     from emitter import load_material
 
-    gc = DS.emit_gcode(paths, load_material(a.material),
-                       f"stand feet, {len(feet)} up, {a.angle:.0f} deg")
+    material = load_material(a.material)
+    kw = dict(keyed=not a.plain, notch_depth=a.notch_depth, clear=a.mdf_clear,
+              hole=not a.no_hole)
+    res = best_foot(a.angle, 2 * a.min_sets, **kw)
+    if res is None:
+        raise SystemExit("no foot nests that many -- lower --min-sets")
+    g, info, feet = res
+    fwd, back = stability(info)
+    paths = []
+    for f in feet:  # hole first, then outline (the part stays put while its hole is cut)
+        paths += [list(r.coords) for r in f.interiors]
+        paths.append(list(f.exterior.coords))
+    gc = DS.emit_gcode(paths, material, f"stand feet, {len(feet)} up, {a.angle:.0f} deg")
+    gc = gc.replace("display stand: 4 feet from the corner offcuts, then the frame outline (last)",
+                    f"stand feet: {len(feet)} up ({len(feet) // 2} stands), "
+                    f"tray at {a.angle:.0f} deg from horizontal, "
+                    + ("keyed (frame-notch) slot" if info["keyed"] else "plain 6mm slot"))
     gc = gc.replace("SAME machine frame as the puzzle cut (disc bbox 0..290): run it on the same "
                     "sheet without moving it -- coordinates reach -5.5 / 295.5 (the stock edges)",
                     "its OWN 300mm sheet, origin at the sheet corner (0..300)")
-    gc = gc.replace("display stand: 4 feet from the corner offcuts, then the frame outline (last)",
-                    f"display stand feet: {len(feet)} up, {a.feet_per_stand} per stand, "
-                    f"tray at {a.angle:.0f} deg from horizontal")
     (out / "stand_feet.gcode").write_text(gc)
-    _render(out, g, info, feet, com, margin)
+    if info["keyed"]:
+        npaths, band = frame_notch_paths(a.notch_depth, a.notch_w, a.stance)
+        ng = DS.emit_gcode(npaths, material, "frame notches for keyed stand feet")
+        ng = ng.replace("display stand: 4 feet from the corner offcuts, then the frame outline (last)",
+                        f"frame notches: 4 ({a.notch_w}mm wide, {a.notch_depth}mm deep, "
+                        f"{a.stance:.0f}mm apart) on the top + right stock edges, puzzle-job "
+                        "frame (disc bbox 0..290) -- the MDF back is not cut")
+        (out / "frame_notches.gcode").write_text(ng)
+    _render(out, g, info, feet)
     b = g.bounds
-    print(f"foot {b[2] - b[0]:.1f} x {b[3] - b[1]:.1f}mm, slot {info['w']:.1f}mm at {a.angle:.0f} deg; "
-          f"tray COM {margin:.1f}mm in front of the rear contact")
-    print(f"{len(feet)} feet on one 300mm sheet = {len(feet) // a.feet_per_stand} stands "
-          f"at {a.feet_per_stand} feet each -> {out}/stand_feet.gcode")
+    print(f"foot {b[2] - b[0]:.1f} x {b[3] - b[1]:.1f}mm "
+          f"({'keyed: 3.2mm MDF channel + lip in a frame notch' if info['keyed'] else 'plain 6.2mm slot'}), "
+          f"back rest {info['rest_mm']:.0f}mm up the tray, "
+          f"cut-out {'yes' if info.get('hole') is not None else 'no room'}")
+    print(f"tip tolerance at {a.angle:.0f} deg: {fwd:.1f} deg forward, {back:.1f} deg back")
+    print(f"{len(feet)} feet on one 300mm sheet = {len(feet) // 2} stands -> {out}/stand_feet.gcode")
+    if info["keyed"]:
+        print(f"frame notches: {a.notch_w}mm x {a.notch_depth}mm, {a.stance:.0f}mm apart, top + right edges; "
+              f"frame band there {band:.0f}mm deep -> {out}/frame_notches.gcode")
 
 
-def _render(out, g, info, feet, com, margin):
+def _render(out, g, info, feet):
     from PIL import Image, ImageDraw
 
     k = 3.0
@@ -162,27 +326,43 @@ def _render(out, g, info, feet, com, margin):
     for f in feet:
         d.polygon([(x * k, (300 - y) * k) for x, y in f.exterior.coords], fill=(120, 160, 110),
                   outline=(200, 0, 0))
-    d.text((8, 8), f"{len(feet)} feet on a 300mm sheet", fill=(0, 0, 0))
+        for r in f.interiors:
+            d.polygon([(x * k, (300 - y) * k) for x, y in r.coords], fill=(235, 220, 190),
+                      outline=(200, 0, 0))
+    d.text((8, 8), f"{len(feet)} feet ({len(feet) // 2} stands) on a 300mm sheet", fill=(0, 0, 0))
     img.save(out / "stand_feet_sheet.png")
-    # side view
-    W, Hh = 900, 700
+    # side view, tray layers drawn separately (MDF back, frame front with the notch)
+    k = 4.0
+    x0 = info["x_front"] - 10
+    W, Hh = int((info["x_back"] - x0 + 20) * k), int(130 * k)
 
     def Q(x, y):
-        return ((x + 40) * k, Hh - (y + 20) * k)
+        return ((x - x0) * k, Hh - (y + 10) * k)
 
     img = Image.new("RGB", (W, Hh), "white")
     d = ImageDraw.Draw(img)
-    d.line([Q(-40, 0), Q(260, 0)], fill=(0, 0, 0), width=2)
+    d.line([Q(x0, 0), Q(info["x_back"] + 20, 0)], fill=(0, 0, 0), width=2)
     d.polygon([Q(*p) for p in g.exterior.coords], fill=(120, 160, 110), outline=(0, 90, 0))
-    B0, u, nf, t = info["B0"], info["u"], info["nf"], info["tray_t_mm"]
-    L = 220  # draw the lower part of the tray only
-    tray = [B0, (B0[0] + L * u[0], B0[1] + L * u[1]),
-            (B0[0] + L * u[0] + t * nf[0], B0[1] + L * u[1] + t * nf[1]),
-            (B0[0] + t * nf[0], B0[1] + t * nf[1])]
-    d.polygon([Q(*p) for p in tray], fill=(214, 190, 150), outline=(120, 90, 50))
-    d.line([Q(com[0], 0), Q(com[0], 200)], fill=(200, 0, 0), width=1)
-    d.text((8, 8), f"{info['angle_deg']:.0f} deg; red = under the tray's centre of mass "
-           f"({margin:.0f}mm in front of the rear contact)", fill=(0, 0, 0))
+    for r in g.interiors:
+        d.polygon([Q(*p) for p in r.coords], fill="white", outline=(0, 90, 0))
+    B0, u, nf = info["B0"], info["u"], info["nf"]
+    L = 120
+    mdf = [B0, (B0[0] + L * u[0], B0[1] + L * u[1]),
+           (B0[0] + L * u[0] + 3 * nf[0], B0[1] + L * u[1] + 3 * nf[1]),
+           (B0[0] + 3 * nf[0], B0[1] + 3 * nf[1])]
+    d.polygon([Q(*p) for p in mdf], fill=(150, 120, 90), outline=(90, 60, 30))
+    z = info["notch_depth"] if info["keyed"] else 0.0  # frame starts above the notch here
+    F = (B0[0] + 3 * nf[0], B0[1] + 3 * nf[1])
+    frame = [(F[0] + z * u[0], F[1] + z * u[1]), (F[0] + L * u[0], F[1] + L * u[1]),
+             (F[0] + L * u[0] + 3 * nf[0], F[1] + L * u[1] + 3 * nf[1]),
+             (F[0] + z * u[0] + 3 * nf[0], F[1] + z * u[1] + 3 * nf[1])]
+    d.polygon([Q(*p) for p in frame], fill=(214, 190, 150), outline=(120, 90, 50))
+    com = info["com"]
+    d.line([Q(com[0], 0), Q(com[0], 110)], fill=(200, 0, 0), width=1)
+    fwd, back = stability(info)
+    d.text((8, 8), f"{info['angle_deg']:.0f} deg: dark = MDF back (uncut), light = frame "
+           f"({'notched over the lip' if info['keyed'] else 'plain'}); red = under the COM; "
+           f"tips at {fwd:.0f} deg fwd / {back:.0f} deg back", fill=(0, 0, 0))
     img.save(out / "stand_feet_side.png")
 
 

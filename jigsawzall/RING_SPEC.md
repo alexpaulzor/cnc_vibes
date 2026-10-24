@@ -1245,6 +1245,55 @@ slots. Same unverified points as §13.15: slot fit vs real stock thickness
 (test-cut a slot first), and a single 3mm foot can wobble sideways a
 little before the tray seats it.
 
+### 13.18 Keyed stand feet: stair-step slot into frame notches (default)
+
+Alex: maximise foot stability first, durability next, at >= 16 stands per
+sheet; and the MDF back shouldn't need cutting. `stand_feet_sheet.py` now
+makes a KEYED foot:
+
+* **Frame notches, MDF uncut.** The veneer frame gets 4 notches (3.2 x 12mm,
+  200mm apart) on its top and right stock edges, cut in the puzzle job
+  itself (`planet290.py` appends them before the cut: the frame is on the
+  bed anyway). Only top/right: in the puzzle job's frame the bottom/left
+  stock edges are at -5mm, which a machine zeroed 5mm in from the corner
+  may not reach, and a 300mm job once hit the Y stop at ~297 -- the notches
+  stop at 295.3. Either notched edge stands at the bottom (the round
+  puzzle sits in its round recess at any turn). The frame band there is
+  47mm deep, so a 12mm notch leaves 35mm.
+* **Stair-step slot.** A 3.2mm channel takes the MDF alone; in front of it
+  the foot's lip rises 11mm into the frame notch (1mm clear of its top) and
+  3mm proud of the frame face. The notch walls grip the foot's own 3mm
+  thickness 12mm up the tray: the foot can't lean sideways or slide along
+  the edge (the weak point of a plain slotted foot), and the notches set
+  a 200mm stance.
+* **Stability, searched.** For each foot length and back-rest height the
+  script computes how far the stand can be rocked forward / back before
+  the tray's centre of mass passes a ground contact, and keeps the design
+  with the best worst case that still nests >= 32 feet. At 75deg:
+  105 x 23mm foot, **19.1deg either way** (the v2 wedge: 9.4deg back),
+  33 feet = 16 stands. (65deg: 12.8 back / 26.0 fwd, 18 stands; 70: 17.8 /
+  21.3, 16; 80: 18.4 / 18.4, 16 -- script output.)
+* **Decoration**: a jigsaw-piece cut-out in each foot, the largest that
+  keeps 5mm of wood round it and stays out of the slot / back-rest load
+  path. Generic, so a sheet of feet can be cut before the names are known.
+* `--plain` keeps the v2 plain 6.2mm slot (no notches).
+
+**Laser facts used** (§13.18 research): LaserTree's listing for the 10W
+fixed-focus module says 8mm plywood in one pass at 1.5-1.8mm/s, 45mm focal
+length -- no "10mm" figure found, and nothing on the focus blocks. This
+repo's own record: 3mm MDF severs at 500mm/min x2 (x1 fails). Forum 10W
+reports for 3mm MDF range from 2 to 6+ passes; nobody reports a 2-sheet
+stack. So stacked MDF is untested -- `stand_tests.py` makes the
+experiments:
+`fit_comb` (notch + MDF channel widths, real kerf/thickness),
+`mdf_grid` (feed x passes squares; run on 1 / 2 / 3 stacked sheets, per
+focus block), `focus_ramp` (a 10mm-tilted scrap: where focus really is
+and how deep the beam still cuts). With the keyed foot the MDF needs no
+cutting at all, so the stack question only matters for other jobs.
+
+`display_stand.py` (corner-offcut feet, §13.15) is superseded; its G-code
+reached -5mm and has been removed from out/final.
+
 ## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
 
 A colleague's name for a full-size (300mm default) ring puzzle: "PRINCIPAL"
