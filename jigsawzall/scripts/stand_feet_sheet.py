@@ -97,6 +97,32 @@ def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
            (x_front, toe_h)]
     g = Polygon(pts).buffer(0)
     g = max(_parts(g), key=lambda q: q.area)
+    # convex NOSE instead of a free-standing lip finger (Alex: the hook
+    # looked flimsy): a circle as tall as the lip top, sitting in front of
+    # the tray's front face, hulled with the lip so the whole top-front is
+    # one convex face -- trimmed only where the MDF channel and the frame
+    # (above its notch) must stay clear
+    R = L2[1] / 2
+    far = 400.0
+    P6 = (B0[0] + (w + frame_t) * nf[0], B0[1] + (w + frame_t) * nf[1])  # front-face line
+    Q = (P6[0] + R * nf[0], P6[1] + R * nf[1])
+    sgo = (R - Q[1]) / u[1]
+    cx = Q[0] + sgo * u[0]
+    circle = Point(cx, R).buffer(R, quad_segs=32)
+    lip = Polygon([F0, L1, L2, L3, (L3[0], 0.0), (F0[0], 0.0)]).buffer(0)
+    channel = Polygon([B0, F0, (F0[0] + far * u[0], F0[1] + far * u[1]),
+                       (B0[0] + far * u[0], B0[1] + far * u[1])])
+    N0 = (F0[0] + (notch_depth - 0.5 if keyed else 0.0) * u[0],
+          F0[1] + (notch_depth - 0.5 if keyed else 0.0) * u[1])  # frame starts here
+    frame_zone = Polygon([N0, (N0[0] + (frame_t + clear) * nf[0], N0[1] + (frame_t + clear) * nf[1]),
+                          (N0[0] + (frame_t + clear) * nf[0] + far * u[0],
+                           N0[1] + (frame_t + clear) * nf[1] + far * u[1]),
+                          (N0[0] + far * u[0], N0[1] + far * u[1])])
+    nose = unary_union([circle, lip]).convex_hull.intersection(box(-far, 0, far, far))
+    nose = nose.difference(channel).difference(frame_zone)
+    g = max(_parts(unary_union([g, nose])), key=lambda q: q.area)
+    if cx < x_front:  # the nose's ground point is the new front contact
+        x_front = cx
     flat = g.intersection(box(x_front - 1, -1, x_back + 1, 0.6))
     g = unary_union([g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1), flat])
     g = max(_parts(g), key=lambda q: q.area)

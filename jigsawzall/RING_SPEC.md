@@ -1258,21 +1258,25 @@ makes a KEYED foot:
   -5); Alex confirmed -10mm X/Y is reachable, and the Y hard stop at ~297
   is untouched. `_check_xy_envelope` takes a min as well as a max. The
   frame band there is 47mm deep, so a 12mm notch leaves 35mm.
-* **Stair-step slot.** A 3.2mm channel takes the MDF alone; in front of it
-  the foot's lip rises 11mm into the frame notch (1mm clear of its top) and
-  3mm proud of the frame face. The notch walls grip the foot's own 3mm
-  thickness 12mm up the tray: the foot can't lean sideways or slide along
-  the edge (the weak point of a plain slotted foot), and the notches set
-  a 200mm stance.
+* **Stair-step slot, convex nose.** A 3.2mm channel takes the MDF alone;
+  in front of it the foot rises 11mm into the frame notch (1mm clear of
+  its top). The front is one solid convex nose -- a circle as tall as the
+  lip top (diameter = lip-top-to-table height), sitting against the tray's
+  front face and hulled with the lip, trimmed only where the MDF channel
+  and the frame above its notch must stay clear (Alex: the earlier
+  free-standing lip "hook" looked flimsy). The notch walls grip the foot's
+  own 3mm thickness 12mm up the tray: the foot can't lean sideways or
+  slide along the edge, and the notches set a 200mm stance.
 * **Stability, searched.** For each foot length and back-rest height the
   script computes how far the stand can be rocked forward / back before
   the tray's centre of mass passes a ground contact, and keeps the design
-  with the best worst case that still nests >= 32 feet. At 75deg:
-  105 x 23mm foot, **19.1deg either way** (the v2 wedge: 9.4deg back),
-  33 feet = 16 stands. (65deg: 12.8 back / 26.0 fwd, 18 stands; 70: 17.8 /
-  21.3, 16; 80: 18.4 / 18.4, 16 -- script output.)
+  with the best worst case that still nests >= 32 feet. At 75deg with the
+  convex nose: 103.3 x 23.2mm foot, **18.7deg forward / 15.7deg back**,
+  33 feet = 16 stands (the nose spends ~15mm of the sheet's length budget
+  in front of the tray; with the old lip hook it was 19.1 / 19.1; the v2
+  plain wedge tipped back at 9.4deg).
 * **Decoration**: a row of round cut-outs down each foot's taper, shrinking
-  toward the tail (at 75deg: 11.5 / 8.8 / 6.5 / 4.6 / 3.0mm) -- the first
+  toward the tail (at 75deg: 11.3 / 8.3 / 5.8 / 3.8mm) -- the first
   is the biggest the body allows, each next one the biggest that fits there
   but never bigger than the one before, with 5mm of wood to every edge and
   between holes, clear of the slot and the back-rest load path. Generic,
