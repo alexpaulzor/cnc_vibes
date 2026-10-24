@@ -1273,9 +1273,12 @@ makes a KEYED foot:
   105 x 23mm foot, **19.1deg either way** (the v2 wedge: 9.4deg back),
   33 feet = 16 stands. (65deg: 12.8 back / 26.0 fwd, 18 stands; 70: 17.8 /
   21.3, 16; 80: 18.4 / 18.4, 16 -- script output.)
-* **Decoration**: a jigsaw-piece cut-out in each foot, the largest that
-  keeps 5mm of wood round it and stays out of the slot / back-rest load
-  path. Generic, so a sheet of feet can be cut before the names are known.
+* **Decoration**: a row of round cut-outs down each foot's taper, shrinking
+  toward the tail (at 75deg: 11.5 / 8.8 / 6.5 / 4.6 / 3.0mm) -- the first
+  is the biggest the body allows, each next one the biggest that fits there
+  but never bigger than the one before, with 5mm of wood to every edge and
+  between holes, clear of the slot and the back-rest load path. Generic,
+  so a sheet of feet can be cut before the names are known.
 * `--plain` keeps the v2 plain 6.2mm slot (no notches).
 
 **Laser facts used** (§13.18 research): LaserTree's listing for the 10W

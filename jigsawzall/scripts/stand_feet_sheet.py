@@ -31,7 +31,7 @@ Stability (computed, not assumed): the base reaches as far IN FRONT of the
 tray's centre of mass as BEHIND it, so it tolerates the same knock either
 way; the foot length is the largest that still nests >= min_sets x 2 feet
 on one 300mm sheet. Durability: >= wall_mm of wood round the slot and the
-decorative cut-out, a solid ground bar, 1mm rounded outside corners.
+decorative round cut-outs, a solid ground bar, 1mm rounded outside corners.
 
     PYTHONPATH=. python3 scripts/stand_feet_sheet.py OUTDIR [--angle 75] [--min-sets 16]
 """
@@ -57,19 +57,6 @@ def _parts(g):
     if g.is_empty:
         return []
     return list(g.geoms) if hasattr(g, "geoms") else [g]
-
-
-def jigsaw_piece(size):
-    """Unit jigsaw-piece silhouette (one knob out, one socket in on each
-    axis), `size` mm square body, centred on the origin."""
-    s = size / 2
-    r = size * 0.18
-    body = box(-s, -s, s, s)
-    body = body.union(Point(s + r * 0.6, 0).buffer(r, quad_segs=24))      # knob right
-    body = body.union(Point(0, s + r * 0.6).buffer(r, quad_segs=24))      # knob top
-    body = body.difference(Point(-s + r * 0.6, 0).buffer(r, quad_segs=24))  # socket left
-    body = body.difference(Point(0, -s + r * 0.6).buffer(r, quad_segs=24))  # socket bottom
-    return body.buffer(0.6).buffer(-0.6)  # soften the necks
 
 
 def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
@@ -122,30 +109,49 @@ def foot(angle_deg=75.0, length_mm=100.0, mdf_t=3.0, frame_t=3.0, clear=0.2,
     return g, info
 
 
-def _add_hole(g, info, wall_mm):
-    """The biggest jigsaw-piece cut-out that keeps wall_mm of wood all round
-    it and stays clear of the slot and the back rest's load path."""
+def _add_hole(g, info, wall_mm, min_d_mm=3.0, max_d_mm=16.0):
+    """A row of round cut-outs down the foot's taper: the first is the
+    biggest the body allows (wall_mm of wood to every edge, clear of the
+    slot and the back rest's load path), and each one after it, wall_mm on,
+    is as big as the body there allows but never bigger than the one before
+    -- so they shrink steadily toward the thin tail. Returns (foot, [(x, y,
+    r)] or None)."""
     keep_out = Polygon([info["B0"], info["F0"], info["L1"], info["A"]]).buffer(wall_mm)
-    room = g.buffer(-wall_mm).difference(keep_out)
-    best = None
-    for q in _parts(room):
-        # largest inscribed square-ish spot: try the pole of inaccessibility
-        from shapely.ops import polylabel
+    edge = g.exterior
 
-        c = polylabel(q, tolerance=0.2)
-        rad = q.exterior.distance(c)
-        for hq in q.interiors:
-            rad = min(rad, hq.distance(c))
-        size = rad * 2 / 1.45  # knobs reach ~1.45x the half-size out
-        if size >= 7.0 and (best is None or size > best[0]):
-            best = (size, c)
-    if best is None:
+    def fit(x):
+        col = g.intersection(box(x - 0.05, -1, x + 0.05, 200))
+        if col.is_empty:
+            return None
+        c = Point(x, (col.bounds[1] + col.bounds[3]) / 2)
+        r = min(edge.distance(c) - wall_mm, keep_out.distance(c), max_d_mm / 2)
+        return c, r
+
+    x0, x1 = keep_out.bounds[0], g.bounds[2]
+    scan = [f for f in (fit(x0 + 0.25 * k) for k in range(int((x1 - x0) / 0.25))) if f]
+    if not scan:
         return g, None
-    size, c = best
-    piece = affinity.translate(jigsaw_piece(size), c.x, c.y)
-    if not g.buffer(-wall_mm + 0.5).contains(piece):
+    c, r = max(scan, key=lambda t: t[1])
+    if 2 * r < min_d_mm:
         return g, None
-    return g.difference(piece), piece
+    holes = [(c, r)]
+    while True:
+        last_c, last_r = holes[-1]
+        best = None
+        x = last_c.x + last_r + wall_mm
+        while x < min(x1, last_c.x + 3 * last_r + wall_mm + 0.5):
+            f = fit(x)
+            if f:
+                cc, rr = f
+                rr = min(rr, last_r, cc.distance(last_c) - last_r - wall_mm)
+                if best is None or rr > best[1] + 1e-6:
+                    best = (cc, rr)
+            x += 0.25
+        if best is None or 2 * best[1] < min_d_mm:
+            break
+        holes.append(best)
+    cuts = [cc.buffer(rr, quad_segs=32) for cc, rr in holes]
+    return g.difference(unary_union(cuts)), [(cc.x, cc.y, rr) for cc, rr in holes]
 
 
 def stability(info):
@@ -309,7 +315,8 @@ def main():
     print(f"foot {b[2] - b[0]:.1f} x {b[3] - b[1]:.1f}mm "
           f"({'keyed: 3.2mm MDF channel + lip in a frame notch' if info['keyed'] else 'plain 6.2mm slot'}), "
           f"back rest {info['rest_mm']:.0f}mm up the tray, "
-          f"cut-out {'yes' if info.get('hole') is not None else 'no room'}")
+          f"{len(info.get('hole') or [])} round cut-outs "
+          f"(diameters {', '.join(f'{2 * r:.1f}' for _x, _y, r in info.get('hole') or [])}mm)")
     print(f"tip tolerance at {a.angle:.0f} deg: {fwd:.1f} deg forward, {back:.1f} deg back")
     print(f"{len(feet)} feet on one 300mm sheet = {len(feet) // 2} stands -> {out}/stand_feet.gcode")
     if info["keyed"]:
