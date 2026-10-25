@@ -212,6 +212,10 @@ class RingParams:
     # floor for short spans on the 3-ply veneer stock). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
     center_min_gap_mm: float = 5.0
+    # Split hub for two center words (center_style "ring"): a tabbed divider
+    # across the disc between them instead of a pinwheel (_center_split_seams)
+    center_split: bool = False
+    center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
@@ -529,6 +533,72 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
                     g = affinity.rotate(g, 180, origin=(0, 0))
                 out.append(place(g, th0 + x / r_m, r_base, C))
         return out if ok and r_m - cap / 2 > 0 else None
+
+
+def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
+    """Seams for a split hub (see build_ring); appends to `seams`, returns
+    the hub-circle landing angles (the hub arcs split there)."""
+    pts = [p for g in letters for p in g.exterior.coords]
+    r_in = min(math.hypot(x - C[0], y - C[1]) for x, y in pts)
+    r_i = r_in - rp.center_band_gap_mm * ppm  # inner circle, band_gap inside the letters
+    clear = rp.center_min_gap_mm * ppm
+
+    def ang(p):
+        return ang_of(p, C) % (2 * math.pi)
+
+    # letters' angular extents (clockwise from 12 o'clock), sorted round
+    ext = []
+    for g in letters:
+        c = ang(g.centroid.coords[0])
+        rel = [math.remainder(ang(p) - c, 2 * math.pi) for p in g.exterior.coords]
+        ext.append(((c + min(rel)) % (2 * math.pi), (c + max(rel)) % (2 * math.pi), c))
+    ext.sort(key=lambda e: e[2])
+    # every gap between neighbouring letters: (mid angle, width at the letters)
+    r_mid = (r_in + r_h) / 2
+    gaps = []
+    for k in range(len(ext)):
+        a1 = ext[k][1]
+        a2 = ext[(k + 1) % len(ext)][0]
+        wdt = (a2 - a1) % (2 * math.pi)
+        gaps.append(((a1 + wdt / 2) % (2 * math.pi), wdt * r_in))
+    # the divider runs through the two widest gaps nearest 3 and 9 o'clock
+    def nearest(target):
+        return min(gaps, key=lambda gp: (abs(math.remainder(gp[0] - target, 2 * math.pi)), -gp[1]))
+
+    phR, phL = nearest(math.pi / 2)[0], nearest(3 * math.pi / 2)[0]
+    # band radials: every other gap wide enough for a seam with `clear` of
+    # wood each side (a letter-wide gap at the band's inner edge)
+    radials = sorted({phR, phL} | {a for a, wdt in gaps if wdt >= 2 * clear + 2 * ppm})
+
+    def at(r, phi):
+        return (C[0] + r * math.sin(phi), C[1] - r * math.cos(phi))
+
+    for phi in radials:
+        a, b = at(r_i, phi), at(r_h, phi)
+        n = max(4, int(math.dist(a, b) / (2 * ppm)))
+        seams.append(dict(pts=[(a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n)
+                               for t in range(n + 1)], kind="hubradial", ends=("J", "J")))
+    # divider through the inner disc (via the centre), plus the cross seam
+    # square to it when the inner disc's halves would be oversized
+    inner_marks = list(radials)
+    for phi in (phR, phL):
+        a = at(r_i, phi)
+        n = max(4, int(r_i / (2 * ppm)))
+        seams.append(dict(pts=[(a[0] + (C[0] - a[0]) * t / n, a[1] + (C[1] - a[1]) * t / n)
+                               for t in range(n + 1)], kind="divider", ends=("J", "J")))
+    if 2 * r_i > 64 * ppm:
+        mid = (phR + math.remainder(phL - phR, 2 * math.pi) / 2) % (2 * math.pi)
+        for phi in (mid, (mid + math.pi) % (2 * math.pi)):
+            a = at(r_i, phi)
+            n = max(4, int(r_i / (2 * ppm)))
+            seams.append(dict(pts=[(a[0] + (C[0] - a[0]) * t / n, a[1] + (C[1] - a[1]) * t / n)
+                                   for t in range(n + 1)], kind="divider", ends=("J", "J")))
+            inner_marks.append(phi)
+    marks = sorted(set(round(m, 9) for m in inner_marks))
+    for q in range(len(marks)):
+        seams.insert(0, dict(pts=arc_pts(C, r_i, marks[q], marks[(q + 1) % len(marks)], 2 * ppm),
+                             kind="innerarc", ends=("J", "J")))
+    return [p % (2 * math.pi) for p in radials]
 
 
 def spoke_near_misses(pts, letters, thresh_px):
@@ -1298,7 +1368,15 @@ def build_ring(words, seed, rp: RingParams, cfg):
             k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
-        if k_hub > 1 and center_polys:
+        if center_polys and rp.center_split:
+            # Split hub for two center words (center_style "ring"): a tabbed
+            # DIVIDER across the disc between the words, an inner circle just
+            # inside the letters, a cross seam through the inner disc, and
+            # short radials across the letter band through the wide gaps
+            # between letters -- normal-size, tabbed pieces, and no word owns
+            # the disc's "up" (RING_SPEC.md §16.2).
+            split = _center_split_seams(center_polys, C, r_h, ppm, rp, seams, rng)
+        elif k_hub > 1 and center_polys:
             # Loose center text: pick a pinwheel whose spokes never pass a
             # center letter without touching it (see plan_center_pinwheel).
             P, phis, twist, tw = plan_center_pinwheel(
@@ -2207,6 +2285,11 @@ def main():
         "loose letters cut out of the normal pie-sliced hub",
     )
     ap.add_argument(
+        "--center-split", action="store_true",
+        help="ring-style center text: split the hub with a tabbed divider between the two "
+        "words (+ inner circle, cross seam, band radials) instead of a pinwheel",
+    )
+    ap.add_argument(
         "--outline-etch-mm", type=float, default=0.0,
         help="etch an outline this far inside AND outside every letter cut "
         "(0 = off). Shows which side is up, and reads before painting",
@@ -2251,6 +2334,7 @@ def main():
         distinct_tabs=not a.no_distinct_tabs,
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
         center_style=a.center_style,
+        center_split=a.center_split,
         center_word=_center_word_index(a.center_word, words),
     )
     tag = "-".join(words)
