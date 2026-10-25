@@ -216,6 +216,7 @@ class RingParams:
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
+    center_arc_min_mm: float = 26.0  # min inner-circle arc between landings (room for a tab)
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
@@ -566,18 +567,93 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         return min(gaps, key=lambda gp: (abs(math.remainder(gp[0] - target, 2 * math.pi)), -gp[1]))
 
     phR, phL = nearest(math.pi / 2)[0], nearest(3 * math.pi / 2)[0]
-    # band radials: every other gap wide enough for a seam with `clear` of
-    # wood each side (a letter-wide gap at the band's inner edge)
-    radials = sorted({phR, phL} | {a for a, wdt in gaps if wdt >= 2 * clear + 2 * ppm})
-
     def at(r, phi):
         return (C[0] + r * math.sin(phi), C[1] - r * math.cos(phi))
 
-    for phi in radials:
+    def radial(phi):
         a, b = at(r_i, phi), at(r_h, phi)
         n = max(4, int(math.dist(a, b) / (2 * ppm)))
-        seams.append(dict(pts=[(a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n)
-                               for t in range(n + 1)], kind="hubradial", ends=("J", "J")))
+        return [(a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n) for t in range(n + 1)]
+
+    # band radials: through any gap wide enough for a seam with `clear` of
+    # wood each side -- and, since loose centre letters sit only ~5mm apart,
+    # THROUGH letters too, like the outer ring's caps: the seam stops at the
+    # letter's foot and starts again at its head (the letter piece joins the
+    # two sides). Only letters the radial crosses as one solid stroke (no
+    # bowl or mouth to leave a sliver in), spaced for normal piece widths.
+    solids_c = [solid_of(g) for g in letters]
+    cand = [(a, "gap") for a, wdt in gaps if wdt >= 2 * clear + 2 * ppm]
+    # scan each letter's angular extent: a radial is usable where it crosses
+    # the glyph as ONE stroke (no counter, no second arm) and passes no other
+    # part of it closer than `clear` (a near miss leaves a sliver); the middle
+    # of each usable run -- a stem's centre line -- becomes a candidate
+    step = math.radians(0.5)
+    for g in letters:
+        sg = solid_of(g)
+        c = ang(g.centroid.coords[0])
+        rel = [math.remainder(ang(p) - c, 2 * math.pi) for p in g.exterior.coords]
+        run = []
+        for k in range(int((max(rel) - min(rel)) / step) + 2):
+            phi = (c + min(rel) + k * step) % (2 * math.pi)
+            pts_r = radial(phi)
+            ls = LineString(pts_r)
+            hit, hs = ls.intersection(g), ls.intersection(sg)
+            ok = (hit.geom_type == "LineString" and not hit.is_empty
+                  and hs.geom_type == "LineString" and abs(hit.length - hs.length) < 0.5
+                  and not spoke_near_misses(pts_r, [g], clear))
+            if ok:
+                run.append(phi)
+            if run and (not ok or k == int((max(rel) - min(rel)) / step) + 1):
+                if len(run) >= 2:
+                    cand.append((run[len(run) // 2], "letter"))
+                run = []
+    radials = [phR, phL]
+    # the inner circle's arcs between landing points host the band's tabs
+    # (the band radials themselves are mostly too short, broken by letters):
+    # keep every arc long enough for a tab clear of both 7mm junction zones
+    arc_min = rp.center_arc_min_mm * ppm
+    cross = 2 * r_i > 64 * ppm
+    fixed = [phR, phL]
+    cross_at = []
+
+    def clear_inner(phi):
+        return all(abs(math.remainder(phi - m, 2 * math.pi)) * r_i >= arc_min for m in fixed)
+
+    amin = arc_min / r_i
+    for start, stop in ((phR, phL), (phL, phR)):  # each half, clockwise
+        # pick the radials that make the widest band piece as narrow as
+        # possible, every landing >= amin from its neighbours and the cross
+        # seam's marks (a DP over the candidates, sorted round the half)
+        span = (stop - start) % (2 * math.pi)
+        offs = [0.0] + sorted({(c - start) % (2 * math.pi) for c, _kind in cand
+                               if amin <= (c - start) % (2 * math.pi) <= span - amin
+                               and clear_inner(c % (2 * math.pi))}) + [span]
+        best = [(0.0, None)] + [(math.inf, None)] * (len(offs) - 1)
+        for j in range(1, len(offs)):
+            for i in range(j):
+                if offs[j] - offs[i] >= amin and best[i][0] < math.inf:
+                    w = max(best[i][0], offs[j] - offs[i])
+                    if w < best[j][0]:
+                        best[j] = (w, i)
+        j, picked = best[-1][1], []
+        while j:
+            picked.append(offs[j])
+            j = best[j][1]
+        radials += [(start + o) % (2 * math.pi) for o in picked]
+        if picked:  # the inner disc's cross seam lands on the most central one
+            cross_at.append((start + min(picked, key=lambda o: abs(o - span / 2))) % (2 * math.pi))
+    radials = sorted(set(radials))
+    letter_union_c = unary_union(solids_c)
+    for phi in radials:
+        sm = dict(pts=radial(phi), kind="hubradial", ends=("J", "J"))
+        if LineString(sm["pts"]).intersects(letter_union_c):
+            import globe_land as GL_
+
+            for part in GL_.chop_seams([sm], letter_union_c, ppm, min_mm=2.0, approach_mm=0.5):
+                part["kind"] = "hubradial"
+                seams.append(part)
+        else:
+            seams.append(sm)
     # divider through the inner disc (via the centre), plus the cross seam
     # square to it when the inner disc's halves would be oversized
     inner_marks = list(radials)
@@ -586,9 +662,8 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         n = max(4, int(r_i / (2 * ppm)))
         seams.append(dict(pts=[(a[0] + (C[0] - a[0]) * t / n, a[1] + (C[1] - a[1]) * t / n)
                                for t in range(n + 1)], kind="divider", ends=("J", "J")))
-    if 2 * r_i > 64 * ppm:
-        mid = (phR + math.remainder(phL - phR, 2 * math.pi) / 2) % (2 * math.pi)
-        for phi in (mid, (mid + math.pi) % (2 * math.pi)):
+    if cross:
+        for phi in cross_at:
             a = at(r_i, phi)
             n = max(4, int(r_i / (2 * ppm)))
             seams.append(dict(pts=[(a[0] + (C[0] - a[0]) * t / n, a[1] + (C[1] - a[1]) * t / n)
@@ -2295,6 +2370,9 @@ def main():
         "(0 = off). Shows which side is up, and reads before painting",
     )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
+    ap.add_argument("--frame-notches", action="store_true",
+                    help="also cut the keyed stand feet's notches into the stock's bottom edge "
+                         "(y down to -10mm; stand_feet_sheet.py)")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
@@ -2378,18 +2456,34 @@ def main():
             min_segment_mm=a.min_segment_mm,
             max_backtrack_ms=a.max_backtrack_ms,
         )
-        if strokes:
-            from emitter import combine_passes, emit_etch_gcode
+        _check_xy_envelope(gcode, a.max_xy_mm)
+        from emitter import combine_passes
 
-            etch = emit_etch_gcode(
+        passes = []
+        if strokes:
+            from emitter import emit_etch_gcode
+
+            passes.append(emit_etch_gcode(  # etch first, while still in the stock
                 strokes, material, cfg, f"{tag} letter outlines",
                 feed_override=a.etch_feed, power_percent=a.etch_power,
                 min_segment_mm=a.min_segment_mm,
                 arc_tolerance_mm=a.etch_arc_tol,
                 smooth_mm=a.etch_smooth_mm,
-            )
-            gcode = combine_passes(etch, gcode)  # etch first, while still in the stock
-        _check_xy_envelope(gcode, a.max_xy_mm)
+            ))
+        if a.frame_notches:
+            # bottom-edge notches in the stock frame for the keyed stand feet
+            # (RING_SPEC.md §13.18), cut before the rim frees the disc
+            import display_stand as DS
+            import stand_feet_sheet as SF
+
+            npaths, _band = SF.frame_notch_paths()
+            passes.append(DS.emit_gcode(npaths, material, "frame notches for the keyed stand feet"))
+        if passes:
+            gcode = combine_passes(*passes, gcode)
+        if a.frame_notches:
+            _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM)
+        else:
+            _check_xy_envelope(gcode, a.max_xy_mm)
         Path(a.gcode).write_text(gcode)
         from ring_lint import lint_motion
 

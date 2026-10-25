@@ -1415,3 +1415,55 @@ etched first in the same file via `combine_passes`. 0.75mm chosen because
 center-letter strokes are ~2.6-3.2mm and a 1.1mm inset already splits
 them. Etch power/feed is the baltic-birch calibration (§13.10) -- the
 current veneered 3-ply stock is untested; scrap-test first.
+
+### 16.2 Two surnames sharing the spinning hub: MELODY / SHANE / LUCA / AURELIA + PARKER / MCGUIRE (`--center-split`)
+
+**Delivered:** `ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font
+round --center-text PARKER+MCGUIRE --center-style ring --center-split
+--pack-words --keep-seams --material plywood_veneer_3ply_3mm
+--outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40
+--frame-notches --gcode out/final/parker_mcguire_s1.gcode` -- 290mm disc,
+105 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
+(0, 0, 0, 0, 0, 50), cap 18mm, hub r 77mm. Seeds 2 and 3 were also clean
+(107 pieces each); the hub layout is identical across seeds.
+
+**Brief.** Both surnames in the free-spinning centre disc, one upside down
+relative to the other, with a tabbed seam between them so neither name owns
+"up". "THE" and the plural s were dropped (PARKER / MCGUIRE) to save room.
+
+**Hub split (`_center_split_seams`).**
+* The `ring` style arcs the two words around the hub, with the bottom word
+  flipped. A tabbed DIVIDER runs through the letter gaps nearest 3 and 9
+  o'clock and across the inner disc through the centre.
+* An inner circle sits `center_band_gap_mm` (6mm) inside the letters. Its
+  arcs carry the letter band's tabs. The band's radials are too short for
+  tabs (6mm inside, ~14mm outside), and the letters interrupt them, so they
+  cut plain.
+* Band radials go through letter gaps, or through a letter where the radial
+  crosses one solid stroke. To find these, each letter's angular span is
+  scanned in 0.5° steps. A radial passes only if it has no counter, no
+  second arm, and no near miss closer than `center_min_gap_mm`; the middle
+  of each passing run is the candidate.
+* A DP per half picks the radials that keep the widest band piece as narrow
+  as possible. Every landing on the inner circle stays at least
+  `center_arc_min_mm` (26mm) from its neighbours, which leaves room for a
+  tab clear of both 7mm junction zones.
+* The inner disc's cross seam lands on each half's most central chosen
+  radial (a 4-way junction). A fixed 90° cross seam blocked the windows
+  and left 2 oversized band pieces.
+* Tried first: picking radials through gaps only. The centre letters sit
+  ~5mm apart, so no gap was wide enough, and each band half came out as one
+  oversized piece.
+
+**Etch at F2000 / 40% instead of the material default F5000 / 100%.** At
+F5000 the 18mm letter outlines are mostly corners, and the motion model
+(UNVERIFIED profile) predicted 101 strokes over x1.3 energy/mm, worst x3.94.
+F2000 / 40% keeps the same nominal energy per mm (100/5000 = 40/2000). The
+prediction drops to 5 strokes, worst x1.55 (small counter loops), with an
+overall factor of 1.05. Darkness at 40% on the veneer is unverified, so
+scrap-test it.
+
+**`--frame-notches`** appends the keyed stand-foot notches
+(`stand_feet_sheet.frame_notch_paths`, bottom edge, cut from y=-10) as
+their own pass between the etch and the cut, like `planet290.py`. The
+envelope check then uses REACH_MIN/MAX.

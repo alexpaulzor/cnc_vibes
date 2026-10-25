@@ -1,0 +1,4 @@
+ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font round --center-text PARKER+MCGUIRE --center-style ring --center-split --pack-words --keep-seams --material plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40 --frame-notches --gcode out/final/parker_mcguire_s1.gcode
+MOTION QA (info, UNVERIFIED machine profile): 5 etch stroke(s) > x1.3 energy/mm; worst etch stroke 78 (19.5mm counter loop) x1.55 (worst 2mm x1.64). At the material default F5000/100% it was 101 strokes, worst x3.94.
+MELODY-SHANE-LUCA-AURELIA: cap 18.0mm, min letter gap 12.3mm, hub r 77mm, 105 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 50)
+G-code: $32=1 x1, M3 only (S1000 cut F350 x1, S400 etch F2000), X 0.0..290.0, Y -10.0..290.0 (frame notches); cut pass lint clean (100 paths, 9499 moves), cut motion QA 0 flagged
