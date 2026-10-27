@@ -1423,9 +1423,10 @@ round --center-text PARKER+MCGUIRE --center-style ring --center-split
 --pack-words --keep-seams --material plywood_veneer_3ply_3mm
 --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40
 --frame-notches --gcode out/final/parker_mcguire_s1.gcode` -- 290mm disc,
-105 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
-(0, 0, 0, 0, 0, 50), cap 18mm, hub r 77mm. Seeds 2 and 3 were also clean
-(107 pieces each); the hub layout is identical across seeds.
+106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
+(0, 0, 0, 0, 0, 51), cap 18mm, hub r 77mm. The hub layout depends only on
+the letters, so it is identical across seeds; seeds only vary the outer
+ring.
 
 **Brief.** Both surnames in the free-spinning centre disc, one upside down
 relative to the other, with a tabbed seam between them so neither name owns
@@ -1452,11 +1453,17 @@ so a half turn of the disc swaps which one reads upright.
   of each passing run is the candidate.
 * A DP per half picks the radials that keep the widest band piece as narrow
   as possible. Every landing on the inner circle stays at least
-  `center_arc_min_mm` (26mm) from its neighbours, which leaves room for a
-  tab clear of both 7mm junction zones.
-* The inner disc's cross seam lands on each half's most central chosen
-  radial (a 4-way junction). A fixed 90° cross seam blocked the windows
-  and left 2 oversized band pieces.
+  `center_arc_min_mm` (24mm) from its neighbours, which leaves room for a
+  tab clear of both 7mm junction zones. At 22-23mm one inner arc found no
+  tab, which would leave its band piece loose. At 26mm, with the
+  cross-seam rule below, the band pieces next to the cross seam came out
+  ~80° wide (oversized).
+* The inner disc's cross seam lands on a chosen radial (a 4-way junction).
+  It must leave both inner pieces at least `center_cross_min_deg` (70°)
+  wide, so the DP is forced through such a radial. A 55° inner piece got
+  tabs biting in from every side and was absorbed as a sliver, which left
+  PARKER's whole half as one piece. A fixed 90° cross seam blocked the
+  windows and left 2 oversized band pieces.
 * Tried first: picking radials through gaps only. The centre letters sit
   ~5mm apart, so no gap was wide enough, and each band half came out as one
   oversized piece.

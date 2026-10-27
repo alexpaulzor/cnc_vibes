@@ -216,8 +216,8 @@ class RingParams:
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
-    center_arc_min_mm: float = 26.0  # min inner-circle arc between landings (room for a tab)
-    center_cross_min_deg: float = 75.0  # inner-disc pieces at least this wide (else absorbed)
+    center_arc_min_mm: float = 24.0  # min inner-circle arc between landings (room for a tab)
+    center_cross_min_deg: float = 70.0  # inner-disc pieces at least this wide (else absorbed)
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
