@@ -217,6 +217,7 @@ class RingParams:
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
     center_arc_min_mm: float = 26.0  # min inner-circle arc between landings (room for a tab)
+    center_cross_min_deg: float = 75.0  # inner-disc pieces at least this wide (else absorbed)
     # Loose center text (flat/ring) searches DOWN from this cap height in
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
@@ -628,20 +629,45 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         offs = [0.0] + sorted({(c - start) % (2 * math.pi) for c, _kind in cand
                                if amin <= (c - start) % (2 * math.pi) <= span - amin
                                and clear_inner(c % (2 * math.pi))}) + [span]
-        best = [(0.0, None)] + [(math.inf, None)] * (len(offs) - 1)
-        for j in range(1, len(offs)):
-            for i in range(j):
-                if offs[j] - offs[i] >= amin and best[i][0] < math.inf:
-                    w = max(best[i][0], offs[j] - offs[i])
-                    if w < best[j][0]:
-                        best[j] = (w, i)
-        j, picked = best[-1][1], []
-        while j:
-            picked.append(offs[j])
-            j = best[j][1]
-        radials += [(start + o) % (2 * math.pi) for o in picked]
-        if picked:  # the inner disc's cross seam lands on the most central one
-            cross_at.append((start + min(picked, key=lambda o: abs(o - span / 2))) % (2 * math.pi))
+        n = len(offs)
+
+        def dp(order):  # best[j] = (narrowest widest piece from order[0] to j, prev)
+            best = {order[0]: (0.0, None)}
+            for jj, j in enumerate(order[1:], 1):
+                best[j] = (math.inf, None)
+                for i in order[:jj]:
+                    if abs(offs[j] - offs[i]) >= amin and best[i][0] < math.inf:
+                        w = max(best[i][0], abs(offs[j] - offs[i]))
+                        if w < best[j][0]:
+                            best[j] = (w, i)
+            return best
+
+        fwd, bwd = dp(list(range(n))), dp(list(range(n - 1, -1, -1)))
+
+        def path(best, j, stop):
+            out = []
+            while j is not None and j != stop:
+                out.append(j)
+                j = best[j][1]
+            return out
+
+        # the inner disc's cross seam lands on one of the chosen radials; it
+        # must leave both inner pieces >= center_cross_min_deg wide (a narrow
+        # one gets tabs biting in from every side and is absorbed as a sliver,
+        # leaving one inner piece for the whole half), so the DP is forced
+        # through such a radial when one exists
+        lo = math.radians(rp.center_cross_min_deg)
+        musts = [m for m in range(1, n - 1) if lo <= offs[m] <= span - lo] if cross else []
+        if musts:
+            m = min(musts, key=lambda m: (max(fwd[m][0], bwd[m][0]), abs(offs[m] - span / 2)))
+            picked = path(fwd, m, 0) + path(bwd, bwd[m][1], n - 1)
+            cross_at.append((start + offs[m]) % (2 * math.pi))
+        else:
+            picked = path(fwd, fwd[n - 1][1], 0)
+            if picked and cross:
+                cross_at.append((start + offs[min(picked, key=lambda k: abs(offs[k] - span / 2))])
+                                % (2 * math.pi))
+        radials += [(start + offs[k]) % (2 * math.pi) for k in picked]
     radials = sorted(set(radials))
     letter_union_c = unary_union(solids_c)
     for phi in radials:
