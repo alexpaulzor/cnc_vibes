@@ -2401,8 +2401,11 @@ def main():
     )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
     ap.add_argument("--frame-notches", action="store_true",
-                    help="also cut the keyed stand feet's notches into the stock's bottom edge "
-                         "(y down to -10mm; stand_feet_sheet.py)")
+                    help="also cut the keyed stand feet's notches into the stock edge LAST, in "
+                         "2mm slices alternating between the two slots (stand_feet_sheet.py)")
+    ap.add_argument("--notch-edge", choices=("left", "bottom"), default="left",
+                    help="stock edge for --frame-notches: left (-X, cut to x=-10) or bottom "
+                         "(-Y, cut to y=-10)")
     ap.add_argument("--material", default="plywood_baltic_birch_3mm")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
@@ -2500,17 +2503,25 @@ def main():
                 arc_tolerance_mm=a.etch_arc_tol,
                 smooth_mm=a.etch_smooth_mm,
             ))
-        if a.frame_notches:
-            # bottom-edge notches in the stock frame for the keyed stand feet
-            # (RING_SPEC.md §13.18), cut before the rim frees the disc
-            import display_stand as DS
-            import stand_feet_sheet as SF
-
-            npaths, _band = SF.frame_notch_paths()
-            passes.append(DS.emit_gcode(npaths, material, "frame notches for the keyed stand feet"))
         if passes:
             gcode = combine_passes(*passes, gcode)
         if a.frame_notches:
+            # notches in the stock frame for the keyed stand feet (RING_SPEC.md
+            # §13.18), cut LAST, deepest slice first, alternating between the
+            # two slots: if the head hits an end stop near the stock edge and
+            # the job aborts, everything else is already cut (§16.2)
+            import display_stand as DS
+            import stand_feet_sheet as SF
+
+            npaths = SF.frame_notch_sections(edge=3 if a.notch_edge == "left" else 0)
+            gcode = combine_passes(gcode, DS.emit_gcode(
+                npaths, material, "frame notches for the keyed stand feet (LAST)",
+                notes=[f"{a.notch_edge} stock edge, 2 slots, cut in 2mm slices from the slot end "
+                       "out past the stock edge, alternating slot A / slot B",
+                       "if the head hits an end stop and aborts here, the puzzle is done: "
+                       "finish the remaining slot ends with a file, saw or knife",
+                       "SAME machine frame as the puzzle cut: run it on the same sheet "
+                       "without moving it"]))
             _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM)
         else:
             _check_xy_envelope(gcode, a.max_xy_mm)

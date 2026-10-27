@@ -166,7 +166,7 @@ def cut_paths(feet, frame_out, stock):
     return paths, n_feet_paths
 
 
-def emit_gcode(paths, material, title):
+def emit_gcode(paths, material, title, notes=None):
     from emitter import WARMUP_MS, _header
     from motion import decimate, warmup_wiggle
 
@@ -174,12 +174,11 @@ def emit_gcode(paths, material, title):
     feed = laser["feed_mm_per_min"]
     s = int(round(laser["power_percent"] * 10))
     lead = WARMUP_MS / 1000 * feed / 60
-    lines = _header(title=title, material_id=material["id"], extra=[
+    lines = _header(title=title, material_id=material["id"], extra=(notes or [
         "display stand: 4 feet from the corner offcuts, then the frame outline (last)",
         "SAME machine frame as the puzzle cut (disc bbox 0..290): run it on the same "
         "sheet without moving it -- coordinates reach -5.5 / 295.5 (the stock edges)",
-        f"warmup: {WARMUP_MS:.0f}ms = {lead:.1f}mm fwd half / back to start",
-    ])
+    ]) + [f"warmup: {WARMUP_MS:.0f}ms = {lead:.1f}mm fwd half / back to start"])
     for i, pts in enumerate(paths, 1):
         pts = decimate(pts, 0.3)
         if len(pts) < 2:

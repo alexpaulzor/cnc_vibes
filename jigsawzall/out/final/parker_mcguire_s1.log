@@ -1,5 +1,6 @@
-ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font round --center-text PARKER+MCGUIRE --center-style ring --center-split --pack-words --keep-seams --material plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40 --frame-notches --gcode out/final/parker_mcguire_s1.gcode
+ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font round --center-text PARKER+MCGUIRE --center-style ring --center-split --pack-words --keep-seams --material plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left --gcode out/final/parker_mcguire_s1.gcode
 (center_arc_min_mm 24, center_cross_min_deg 70; both centre words unflipped)
 MOTION QA (info, UNVERIFIED machine profile): 5 etch stroke(s) > x1.3 energy/mm; worst etch stroke 30 (loop) x1.55 (worst 2mm x1.64)
 MELODY-SHANE-LUCA-AURELIA: cap 18.0mm, min letter gap 12.3mm, hub r 77mm, 106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 51)
-G-code: 16374 lines, $32=1 x1, M3 only (S1000 F350 x1 cut + 2 notches, S400 F2000 etch), X 0.0..290.0, Y -10.0..290.0; cut pass lint clean (98 paths, 9659 moves), cut motion QA 0 flagged; etch predicted 4.4 min
+G-code: 16665 lines, $32=1 x1, M3 only. Order: etch (S400 F2000) -> cut (S1000 F350 x1) -> frame notches LAST (S1000 F350; left edge, slots centred y=45 / y=245, 2mm slices alternating, x 7.0 -> -10.0, 26 paths).
+Extents: X -10.0..290.0, Y 0.0..290.0 (X < 0 only in the notch pass); cut pass lint clean (98 paths, 9659 moves), cut motion QA 0 flagged.

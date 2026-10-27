@@ -1476,7 +1476,20 @@ prediction drops to 5 strokes, worst x1.55 (small counter loops), with an
 overall factor of 1.05. Darkness at 40% on the veneer is unverified, so
 scrap-test it.
 
-**`--frame-notches`** appends the keyed stand-foot notches
-(`stand_feet_sheet.frame_notch_paths`, bottom edge, cut from y=-10) as
-their own pass between the etch and the cut, like `planet290.py`. The
-envelope check then uses REACH_MIN/MAX.
+**`--frame-notches`: left edge, LAST, in 2mm slices.**
+* The keyed stand-foot notches go on the LEFT (-X) stock edge
+  (`--notch-edge left`, the default), cut out to x=-10. Alex's laser sits
+  ~80mm -Y and ~20mm -X of the spindle, so the -X edge is the reachable one.
+  The puzzle is not rotated, since a disc stands any way up.
+* They are the job's very last pass (`stand_feet_sheet.frame_notch_sections`).
+  Each slot is cut in 2mm slices: deepest first, alternating slot A / slot B,
+  out past the stock edge.
+* If the head hits an end stop near the edge and the job aborts, the
+  puzzle is already done. Only the outer slot ends are left, to finish
+  with a file, saw or knife.
+* Each slice runs down one side, across (chopping the waste plug), and up
+  the other. Slices at or past the stock edge cut their two sides only, so
+  nothing cross-cuts the bed.
+* 26 paths, 106.4mm of laser-on cutting at F350. The envelope check uses
+  REACH_MIN/MAX. (`planet290.py` still cuts its notches on the bottom edge,
+  before the cut.)
