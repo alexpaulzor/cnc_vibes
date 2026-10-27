@@ -36,6 +36,7 @@ decorative round cut-outs, a solid ground bar, 1mm rounded outside corners.
 """
 import argparse
 import math
+import warnings
 import sys
 from pathlib import Path
 
@@ -192,24 +193,31 @@ def stability(info):
     return fwd, back
 
 
-def nest(g, sheet_mm=STOCK_MM, margin_mm=5.0, gap_mm=2.0):
-    """Feet in rows as head-to-tail PAIRS (a foot is roughly a wedge: one
-    turned 180deg slides into the other's empty corner), plus a lone foot
-    where a row has room. Returns placed polygons (sheet frame 0..sheet_mm)."""
+def pair_feet(g, gap_mm=2.0, stack=False):
+    """Two feet head-to-tail (a foot is roughly a wedge: one turned 180deg
+    slides into the other's empty corner), gap_mm apart, on the smallest
+    axis-aligned box over the slide offsets tried: side by side (slid in
+    along X at each vertical offset) and, with stack, also one above the
+    other (slid down along Y at each horizontal offset -- for a single
+    pair that is more compact; the sheet nest keeps side by side). Returns
+    (pair placed from (0, 0), (width, height))."""
     g = affinity.translate(g, -g.bounds[0], -g.bounds[1])
     r = affinity.rotate(g, 180, origin=(0, 0))
     r = affinity.translate(r, -r.bounds[0], -r.bounds[1])
     W, H = g.bounds[2], g.bounds[3]
+    slides = [(lambda t, dy=dy: (t, -dy), W) for dy in [k * 0.5 for k in range(int(H * 2) + 1)]]
+    if stack:
+        slides += [(lambda t, dx=dx: (dx, t), H) for dx in [k * 0.5 for k in range(-int(W * 2), int(W * 2) + 1)]]
     best = None
-    for dy in [k * 0.5 for k in range(int(H * 2) + 1)]:
-        lo, hi = 0.0, W + gap_mm  # bisect the slide-in distance
+    for move, reach in slides:
+        lo, hi = 0.0, reach + gap_mm  # bisect the slide-in distance
         for _ in range(30):
             mid = (lo + hi) / 2
-            if affinity.translate(r, mid, -dy).distance(g) < gap_mm:
+            if affinity.translate(r, *move(mid)).distance(g) < gap_mm:
                 lo = mid
             else:
                 hi = mid
-        pair = [g, affinity.translate(r, hi, -dy)]
+        pair = [g, affinity.translate(r, *move(hi))]
         bx = (min(q.bounds[0] for q in pair), min(q.bounds[1] for q in pair),
               max(q.bounds[2] for q in pair), max(q.bounds[3] for q in pair))
         area = (bx[2] - bx[0]) * (bx[3] - bx[1])
@@ -217,7 +225,15 @@ def nest(g, sheet_mm=STOCK_MM, margin_mm=5.0, gap_mm=2.0):
             best = (area, pair, bx)
     _a, pair, bx = best
     pair = [affinity.translate(q, -bx[0], -bx[1]) for q in pair]
-    PW, PH = bx[2] - bx[0], bx[3] - bx[1]
+    return pair, (bx[2] - bx[0], bx[3] - bx[1])
+
+
+def nest(g, sheet_mm=STOCK_MM, margin_mm=5.0, gap_mm=2.0):
+    """Feet in rows as head-to-tail PAIRS (pair_feet), plus a lone foot
+    where a row has room. Returns placed polygons (sheet frame 0..sheet_mm)."""
+    g = affinity.translate(g, -g.bounds[0], -g.bounds[1])
+    W, H = g.bounds[2], g.bounds[3]
+    pair, (PW, PH) = pair_feet(g, gap_mm)
     usable = sheet_mm - margin_mm
     placed = []
     y = margin_mm
@@ -235,6 +251,26 @@ def nest(g, sheet_mm=STOCK_MM, margin_mm=5.0, gap_mm=2.0):
             placed.append(affinity.translate(g, x, y))
             x += W + gap_mm
     return placed
+
+
+def compact_layout(feet, margin_mm=2.0):
+    """Turn a group of feet to its smallest bounding rectangle (aligned with
+    the group's minimum rotated rectangle), long side along X, and set it
+    margin_mm off the origin -- for cutting a few feet from a scrap. Returns
+    (feet, (width, height)) with the scrap needed = width/height + margin."""
+    u = unary_union(feet)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mrr = u.minimum_rotated_rectangle
+    c = list(mrr.exterior.coords)
+    (x0, y0), (x1, y1), (x2, y2) = c[0], c[1], c[2]
+    e1, e2 = math.dist((x0, y0), (x1, y1)), math.dist((x1, y1), (x2, y2))
+    ax, ay = ((x1 - x0, y1 - y0) if e1 >= e2 else (x2 - x1, y2 - y1))
+    ang = -math.degrees(math.atan2(ay, ax))
+    feet = [affinity.rotate(f, ang, origin=(0, 0)) for f in feet]
+    b = unary_union(feet).bounds
+    feet = [affinity.translate(f, margin_mm - b[0], margin_mm - b[1]) for f in feet]
+    return feet, (b[2] - b[0], b[3] - b[1])
 
 
 def best_foot(angle_deg, min_feet, rests=(18.0, 22.0, 26.0, 30.0), **kw):
@@ -350,6 +386,10 @@ def main():
     ap.add_argument("--mdf-clear", type=float, default=0.2, help="slot = MDF 3mm + this")
     ap.add_argument("--no-hole", action="store_true")
     ap.add_argument("--material", default="plywood_veneer_3ply_3mm")
+    ap.add_argument("--scrap", action="store_true",
+                    help="instead of the sheet: 1 foot and 2 feet (stacked head-to-tail) on the "
+                         "smallest footprint, origin at a scrap's corner -> stand_feet_1x/2x.gcode")
+    ap.add_argument("--scrap-margin", type=float, default=2.0, help="mm from the scrap's edges")
     a = ap.parse_args()
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -364,6 +404,9 @@ def main():
         raise SystemExit("no foot nests that many -- lower --min-sets")
     g, info, feet = res
     fwd, back = stability(info)
+    if a.scrap:
+        _scrap(out, g, info, material, a.angle, a.scrap_margin)
+        return
     paths = []
     for f in feet:  # hole first, then outline (the part stays put while its hole is cut)
         paths += [list(r.coords) for r in f.interiors]
@@ -397,6 +440,42 @@ def main():
     if info["keyed"]:
         print(f"frame notches: {a.notch_w}mm x {a.notch_depth}mm, {a.stance:.0f}mm apart, bottom (X) edge only, cut from y=-10; "
               f"frame band there {band:.0f}mm deep -> {out}/frame_notches.gcode")
+
+
+def _scrap(out, g, info, material, angle, margin):
+    """1x and 2x feet for a scrap: each group turned to its smallest box
+    (compact_layout), margin mm off the origin; holes before each outline."""
+    import display_stand as DS
+    from PIL import Image, ImageDraw
+
+    two, _wh = pair_feet(g, stack=True)
+    for n, group in ((1, [g]), (2, two)):
+        feet, (w, h) = compact_layout(group, margin)
+        paths = []
+        for f in feet:  # hole first, then outline (the part stays put while its hole is cut)
+            paths += [list(r.coords) for r in f.interiors]
+            paths.append(list(f.exterior.coords))
+        need = (w + 2 * margin, h + 2 * margin)
+        gc = DS.emit_gcode(paths, material, f"stand feet x{n} from scrap, {angle:.0f} deg", notes=[
+            f"{n} keyed stand {'feet' if n > 1 else 'foot'} (stand_feet_sheet.py, same foot as the sheet)"
+            + (", stacked head-to-tail 2mm apart" if n > 1 else ""),
+            f"origin = the scrap's lower-left corner; parts span X {margin:.1f}..{margin + w:.1f}, "
+            f"Y {margin:.1f}..{margin + h:.1f} -> scrap at least {need[0]:.1f} x {need[1]:.1f}mm"])
+        (out / f"stand_feet_{n}x.gcode").write_text(gc)
+        k = 6.0
+        W, H = int(need[0] * k), int(need[1] * k)
+        img = Image.new("RGB", (W, H), (235, 220, 190))
+        d = ImageDraw.Draw(img)
+        for f in feet:
+            d.polygon([(x * k, H - y * k) for x, y in f.exterior.coords], fill=(120, 160, 110),
+                      outline=(200, 0, 0))
+            for r in f.interiors:
+                d.polygon([(x * k, H - y * k) for x, y in r.coords], fill=(235, 220, 190),
+                          outline=(200, 0, 0))
+        d.text((4, 2), f"{n}x: scrap >= {need[0]:.1f} x {need[1]:.1f}mm", fill=(0, 0, 0))
+        img.save(out / f"stand_feet_{n}x.png")
+        print(f"{n}x: parts {w:.1f} x {h:.1f}mm, scrap >= {need[0]:.1f} x {need[1]:.1f}mm "
+              f"-> {out}/stand_feet_{n}x.gcode")
 
 
 def _render(out, g, info, feet):
