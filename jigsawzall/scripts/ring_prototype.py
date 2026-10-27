@@ -522,13 +522,17 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
         r_m = limit - cap / 2  # shared midline, as far out as fits
         ok = True
         for wi, word in enumerate((w1, w2)):
-            flip = wi == 1
+            # the bottom word is flipped to read upright -- except on a split
+            # hub, where both words are laid out alike (feet to the centre,
+            # reading clockwise): 180 deg copies of each other, so neither is
+            # "up" until the disc is turned (RING_SPEC.md §16.2)
+            flip = wi == 1 and not rp.center_split
             seq = word[::-1] if flip else word
             gl, xs, total = _word_advances(seq, font, track)
             if total / r_m > math.radians(160):
                 ok = False
                 break
-            th0 = 0.0 if not flip else math.pi
+            th0 = math.pi if wi == 1 else 0.0
             r_base = r_m - cap / 2 if not flip else r_m + cap / 2
             for g, x in zip(gl, xs):
                 if flip:

@@ -1431,6 +1431,12 @@ round --center-text PARKER+MCGUIRE --center-style ring --center-split
 relative to the other, with a tabbed seam between them so neither name owns
 "up". "THE" and the plural s were dropped (PARKER / MCGUIRE) to save room.
 
+**Both words laid out alike (no flip).** The `ring` style normally flips
+the bottom word so it reads upright, but that made PARKER the "up" name
+(Alex: "this favors Parker over McGuire"). With `center_split`, both words
+sit feet-to-centre and read clockwise. They are 180° copies of each other,
+so a half turn of the disc swaps which one reads upright.
+
 **Hub split (`_center_split_seams`).**
 * The `ring` style arcs the two words around the hub, with the bottom word
   flipped. A tabbed DIVIDER runs through the letter gaps nearest 3 and 9
