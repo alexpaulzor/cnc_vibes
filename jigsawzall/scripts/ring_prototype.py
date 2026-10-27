@@ -2510,18 +2510,9 @@ def main():
             # §13.18), cut LAST, deepest slice first, alternating between the
             # two slots: if the head hits an end stop near the stock edge and
             # the job aborts, everything else is already cut (§16.2)
-            import display_stand as DS
             import stand_feet_sheet as SF
 
-            npaths = SF.frame_notch_sections(edge=3 if a.notch_edge == "left" else 0)
-            gcode = combine_passes(gcode, DS.emit_gcode(
-                npaths, material, "frame notches for the keyed stand feet (LAST)",
-                notes=[f"{a.notch_edge} stock edge, 2 slots, cut in 2mm slices from the slot end "
-                       "out past the stock edge, alternating slot A / slot B",
-                       "if the head hits an end stop and aborts here, the puzzle is done: "
-                       "finish the remaining slot ends with a file, saw or knife",
-                       "SAME machine frame as the puzzle cut: run it on the same sheet "
-                       "without moving it"]))
+            gcode = combine_passes(gcode, frame_notch_pass(material, a.notch_edge))
             _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM)
         else:
             _check_xy_envelope(gcode, a.max_xy_mm)
@@ -2552,6 +2543,25 @@ def _center_word_index(spec, words):
     if spec.upper() not in words:
         raise SystemExit(f"--center-word {spec!r} is not one of {words}")
     return words.index(spec.upper())
+
+
+def frame_notch_pass(material, notch_edge="left"):
+    """G-code for the keyed stand feet's frame notches, to append LAST
+    (stand_feet_sheet.frame_notch_sections): a U per slot inside safe travel,
+    then 2mm slices alternating between the slots past the axis zero."""
+    import display_stand as DS
+    import stand_feet_sheet as SF
+
+    axis = "x" if notch_edge == "left" else "y"
+    return DS.emit_gcode(
+        SF.frame_notch_sections(edge=3 if notch_edge == "left" else 0), material,
+        "frame notches for the keyed stand feet (LAST)",
+        notes=[f"{notch_edge} stock edge, 2 slots: one U each from the slot end to {axis}=0, "
+               f"then {axis}<0 in 2mm slices alternating slot A / slot B out to {axis}=-10",
+               "if the head hits an end stop and aborts here, the puzzle is done: "
+               "finish the remaining slot ends with a file, saw or knife",
+               "SAME machine frame as the puzzle cut: run it on the same sheet "
+               "without moving it"])
 
 
 def _check_xy_envelope(gcode, max_xy_mm, min_xy_mm=0.0):

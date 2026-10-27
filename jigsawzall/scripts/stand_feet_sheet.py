@@ -299,37 +299,42 @@ def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5
 
 
 def frame_notch_sections(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5.0,
-                         edge=3, section_mm=2.0):
-    """The same notches as frame_notch_paths, cut in section_mm slices for
-    running LAST in the puzzle job: deepest slice first, alternating between
-    the two slots, working out to (and overrun_mm past) the stock edge. If
-    the machine hits an end stop near the edge and aborts, only the outer
-    slices are left, to finish with a file, saw or knife. Each slice is one
-    path: down one side, across (chopping the waste plug), up the other; the
-    first also closes the slot's end, and slices reaching the stock edge or
-    beyond (the overrun, there for an imprecisely placed sheet) cut their
-    two sides only -- a cross cut there would only burn the bed. edge: 0 bottom, 1 right, 2 top, 3 left (Alex's laser
-    sits ~80mm -Y / ~20mm -X of the spindle, so the -X edge is the one it
-    reaches)."""
+                         edge=3, section_mm=2.0, safe_to_mm=0.0):
+    """The same notches as frame_notch_paths, for running LAST in the puzzle
+    job. The part of each slot inside the machine's safe travel (from the
+    slot end down to safe_to_mm on the job's axis -- x=0 for the left edge,
+    y=0 for the bottom) is one U-shaped cut. Past that, toward the end stop,
+    it is cut in section_mm slices alternating between the two slots, out
+    to overrun_mm past the stock edge. If the head hits the end stop there
+    and the job aborts, only the outer slot ends are left, to finish with a
+    file, saw or knife. Each slice runs down one side, across (chopping the
+    waste plug), and up the other; slices at or past the stock edge cut
+    their two sides only -- a cross cut there would only burn the bed.
+    edge: 0 bottom, 1 right, 2 top, 3 left (Alex's laser sits ~80mm -Y and
+    ~20mm -X of the spindle, so the -X edge is the one it reaches)."""
     c = DISC_MM / 2
     ye = c - STOCK_MM / 2  # stock edge
     top, bottom = ye + depth_mm, ye - overrun_mm
-    n = math.ceil((top - bottom) / section_mm - 1e-9)
-    paths = []
+    safe = min(top, max(bottom, safe_to_mm))
+    slots = [(c + sx - width_mm / 2, c + sx + width_mm / 2) for sx in notch_positions(stance_mm)]
+    runs = []
+    if safe < top:  # the safe part: one U per slot
+        runs += [[(x0, safe), (x0, top), (x1, top), (x1, safe)] for x0, x1 in slots]
+    n = math.ceil((safe - bottom) / section_mm - 1e-9)
     for k in range(n):
-        hi = top - k * section_mm
+        hi = safe - k * section_mm
         lo = max(bottom, hi - section_mm)
-        for sx in notch_positions(stance_mm):
-            x0, x1 = c + sx - width_mm / 2, c + sx + width_mm / 2
-            if k == 0:
-                runs = [[(x1, hi), (x0, hi), (x0, lo), (x1, lo), (x1, hi)]]
+        for x0, x1 in slots:
+            if hi >= top - 1e-6:  # no safe part: the first slice closes the slot end
+                runs.append([(x1, hi), (x0, hi), (x0, lo), (x1, lo), (x1, hi)])
             elif lo > ye + 1e-6:
-                runs = [[(x0, hi), (x0, lo), (x1, lo), (x1, hi)]]
+                runs.append([(x0, hi), (x0, lo), (x1, lo), (x1, hi)])
             else:  # at/past the stock edge: no cross cut into the bed
-                runs = [[(x0, hi), (x0, lo)], [(x1, lo), (x1, hi)]]
-            for pts in runs:
-                ln = affinity.rotate(LineString(pts), 90 * edge, origin=(c, c))
-                paths.append([(round(x, 4), round(y, 4)) for x, y in ln.coords])
+                runs += [[(x0, hi), (x0, lo)], [(x1, lo), (x1, hi)]]
+    paths = []
+    for pts in runs:
+        ln = affinity.rotate(LineString(pts), 90 * edge, origin=(c, c))
+        paths.append([(round(x, 4), round(y, 4)) for x, y in ln.coords])
     return paths
 
 

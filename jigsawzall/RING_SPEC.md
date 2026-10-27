@@ -1481,15 +1481,17 @@ scrap-test it.
   (`--notch-edge left`, the default), cut out to x=-10. Alex's laser sits
   ~80mm -Y and ~20mm -X of the spindle, so the -X edge is the reachable one.
   The puzzle is not rotated, since a disc stands any way up.
-* They are the job's very last pass (`stand_feet_sheet.frame_notch_sections`).
-  Each slot is cut in 2mm slices: deepest first, alternating slot A / slot B,
-  out past the stock edge.
-* If the head hits an end stop near the edge and the job aborts, the
-  puzzle is already done. Only the outer slot ends are left, to finish
-  with a file, saw or knife.
+* They are the job's very last pass (`stand_feet_sheet.frame_notch_sections`,
+  `ring_prototype.frame_notch_pass`). The part inside safe travel, from the
+  slot end (x=7) to x=0, is one U per slot. Only x<0, toward the end stop,
+  is cut in 2mm slices alternating slot A / slot B, out to x=-10. Slicing
+  the whole slot was "too many back and forths for the safe part" (Alex).
+* If the head hits an end stop there and the job aborts, the puzzle is
+  already done. Only the outer slot ends are left, to finish with a file,
+  saw or knife.
 * Each slice runs down one side, across (chopping the waste plug), and up
-  the other. Slices at or past the stock edge cut their two sides only, so
-  nothing cross-cuts the bed.
-* 26 paths, 106.4mm of laser-on cutting at F350. The envelope check uses
+  the other. Slices at or past the stock edge (x=-5) cut their two sides
+  only, so nothing cross-cuts the bed.
+* 18 paths, 87.2mm of laser-on cutting at F350. The envelope check uses
   REACH_MIN/MAX. (`planet290.py` still cuts its notches on the bottom edge,
   before the cut.)

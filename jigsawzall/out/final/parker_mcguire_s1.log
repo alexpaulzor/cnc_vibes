@@ -2,5 +2,5 @@ ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font round --center-text 
 (center_arc_min_mm 24, center_cross_min_deg 70; both centre words unflipped)
 MOTION QA (info, UNVERIFIED machine profile): 5 etch stroke(s) > x1.3 energy/mm; worst etch stroke 30 (loop) x1.55 (worst 2mm x1.64)
 MELODY-SHANE-LUCA-AURELIA: cap 18.0mm, min letter gap 12.3mm, hub r 77mm, 106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 51)
-G-code: 16665 lines, $32=1 x1, M3 only. Order: etch (S400 F2000) -> cut (S1000 F350 x1) -> frame notches LAST (S1000 F350; left edge, slots centred y=45 / y=245, 2mm slices alternating, x 7.0 -> -10.0, 26 paths).
+G-code: 16559 lines, $32=1 x1, M3 only. Order: etch (S400 F2000) -> cut (S1000 F350 x1) -> frame notches LAST (S1000 F350; left edge, slots centred y=45 / y=245: one U each x 7.0 -> 0.0, then x<0 in 2mm slices alternating, 0.0 -> -10.0; 18 paths).
 Extents: X -10.0..290.0, Y 0.0..290.0 (X < 0 only in the notch pass); cut pass lint clean (98 paths, 9659 moves), cut motion QA 0 flagged.
