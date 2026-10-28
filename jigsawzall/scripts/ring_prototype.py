@@ -2550,7 +2550,7 @@ def main():
             if a.corner_feet:
                 gcode = combine_passes(gcode, corner_feet_pass(material))
             gcode = combine_passes(gcode, frame_notch_pass(material, a.notch_edge))
-            _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM)
+            _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM, SF.REACH_MAX_Y_MM)
         else:
             _check_xy_envelope(gcode, a.max_xy_mm)
         Path(a.gcode).write_text(gcode)
@@ -2624,17 +2624,19 @@ def frame_notch_pass(material, notch_edge="left"):
                "without moving it"])
 
 
-def _check_xy_envelope(gcode, max_xy_mm, min_xy_mm=0.0):
+def _check_xy_envelope(gcode, max_xy_mm, min_xy_mm=0.0, max_y_mm=None):
     """Hard stop before writing: every X/Y word (G0 travel included) must lie
-    in [min_xy_mm, max_xy_mm]. A 300mm job ran into the Y hard stop at
-    ~297mm; -10mm X/Y is confirmed reachable (frame notches use -5.3)."""
+    in [min_xy_mm, max_xy_mm] (Y capped at max_y_mm when given). The Y limit
+    switch tripped at MPos Y=294.453 (stand_feet_sheet.REACH_MAX_Y_MM);
+    -10mm X/Y is confirmed reachable."""
     import re
 
     bad = []
     for n, line in enumerate(gcode.splitlines(), 1):
         code = line.split(";")[0]
         for ax, v in re.findall(r"([XY])(-?[\d.]+)", code):
-            if not (min_xy_mm <= float(v) <= max_xy_mm):
+            hi = max_y_mm if (ax == "Y" and max_y_mm is not None) else max_xy_mm
+            if not (min_xy_mm <= float(v) <= min(hi, max_xy_mm)):
                 bad.append(f"line {n}: {ax}{v}")
     if bad:
         raise SystemExit(

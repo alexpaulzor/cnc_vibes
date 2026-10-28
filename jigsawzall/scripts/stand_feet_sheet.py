@@ -307,6 +307,9 @@ def notch_positions(stance_mm=200.0):
 # Alex confirmed -10mm X/Y is reachable; a 300mm job hit the Y hard stop at
 # ~297mm, so nothing goes past 295.5.
 REACH_MIN_MM, REACH_MAX_MM = -10.0, 295.5
+# Y is shorter: the Y limit switch tripped at MPos Y=294.453 (X=295.000 was
+# fine) cutting a corner foot along the Y=295 stock edge -- keep 1mm under it
+REACH_MAX_Y_MM = 293.5
 
 
 def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5.0,
@@ -378,13 +381,15 @@ def corner_feet(g):
     """Two feet in the puzzle job's own sheet (disc 0..290, stock -5..295),
     one in each corner opposite the left-edge frame notches: base (the
     table-facing edge) along the right stock edge x=295, tall nose end
-    tucked into the corner (Alex). The default 75deg foot clears the disc
-    cut by 4.1mm. Cutting along the stock edge may run over the bed, which
+    tucked into the corner (Alex). The top foot stops at REACH_MAX_Y_MM
+    (1.5mm under the stock edge). The default 75deg foot clears the disc
+    cut by 4.1mm at the bottom corner. Cutting along the stock edge may run over the bed, which
     is fine. Returns [top-right foot, bottom-right foot]."""
     c = DISC_MM / 2
     xe, lo, hi = c + STOCK_MM / 2, c - STOCK_MM / 2, c + STOCK_MM / 2
     top = affinity.affine_transform(g, [0, -1, -1, 0, xe, 0])  # X = xe - y, Y = -x
-    top = affinity.translate(top, 0, hi - top.bounds[3])
+    # nose into the top corner, but no higher than the Y limit allows
+    top = affinity.translate(top, 0, min(hi, REACH_MAX_Y_MM) - top.bounds[3])
     bot = affinity.affine_transform(g, [0, -1, 1, 0, xe, 0])  # X = xe - y, Y = x
     bot = affinity.translate(bot, 0, lo - bot.bounds[1])
     disc = Point(c, c).buffer(c, quad_segs=128)

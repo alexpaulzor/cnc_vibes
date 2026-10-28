@@ -142,7 +142,7 @@ notches = DS.emit_gcode(npaths, material, "frame notches for the keyed stand fee
 g = combine_passes(etch, notches, cut)
 R._check_xy_envelope(cut, 290.0)
 open(f"{D}/s{seed}_cut_only.gcode", "w").write(cut)
-R._check_xy_envelope(g, SF.REACH_MAX_MM, SF.REACH_MIN_MM)  # notches reach the stock edges
+R._check_xy_envelope(g, SF.REACH_MAX_MM, SF.REACH_MIN_MM, SF.REACH_MAX_Y_MM)  # notches reach the stock edges
 open(f"{D}/s{seed}.gcode", "w").write(g)
 print("lint_gcode cut:", RL.lint_gcode(cut, diameter_mm=290.0).summary())
 for name, gc in (("cut", cut), ("etch", etch)):
