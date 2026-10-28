@@ -374,6 +374,25 @@ def frame_notch_sections(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_m
     return paths
 
 
+def corner_feet(g):
+    """Two feet in the puzzle job's own sheet (disc 0..290, stock -5..295),
+    one in each corner opposite the left-edge frame notches: base (the
+    table-facing edge) along the right stock edge x=295, tall nose end
+    tucked into the corner (Alex). The default 75deg foot clears the disc
+    cut by 4.1mm. Cutting along the stock edge may run over the bed, which
+    is fine. Returns [top-right foot, bottom-right foot]."""
+    c = DISC_MM / 2
+    xe, lo, hi = c + STOCK_MM / 2, c - STOCK_MM / 2, c + STOCK_MM / 2
+    top = affinity.affine_transform(g, [0, -1, -1, 0, xe, 0])  # X = xe - y, Y = -x
+    top = affinity.translate(top, 0, hi - top.bounds[3])
+    bot = affinity.affine_transform(g, [0, -1, 1, 0, xe, 0])  # X = xe - y, Y = x
+    bot = affinity.translate(bot, 0, lo - bot.bounds[1])
+    disc = Point(c, c).buffer(c, quad_segs=128)
+    for q in (top, bot):
+        assert not q.intersects(disc), "corner foot runs into the disc"
+    return [top, bot]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir")

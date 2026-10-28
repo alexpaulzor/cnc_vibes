@@ -2434,6 +2434,9 @@ def main():
     ap.add_argument("--frame-notches", action="store_true",
                     help="also cut the keyed stand feet's notches into the stock edge LAST, in "
                          "2mm slices alternating between the two slots (stand_feet_sheet.py)")
+    ap.add_argument("--corner-feet", action="store_true",
+                    help="with --frame-notches left: also cut 2 stand feet from the sheet's "
+                         "right-hand corners (base on the x=295 stock edge)")
     ap.add_argument("--notch-edge", choices=("left", "bottom"), default="left",
                     help="stock edge for --frame-notches: left (-X, cut to x=-10) or bottom "
                          "(-Y, cut to y=-10)")
@@ -2544,6 +2547,8 @@ def main():
             # the job aborts, everything else is already cut (§16.2)
             import stand_feet_sheet as SF
 
+            if a.corner_feet:
+                gcode = combine_passes(gcode, corner_feet_pass(material))
             gcode = combine_passes(gcode, frame_notch_pass(material, a.notch_edge))
             _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM)
         else:
@@ -2575,6 +2580,29 @@ def _center_word_index(spec, words):
     if spec.upper() not in words:
         raise SystemExit(f"--center-word {spec!r} is not one of {words}")
     return words.index(spec.upper())
+
+
+def corner_feet_pass(material):
+    """G-code for two keyed stand feet cut from the puzzle sheet's right-hand
+    corners (stand_feet_sheet.corner_feet): each foot's holes, then its
+    outline. Runs after the puzzle cut, before the frame notches."""
+    import display_stand as DS
+    import stand_feet_sheet as SF
+
+    g, _info, _feet = SF.best_foot(75.0, 32)
+    feet = SF.corner_feet(g)
+    paths = []
+    for f in feet:
+        paths += [list(r.coords) for r in f.interiors]
+        paths.append(list(f.exterior.coords))
+    gap = min(f.distance(Point(145.0, 145.0).buffer(145.0, quad_segs=128).exterior)
+              for f in feet)
+    return DS.emit_gcode(paths, material, "stand feet from the sheet's right-hand corners", notes=[
+        "2 keyed stand feet, base along the right stock edge x=295, nose in the "
+        "top-right / bottom-right corner",
+        f"{gap:.1f}mm of frame between each foot and the disc cut; the base cut runs "
+        "along the stock edge (may mark the bed)",
+        "SAME machine frame as the puzzle cut: run it on the same sheet without moving it"])
 
 
 def frame_notch_pass(material, notch_edge="left"):

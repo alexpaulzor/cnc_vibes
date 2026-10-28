@@ -1502,8 +1502,8 @@ scrap-test it.
 round --center-text CAVAGNOLO --center-style ring --center-split
 --center-cap-max-mm 18 --pack-words --keep-seams --material
 plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
---etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left --gcode
-out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
+--etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left
+--corner-feet --gcode out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
 This replaces an earlier cut with "THE CAVAGNOLOS" as two flat lines.
 "THE" and the plural s were dropped, as with PARKER / MCGUIRE.
 
@@ -1531,3 +1531,17 @@ now the default for ring and centre hearts alike.
 was delivered. Its cut lint is clean (85 paths). Every seed warns that the
 1.0mm inset of LUCY's L doesn't match its part count, but the inset
 outline is complete and no tiny separate loop is cut there.
+
+**Stand feet from the same sheet (`--corner-feet`, Alex's layout).** The
+whole thing now comes out of one sheet: two keyed feet are cut from the
+corners opposite the left-edge slots (`stand_feet_sheet.corner_feet`).
+* Each foot's base (its table edge) runs along the right stock edge at
+  x=295, with the tall nose tucked into the top-right or bottom-right
+  corner. The default 75° foot (105.0 x 23.2mm) clears the disc cut by
+  4.1mm, and its tapering tail follows the circle.
+* A first check kept 4mm of wood to the stock edge and wrongly concluded
+  that no foot fits. Using the stock edge itself as the base is the trick,
+  even if that cut marks the bed.
+* The cut-outs left in the frame hold the feet for flat storage.
+* The feet pass runs after the puzzle cut and before the notches, so the
+  notches stay last.
