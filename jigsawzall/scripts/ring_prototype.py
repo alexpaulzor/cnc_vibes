@@ -316,6 +316,9 @@ def glyph_local(ch, font):
     return affinity.translate(poly, -cx, -base_y)
 
 
+HEART_CAP_FRAC = 1.0  # heart height / cap height
+
+
 def ornament_local(kind, cap_h):
     """Separator piece at the join (end -> start of the name), in the same
     local frame, centred on the letter band."""
@@ -395,7 +398,9 @@ def ornament_local(kind, cap_h):
         )
         pts.append((x, -y))
     p = Polygon(pts)
-    s = 0.55 * cap_h / (p.bounds[3] - p.bounds[1])
+    # as tall as the letters it separates (Alex: 0.55 cap came out ~1cm,
+    # "too tiny")
+    s = HEART_CAP_FRAC * cap_h / (p.bounds[3] - p.bounds[1])
     p = affinity.scale(p, s, s, origin=(0, 0))
     b = p.bounds
     return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
@@ -502,6 +507,24 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
             for g in out for px, py in g.convex_hull.exterior.coords
         )
         return out if r <= limit else None
+    if rp.center_style == "ring" and len(rp.center_text) == 1:
+        # one word wrapped all the way round the hub, a heart between its
+        # last and first letters, everything evenly spaced, feet to the
+        # centre: a spinning disc with no "up" (RING_SPEC.md §16.3)
+        r_m = limit - cap / 2
+        word = rp.center_text[0]
+        gl = [glyph_local(ch, font) for ch in word] + [ornament_local("heart", cap)]
+        wd = [font.getlength(ch) for ch in word]
+        wd.append(gl[-1].bounds[2] - gl[-1].bounds[0])
+        gap = (2 * math.pi * r_m - sum(wd)) / len(gl)
+        if gap < track or r_m - cap / 2 <= 0:
+            return None
+        # word centred on 12 o'clock, heart opposite it at 6
+        x = -(sum(wd[:-1]) + gap * (len(word) - 1)) / 2
+        for g, w in zip(gl, wd):
+            out.append(place(g, (x + w / 2) / r_m, r_m - cap / 2, C))
+            x += w + gap
+        return out
     w1, w2 = rp.center_text
     if rp.center_style == "flat":
         # the strip between the two lines is wood too -- same floor applies
@@ -593,7 +616,13 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
     # part of it closer than `clear` (a near miss leaves a sliver); the middle
     # of each usable run -- a stem's centre line -- becomes a candidate
     step = math.radians(0.5)
-    for g in letters:
+    # a one-word ring ends with its heart (_center_layout): no radial through
+    # it -- through the middle it runs out of the notch between the lobes,
+    # gets chopped there, and the band pieces either side merge
+    heart = len(letters) - 1 if len(rp.center_text) == 1 else None
+    for li, g in enumerate(letters):
+        if li == heart:
+            continue
         sg = solid_of(g)
         c = ang(g.centroid.coords[0])
         rel = [math.remainder(ang(p) - c, 2 * math.pi) for p in g.exterior.coords]
@@ -2389,6 +2418,8 @@ def main():
         help="medallion = fused words + undivided hub (original); flat / ring = "
         "loose letters cut out of the normal pie-sliced hub",
     )
+    ap.add_argument("--center-cap-max-mm", type=float, default=None,
+                    help="cap the loose center letters' auto-maximised height (default 30)")
     ap.add_argument(
         "--center-split", action="store_true",
         help="ring-style center text: split the hub with a tabbed divider between the two "
@@ -2446,6 +2477,7 @@ def main():
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
         center_style=a.center_style,
         center_split=a.center_split,
+        **({"center_loose_cap_max_mm": a.center_cap_max_mm} if a.center_cap_max_mm is not None else {}),
         center_word=_center_word_index(a.center_word, words),
     )
     tag = "-".join(words)
