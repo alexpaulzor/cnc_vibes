@@ -1495,3 +1495,39 @@ scrap-test it.
 * 18 paths, 87.2mm of laser-on cutting at F350. The envelope check uses
   REACH_MIN/MAX. (`planet290.py` still cuts its notches on the bottom edge,
   before the cut.)
+
+### 16.3 One surname alone in the spinning hub: BRIAN / GILLIAN / LUCY / MAIA + CAVAGNOLO
+
+**Delivered:** `ring_prototype.py BRIAN+GILLIAN+LUCY+MAIA --seed 2 --font
+round --center-text CAVAGNOLO --center-style ring --center-split
+--center-cap-max-mm 18 --pack-words --keep-seams --material
+plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+--etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left --gcode
+out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
+This replaces an earlier cut with "THE CAVAGNOLOS" as two flat lines.
+"THE" and the plural s were dropped, as with PARKER / MCGUIRE.
+
+**One word round the whole hub.**
+* `_center_layout`: a single `center_text` word in the `ring` style is
+  spaced evenly round the full circle, feet to the centre. A heart sits
+  between its last and first letters (word centred at 12 o'clock, heart at
+  6), so the spinning disc has no "up".
+* The split hub (§16.2) works unchanged: dividers at 3 and 9, inner circle,
+  cross seams, band radials through letter stems.
+* No band radial goes through the centre heart. Through the middle it ran
+  out of the notch between the lobes, got chopped there, and the band
+  pieces either side merged into one oversized piece.
+* The centre letters are capped at 18mm, the ring's cap, via
+  `--center-cap-max-mm`. Left to auto-maximise they grew, which pulled
+  the inner circle in from 39.1mm to 33.6mm. The 24mm landing spacing
+  (41° at that radius) then forced 2 oversized band pieces.
+
+**Hearts as tall as the letters** (`HEART_CAP_FRAC = 1.0`, was 0.55).
+Alex: the hearts on the last cut were "too tiny, only like 1cm". This is
+now the default for ring and centre hearts alike.
+
+**Seed choice.** Seeds 1-4 were all QA-clean. Seed 1's cut pass had a lint
+`shuttle` (3+ in-place reversals where seams land on BRIAN's I), so seed 2
+was delivered. Its cut lint is clean (85 paths). Every seed warns that the
+1.0mm inset of LUCY's L doesn't match its part count, but the inset
+outline is complete and no tiny separate loop is cut there.
