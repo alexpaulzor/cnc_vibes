@@ -1095,6 +1095,211 @@ floor size are both unverified assumptions, same status the original
 `etch_matrix_cal.py` version's `1.5x` margin had before it was corrected
 here.
 
+### 13.14 Globe land as CUT pieces (`RingParams.globe_land`, `scripts/globe_land.py`)
+
+Alex: "rework it so the continents act like the PLANET letters -- cut
+along country or land boundaries instead of just etch, so countries
+become counters that set in with no tabs". Also the reason it's worth
+doing: the SF-globe cut's etched coastlines scorched / burnt through in
+places (§13.16).
+
+**Data.** Natural Earth 1:110m admin-0 countries (public domain),
+cached as `data/ne_110m_countries.json` (~160KB, lon/lat rounded to
+0.01deg -- 25 microns on this globe). `globe_land.py --refresh-cache
+GEOJSON` rebuilds it from `ne_110m_admin_0_countries.geojson`.
+
+**Projection.** Each country is clipped to the visible hemisphere ON THE
+SPHERE: projected azimuthal-equidistant about the view centre (the
+hemisphere is exactly the disc rho <= pi/2 there, the map continuous up to
+the antipode), clipped, then squashed rho -> sin(rho) = orthographic. A
+country containing the antipode is refused (it would turn inside out).
+The globe's limb sits `globe_margin_mm` (24) inside the rim: land stays
+out of the rim band (letters' tops are 27mm in), so rim pieces keep their
+ordinary tabs -- at 16mm, coast-chopped rim seams lost their tabs and
+left rim pieces with no grip at all.
+
+**Cleaning (land_pieces).** Letters are subtracted (they cut their own
+pockets into the land, exactly as into wood); then the whole land mass is
+closed (ocean narrower than `min_ocean_mm`=6 between land and land/letters
+becomes land -- no seam layout can tile it) and opened at
+`land_min_feature_mm`=3 (no land neck / spit thinner). Countries are cut
+back out of the cleaned mass; a country that isn't `land_min_piece_mm`
+(7) across and 120mm^2 after its own 3mm opening folds, with every enclave
+/ thin border strip / closed strait, into the neighbour it shares the most
+border with (Europe's micro-states join their big neighbours; the merged
+countries' old borders are ETCHED). Pieces over the ring's size limit
+(`oversized_oriented`, or any side > 64mm) are split along a projected
+meridian or parallel through them -- a 5-degree graticule line when one
+balances the halves -- else straight across their long axis; a cut that
+grazes the coast has its thin bits handed to the other half. A final pass
+cuts any sub-3mm waist (two lobes an opening re-closes) straight across
+and hands thin bits to a neighbour; split and clean alternate until
+neither changes anything. Result: SF view 24 pieces, Berlin view 61, none
+oversized, none with a neck/strip (tests/test_globe_land.py checks
+this on the SF view).
+
+**Seams.** Land joins the letters as the thing the background is carved
+around (`cut_union`) and as tab clearance (`tab_solids`), but NOT as a
+routing obstacle: `chop_seams` cuts every seam where it comes within 3mm
+of land and steps each remaining stretch straight onto the nearest coast
+point ("L" end, like a seam ending on a letter) -- a seam grazing the
+coast at a shallow angle would leave a thin wedge of ocean. Chopped
+stretches may cut plain when no tab fits (merging their ocean pieces
+instead made oversized pieces round every continent); a rim piece left
+with no tab or socket at all (`loose_rim_pieces`) counts as a QA defect
+in the variant score. Letter notch-snapping still sees letters only (a
+bay is not a letter notch).
+
+**Ocean scraps.** Per variant, `absorb_ocean_into_land` gives an ocean
+sliver/thin piece wedged against the coast (tab-free, >=1/10 of its
+outline on land) to that land piece, and cuts a sub-3mm neck off an ocean
+piece where it meets the coast (the neck goes to the land, a real lobe
+beyond it becomes its own drop-in piece) -- only when the grown land
+piece stays clean and in size. An ocean region ringed by land (Hudson
+Bay, the Mediterranean once Gibraltar closes) is a tabless drop-in "lake",
+held like a letter counter.
+
+**Pieces.** Land pieces are `kind="land"`: tabless, no sliver/aspect
+rules (a country is what it is) but held to the oversized limit and the
+3mm neck/strip floor (`ring_lint.lint_pieces`: `land_bridge`,
+`land_strip`, `oversized`). Under 10x10mm -> 3 breakaway bridges like a
+small letter counter (`add_land_bridges`). Rendered in earthy fills.
+
+### 13.15 Display stand from the corner offcuts (`scripts/display_stand.py`)
+
+Alex glues the leftover frame (300 stock minus the 290 disc) to a 300x300
+3mm MDF back; the puzzle sits back in it. The stand tilts that tray back
+for display, from the four corner offcuts:
+
+* **Frame outline**: circle R = 145 + `frame_w_mm` (7) clipped by the
+  stock -- a 7mm ring round the disc (5mm at the four flats where the
+  circle runs off the stock), the four corners coming away identically,
+  so the frame reads as a deliberate round frame. The MDF back can stay
+  square (the tray's straight bottom edge is the MDF's: the feet can sit
+  anywhere along it; trimming the MDF to the frame outline would leave
+  only the 49mm flats to stand on).
+* **Feet** (4 identical, 2 are enough): each corner crescent stood on its
+  two trimmed tips like an arch, apex up -- 157 x 77mm. Its roof is the
+  stock's own edge and its underside the frame cut, so only the slot, the
+  tip pads and the lip are extra cuts. The slot (tray 6.0 + 0.2mm; kerf
+  adds ~0.15) runs up at the display angle from in front of the apex, so
+  the tray's back face rests on the slot's back wall all the way up to the
+  apex and the short front lip stops it sliding off.
+* **Stability, computed**: at 60deg from horizontal the tray's centre of
+  mass (uniform 300mm plate) projects 40mm in front of the feet's rear
+  ground contact (footprint 157mm). The script warns under 15mm.
+  Gravity's normal component (cos 60 = 0.5 g) presses the puzzle into the
+  MDF, so pieces can't fall out of the recess.
+* Same machine frame as the puzzle job (disc bbox 0..290), so it runs on
+  the same sheet without moving it: coordinates reach -5 / 295 (the stock
+  edges). Feet first, frame outline last.
+
+**Unverified**: no physical cut yet. Slot fit depends on the real
+veneer + MDF thickness (test-cut a slot in scrap first); a single 3mm foot
+can wobble sideways ~atan(0.35/3) in its slot before it binds -- the tray
+weight seats it, but glue or 4 feet if it feels loose.
+
+### 13.16 PLANET: tabbed hub, polar sectors, letter outlines, smoothed etch
+
+* `hub_rotates=False`: the centre disc is tabbed in like everything else
+  (Alex: it needn't turn); the pinwheel spokes stay.
+* `ring_seams=False` (new): no ring seams between letters; each gap is
+  split by sector seams from the hub circle to the rim, bending
+  `sector_twist_deg` (12) off radial by the rim, growing with radius (a
+  pinwheel that keeps going past the spokes). A hub-to-rim sector runs
+  80-110mm, over the 64mm size limit, so the PLANET driver also sets
+  `split_mm=70` (one tabbed cross cut through any piece longer).
+* Inner + outer letter outline etch (1.0mm, as on MICHELS) is back in the
+  PLANET driver -- it was missing on the last PLANET cut.
+* Every etch stroke is SMOOTHED (`smooth_mm=0.10`: spline + tangent G2/G3
+  biarcs). The old coastline etch was hundreds of short G1 chords; the
+  motion model (quickcut/grbl_model.py) predicts x3.96 energy/mm on its
+  worst stroke at F5000 M3 -- the head slows, M3 power doesn't, which is
+  the scorching / burn-through seen on the cut. The driver now prints the
+  motion verdict for both passes. `arcfit.fit_smooth_arcs` gallops +
+  bisects its search (capped at 40mm of path per biarc): it was quadratic
+  in stroke length (minutes per graticule meridian).
+
+### 13.17 Stand feet nested on their own sheet (`scripts/stand_feet_sheet.py`)
+
+Alex's tilt test: the puzzle stays in its frame to at least 88deg from
+horizontal, and a third sheet is fine as long as one sheet makes feet for
+many puzzles. Steeper display = less reach: the tray's centre of mass sits
+150*cos(angle) behind the slot (75mm at 60deg, 39mm at 75deg), so the foot
+shrinks. Profile: a low wedge -- 6mm of wood under the slot, a 6mm lip in
+front of the tray, the slot's back wall resting 25mm up the tray's back,
+the base reaching `margin_mm` (25) behind the COM (~10deg knock-back
+before it tips, at any angle). Feet nest head-to-tail in pairs.
+
+| angle | foot (mm)   | feet / 300mm sheet | stands at 2 feet |
+|-------|-------------|--------------------|------------------|
+| 60    | 108.8 x 27.5 | 27 | 13 |
+| 70    | 85.3 x 29.2  | 36 | 18 |
+| 75 (default) | 72.9 x 29.8 | 36 | 18 |
+| 80    | 60.2 x 30.1  | 54 | 27 |
+| 85    | 47.3 x 30.0  | 63 | 31 |
+
+(script output, margin 25mm.) The frame is no longer cut: it stays the
+full 300 square, and its straight bottom edge (MDF + frame) sits in the
+slots. Same unverified points as §13.15: slot fit vs real stock thickness
+(test-cut a slot first), and a single 3mm foot can wobble sideways a
+little before the tray seats it.
+
+### 13.18 Keyed stand feet: stair-step slot into frame notches (default)
+
+Alex: maximise foot stability first, durability next, at >= 16 stands per
+sheet; and the MDF back shouldn't need cutting. `stand_feet_sheet.py` now
+makes a KEYED foot:
+
+* **Frame notches, MDF uncut.** The veneer frame gets 2 notches (3.2 x 12mm,
+  200mm apart) along its bottom (X-axis) stock edge only, cut in the puzzle
+  job itself (`planet290.py` appends them before the cut: the frame is on
+  the bed anyway). Each cut starts at y = -10 (5mm past the stock edge at
+  -5); Alex confirmed -10mm X/Y is reachable, and the Y hard stop at ~297
+  is untouched. `_check_xy_envelope` takes a min as well as a max. The
+  frame band there is 47mm deep, so a 12mm notch leaves 35mm.
+* **Stair-step slot, convex nose.** A 3.2mm channel takes the MDF alone;
+  in front of it the foot rises 11mm into the frame notch (1mm clear of
+  its top). The front is one solid convex nose -- a SEMIcircle whose
+  diameter is the lip-top-to-table height, flat side upright on the tray's
+  front face, round side forward, hulled with the lip and the toe and
+  trimmed only where the MDF channel and the frame above its notch must
+  stay clear (Alex: the free-standing lip "hook" looked flimsy; a full
+  circle stuck out too far). The notch walls grip the foot's
+  own 3mm thickness 12mm up the tray: the foot can't lean sideways or
+  slide along the edge, and the notches set a 200mm stance.
+* **Stability, searched.** For each foot length and back-rest height the
+  script computes how far the stand can be rocked forward / back before
+  the tray's centre of mass passes a ground contact, and keeps the design
+  with the best worst case that still nests >= 32 feet. At 75deg with the
+  semicircle nose: 105 x 23.2mm foot, **19.1deg either way**, 33 feet = 16
+  stands (a full-circle nose cost ~15mm of length in front: 18.7 / 15.7;
+  the v2 plain wedge tipped back at 9.4deg).
+* **Decoration**: a row of round cut-outs down each foot's taper, shrinking
+  toward the tail (at 75deg: 11.5 / 8.8 / 6.5 / 4.6 / 3.0mm) -- the first
+  is the biggest the body allows, each next one the biggest that fits there
+  but never bigger than the one before, with 5mm of wood to every edge and
+  between holes, clear of the slot and the back-rest load path. Generic,
+  so a sheet of feet can be cut before the names are known.
+* `--plain` keeps the v2 plain 6.2mm slot (no notches).
+
+**Laser facts used** (§13.18 research): LaserTree's listing for the 10W
+fixed-focus module says 8mm plywood in one pass at 1.5-1.8mm/s, 45mm focal
+length -- no "10mm" figure found, and nothing on the focus blocks. This
+repo's own record: 3mm MDF severs at 500mm/min x2 (x1 fails). Forum 10W
+reports for 3mm MDF range from 2 to 6+ passes; nobody reports a 2-sheet
+stack. So stacked MDF is untested -- `stand_tests.py` makes the
+experiments:
+`fit_comb` (notch + MDF channel widths, real kerf/thickness),
+`mdf_grid` (feed x passes squares; run on 1 / 2 / 3 stacked sheets, per
+focus block), `focus_ramp` (a 10mm-tilted scrap: where focus really is
+and how deep the beam still cuts). With the keyed foot the MDF needs no
+cutting at all, so the stack question only matters for other jobs.
+
+`display_stand.py` (corner-offcut feet, §13.15) is superseded (its G-code,
+which reached -5mm before that was known to be safe, was removed from
+out/final).
+
 ## 15. Two-word ring spike: PRINCIPAL / CAVAGNOLO (coworker gift, cut-only)
 
 A colleague's name for a full-size (300mm default) ring puzzle: "PRINCIPAL"
@@ -1210,3 +1415,133 @@ etched first in the same file via `combine_passes`. 0.75mm chosen because
 center-letter strokes are ~2.6-3.2mm and a 1.1mm inset already splits
 them. Etch power/feed is the baltic-birch calibration (§13.10) -- the
 current veneered 3-ply stock is untested; scrap-test first.
+
+### 16.2 Two surnames sharing the spinning hub: MELODY / SHANE / LUCA / AURELIA + PARKER / MCGUIRE (`--center-split`)
+
+**Delivered:** `ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font
+round --center-text PARKER+MCGUIRE --center-style ring --center-split
+--pack-words --keep-seams --material plywood_veneer_3ply_3mm
+--outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40
+--frame-notches --gcode out/final/parker_mcguire_s1.gcode` -- 290mm disc,
+106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
+(0, 0, 0, 0, 0, 51), cap 18mm, hub r 77mm. The hub layout depends only on
+the letters, so it is identical across seeds; seeds only vary the outer
+ring.
+
+**Brief.** Both surnames in the free-spinning centre disc, one upside down
+relative to the other, with a tabbed seam between them so neither name owns
+"up". "THE" and the plural s were dropped (PARKER / MCGUIRE) to save room.
+
+**Both words laid out alike (no flip).** The `ring` style normally flips
+the bottom word so it reads upright, but that made PARKER the "up" name
+(Alex: "this favors Parker over McGuire"). With `center_split`, both words
+sit feet-to-centre and read clockwise. They are 180° copies of each other,
+so a half turn of the disc swaps which one reads upright.
+
+**Hub split (`_center_split_seams`).**
+* The `ring` style arcs the two words around the hub, with the bottom word
+  flipped. A tabbed DIVIDER runs through the letter gaps nearest 3 and 9
+  o'clock and across the inner disc through the centre.
+* An inner circle sits `center_band_gap_mm` (6mm) inside the letters. Its
+  arcs carry the letter band's tabs. The band's radials are too short for
+  tabs (6mm inside, ~14mm outside), and the letters interrupt them, so they
+  cut plain.
+* Band radials go through letter gaps, or through a letter where the radial
+  crosses one solid stroke. To find these, each letter's angular span is
+  scanned in 0.5° steps. A radial passes only if it has no counter, no
+  second arm, and no near miss closer than `center_min_gap_mm`; the middle
+  of each passing run is the candidate.
+* A DP per half picks the radials that keep the widest band piece as narrow
+  as possible. Every landing on the inner circle stays at least
+  `center_arc_min_mm` (24mm) from its neighbours, which leaves room for a
+  tab clear of both 7mm junction zones. At 22-23mm one inner arc found no
+  tab, which would leave its band piece loose. At 26mm, with the
+  cross-seam rule below, the band pieces next to the cross seam came out
+  ~80° wide (oversized).
+* The inner disc's cross seam lands on a chosen radial (a 4-way junction).
+  It must leave both inner pieces at least `center_cross_min_deg` (70°)
+  wide, so the DP is forced through such a radial. A 55° inner piece got
+  tabs biting in from every side and was absorbed as a sliver, which left
+  PARKER's whole half as one piece. A fixed 90° cross seam blocked the
+  windows and left 2 oversized band pieces.
+* Tried first: picking radials through gaps only. The centre letters sit
+  ~5mm apart, so no gap was wide enough, and each band half came out as one
+  oversized piece.
+
+**Etch at F2000 / 40% instead of the material default F5000 / 100%.** At
+F5000 the 18mm letter outlines are mostly corners, and the motion model
+(UNVERIFIED profile) predicted 101 strokes over x1.3 energy/mm, worst x3.94.
+F2000 / 40% keeps the same nominal energy per mm (100/5000 = 40/2000). The
+prediction drops to 5 strokes, worst x1.55 (small counter loops), with an
+overall factor of 1.05. Darkness at 40% on the veneer is unverified, so
+scrap-test it.
+
+**`--frame-notches`: left edge, LAST, in 2mm slices.**
+* The keyed stand-foot notches go on the LEFT (-X) stock edge
+  (`--notch-edge left`, the default), cut out to x=-10. Alex's laser sits
+  ~80mm -Y and ~20mm -X of the spindle, so the -X edge is the reachable one.
+  The puzzle is not rotated, since a disc stands any way up.
+* They are the job's very last pass (`stand_feet_sheet.frame_notch_sections`,
+  `ring_prototype.frame_notch_pass`). The part inside safe travel, from the
+  slot end (x=7) to x=0, is one U per slot. Only x<0, toward the end stop,
+  is cut in 2mm slices alternating slot A / slot B, out to x=-10. Slicing
+  the whole slot was "too many back and forths for the safe part" (Alex).
+* If the head hits an end stop there and the job aborts, the puzzle is
+  already done. Only the outer slot ends are left, to finish with a file,
+  saw or knife.
+* Each slice runs down one side, across (chopping the waste plug), and up
+  the other. Slices at or past the stock edge (x=-5) cut their two sides
+  only, so nothing cross-cuts the bed.
+* 18 paths, 87.2mm of laser-on cutting at F350. The envelope check uses
+  REACH_MIN/MAX. (`planet290.py` still cuts its notches on the bottom edge,
+  before the cut.)
+
+### 16.3 One surname alone in the spinning hub: BRIAN / GILLIAN / LUCY / MAIA + CAVAGNOLO
+
+**Delivered:** `ring_prototype.py BRIAN+GILLIAN+LUCY+MAIA --seed 2 --font
+round --center-text CAVAGNOLO --center-style ring --center-split
+--center-cap-max-mm 18 --pack-words --keep-seams --material
+plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+--etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left
+--corner-feet --gcode out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
+This replaces an earlier cut with "THE CAVAGNOLOS" as two flat lines.
+"THE" and the plural s were dropped, as with PARKER / MCGUIRE.
+
+**One word round the whole hub.**
+* `_center_layout`: a single `center_text` word in the `ring` style is
+  spaced evenly round the full circle, feet to the centre. A heart sits
+  between its last and first letters (word centred at 12 o'clock, heart at
+  6), so the spinning disc has no "up".
+* The split hub (§16.2) works unchanged: dividers at 3 and 9, inner circle,
+  cross seams, band radials through letter stems.
+* No band radial goes through the centre heart. Through the middle it ran
+  out of the notch between the lobes, got chopped there, and the band
+  pieces either side merged into one oversized piece.
+* The centre letters are capped at 18mm, the ring's cap, via
+  `--center-cap-max-mm`. Left to auto-maximise they grew, which pulled
+  the inner circle in from 39.1mm to 33.6mm. The 24mm landing spacing
+  (41° at that radius) then forced 2 oversized band pieces.
+
+**Hearts as tall as the letters** (`HEART_CAP_FRAC = 1.0`, was 0.55).
+Alex: the hearts on the last cut were "too tiny, only like 1cm". This is
+now the default for ring and centre hearts alike.
+
+**Seed choice.** Seeds 1-4 were all QA-clean. Seed 1's cut pass had a lint
+`shuttle` (3+ in-place reversals where seams land on BRIAN's I), so seed 2
+was delivered. Its cut lint is clean (85 paths). Every seed warns that the
+1.0mm inset of LUCY's L doesn't match its part count, but the inset
+outline is complete and no tiny separate loop is cut there.
+
+**Stand feet from the same sheet (`--corner-feet`, Alex's layout).** The
+whole thing now comes out of one sheet: two keyed feet are cut from the
+corners opposite the left-edge slots (`stand_feet_sheet.corner_feet`).
+* Each foot's base (its table edge) runs along the right stock edge at
+  x=295, with the tall nose tucked into the top-right or bottom-right
+  corner. The default 75° foot (105.0 x 23.2mm) clears the disc cut by
+  4.1mm, and its tapering tail follows the circle.
+* A first check kept 4mm of wood to the stock edge and wrongly concluded
+  that no foot fits. Using the stock edge itself as the base is the trick,
+  even if that cut marks the bed.
+* The cut-outs left in the frame hold the feet for flat storage.
+* The feet pass runs after the puzzle cut and before the notches, so the
+  notches stay last.

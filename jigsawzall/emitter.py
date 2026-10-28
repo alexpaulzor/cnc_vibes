@@ -36,7 +36,7 @@ from shapely.geometry import (
     MultiPolygon,
     Polygon,
 )
-from shapely.ops import linemerge, unary_union
+from shapely.ops import linemerge, substring, unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
 from motion import decimate, warmup_wiggle  # noqa: E402
@@ -450,7 +450,10 @@ def emit_etch_gcode(
             tail = _loop_follow_through(pts, lead_in_mm)
         else:
             warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
-            if path_len < 1.0:  # sub-mm stub: one trip, not a stall-y shuttle
+            if path_len < max(1.0, lead_in_mm / 4):
+                # short stroke (a coverage tick): ONE out-and-back, not the
+                # ~lead_in/length laps the full warmup would ping-pong over it
+                # -- that piled x2.7 energy/mm onto a 3mm tick at 100%/F5000
                 warm = list(pts[1:]) + list(reversed(pts))[1:]
         x0, y0 = pts[0]
         lines.append(f"; --- etch stroke {i} ({'loop' if closed else 'open'}) ---")
@@ -981,6 +984,108 @@ def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
             out.append(p)
         else:
             out.append({**p, "polygon": pocket})
+    # Globe land pieces (ring_prototype globe_land) are drop-in pieces like
+    # letters, and their coast / borders are carved and re-joined through
+    # buffers, so they can disagree with their neighbours by hairlines in the
+    # same way -- each one becomes exactly the pocket ALL its neighbours
+    # leave (other land, letters, ocean), with the same safety band.
+    if any(p.get("kind") == "land" for p in out):
+        from shapely.strtree import STRtree
+
+        polys = [p["polygon"] for p in out]
+        tree = STRtree(polys)
+        for k, p in enumerate(out):
+            if p.get("kind") != "land":
+                continue
+            g = p["polygon"]
+            near = [polys[j] for j in tree.query(g.buffer(tol)) if j != k]
+            pocket = g.buffer(tol).difference(unary_union(near)).buffer(0) if near else g
+            if isinstance(pocket, MultiPolygon):
+                pocket = max(pocket.geoms, key=lambda q: q.intersection(g).area)
+            if not pocket.is_empty and g.symmetric_difference(pocket).area <= g.length * tol:
+                out[k] = {**p, "polygon": pocket}
+                polys[k] = pocket
+    return out
+
+
+def _drop_short_dangles(edges, max_len_px, tol_px=0.05):
+    """Drop dead-end edges shorter than max_len_px: a hairline spike where
+    two near-coincident outlines meet (a seam stepping onto a coast) is a
+    0.3-0.4mm spur that separates nothing, and routing into it and back is
+    a shuttle in place (ring_lint)."""
+    from collections import Counter
+
+    def key(p):
+        return (round(p[0] / tol_px), round(p[1] / tol_px))
+
+    while True:
+        deg = Counter()
+        for e in edges:
+            c = list(e.coords)
+            if len(c) >= 2 and key(c[0]) != key(c[-1]):
+                deg[key(c[0])] += 1
+                deg[key(c[-1])] += 1
+        keep = []
+        for e in edges:
+            c = list(e.coords)
+            dangling = len(c) >= 2 and (deg[key(c[0])] == 1 or deg[key(c[-1])] == 1)
+            if dangling and e.length < max_len_px and key(c[0]) != key(c[-1]):
+                continue
+            keep.append(e)
+        if len(keep) == len(edges):
+            return keep
+        edges = keep
+
+
+def cut_bridges(chains, bridges_mm, gap_mm, tol_mm=0.3):
+    """Leave an uncut `gap_mm` of cut line centred on each bridge point.
+    Every pass of a chain within tol_mm of a point is split there (a re-trace
+    over the same spot is gapped too). Closed chains split into one open path
+    that starts and ends at the gaps."""
+    out = []
+    for ch in chains:
+        ch = [tuple(p) for p in ch]
+        cum = [0.0]
+        for a, b in zip(ch, ch[1:]):
+            cum.append(cum[-1] + math.dist(a, b))
+        total = cum[-1]
+        cuts = []
+        for bx, by in bridges_mm:
+            best = None  # (distance, arc position) of each separate pass
+            for k, (a, b) in enumerate(zip(ch, ch[1:])):
+                seg = math.dist(a, b)
+                if seg == 0:
+                    continue
+                t = max(0.0, min(1.0, ((bx - a[0]) * (b[0] - a[0]) + (by - a[1]) * (b[1] - a[1])) / seg ** 2))
+                d = math.dist((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])), (bx, by))
+                s_pos = cum[k] + t * seg
+                if d < tol_mm:
+                    if best is not None and s_pos - best[1] <= gap_mm:
+                        if d < best[0]:
+                            best = (d, s_pos)
+                        continue
+                    if best is not None:
+                        cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
+                    best = (d, s_pos)
+            if best is not None:
+                cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
+        if not cuts:
+            out.append(ch)
+            continue
+        cuts.sort()
+        line = LineString(ch)
+        keep, pos = [], 0.0
+        for lo, hi in cuts:
+            if lo > pos:
+                keep.append((pos, lo))
+            pos = max(pos, hi)
+        if pos < total:
+            keep.append((pos, total))
+        parts = [list(substring(line, lo, hi).coords) for lo, hi in keep if hi - lo > 1e-6]
+        closed = math.dist(ch[0], ch[-1]) < 1e-6
+        if closed and len(parts) > 1 and keep[0][0] == 0.0 and keep[-1][1] == total:
+            parts = [parts[-1] + parts[0][1:]] + parts[1:-1]
+        out.extend(p for p in parts if len(p) >= 2)
     return out
 
 
@@ -995,6 +1100,7 @@ def emit_cut_gcode_full(
     power_percent: float | None = None,
     ramp_ms: float = WARMUP_MS,
     max_backtrack_ms: float | None = None,
+    bridge_mm: float = 0.5,
 ) -> str:
     """Full-panel cut emission with edge dedup + containment-aware
     ordering. Shared cell-cell boundaries cut exactly once. Cut order:
@@ -1025,8 +1131,9 @@ def emit_cut_gcode_full(
     bt_ms = ramp_ms if max_backtrack_ms is None else max_backtrack_ms
     max_dup_px = max(0.0, bt_ms) / 1000.0 * (feed / 60.0) * cfg.px_per_mm
 
+    bridges_mm = [img_to_machine_mm(x, y, cfg) for p in pieces for x, y in p.get("bridges", ())]
     pieces = reconcile_letter_pockets(pieces, cfg.px_per_mm)
-    edges = extract_unique_edges(pieces)
+    edges = _drop_short_dangles(extract_unique_edges(pieces), 0.5 * cfg.px_per_mm)
     letter_polys = [p["polygon"] for p in pieces if p["kind"] == "letter"]
     letters, interior, panel = [], [], []
     for e in edges:
@@ -1096,6 +1203,8 @@ def emit_cut_gcode_full(
         _order_chains_min_travel(border_chains, start=last)
     )
     chains = inner_chains + border_chains
+    if bridges_mm and bridge_mm > 0:
+        chains = cut_bridges(chains, bridges_mm, bridge_mm)
     n_edges = len(all_edges)
 
     extra = [
@@ -1118,6 +1227,10 @@ def emit_cut_gcode_full(
     )
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
+    if bridges_mm and bridge_mm > 0:
+        extra.append(
+            f"breakaway bridges: {len(bridges_mm)} x {bridge_mm}mm uncut gaps hold tiny "
+            "letter counters in place (snap out by hand)")
 
     lines = _header(
         title=f"full puzzle: word={word}, "
@@ -1135,7 +1248,9 @@ def emit_cut_gcode_full(
         # the start or end of a path connects to nothing -- the laser restarts
         # (full warmup) anyway -- so strip it.
         coords_mm = _trim_recut_ends(coords_mm, cut_segs)
-        if len(coords_mm) < 2:
+        if len(coords_mm) < 2 or LineString(coords_mm).length < 0.1:
+            # a hairline stub between two near-coincident outlines: the
+            # kerf (~0.15mm) covers it, and its warmup would shuttle in place
             continue
         cut_segs.add(coords_mm)
         warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]

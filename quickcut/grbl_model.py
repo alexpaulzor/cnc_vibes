@@ -221,7 +221,7 @@ def arc_segments(x0, y0, x1, y1, i, j, cw, tol, radius=None):
             ang -= 2 * math.pi
     elif ang <= ARC_ANGULAR_TRAVEL_EPSILON:
         ang += 2 * math.pi
-    n = int(math.floor(abs(0.5 * ang * r) / math.sqrt(tol * (2 * r - tol))))
+    n = int(math.floor(abs(0.5 * ang * r) / math.sqrt(tol * max(2 * r - tol, tol))))
     pts = []
     if n:
         a0 = math.atan2(ry, rx)

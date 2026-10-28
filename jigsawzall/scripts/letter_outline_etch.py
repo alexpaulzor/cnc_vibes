@@ -39,11 +39,16 @@ def _lines(geom):
     return [g for g in getattr(geom, "geoms", []) if isinstance(g, LineString)]
 
 
-def letter_outline_strokes(letter_polys, panel, ppm, inset_mm=0.75, outset_mm=0.75):
+def letter_outline_strokes(letter_polys, panel, ppm, inset_mm=0.75, outset_mm=0.75,
+                           min_loop_mm=20.0):
     """Returns (strokes, warnings). strokes: list of [(x, y), ...] px
     polylines. A letter whose stroke is too thin for the inset (the inset
     collapses or splits a stroke apart) is reported in `warnings` rather
-    than silently dropped or etched as fragments."""
+    than silently dropped or etched as fragments. A closed outline shorter
+    than min_loop_mm (the inset ring inside a small counter -- an R's or
+    e's eye) is left out and reported: the etch warmup laps a short loop
+    several times over (~58mm lead-in at 100%/F5000), which burnt those
+    counters black on THE REUTERS cut."""
     strokes, warns = [], []
     others_cache = unary_union(letter_polys)
     inner_panel = panel.buffer(-outset_mm * ppm)
@@ -59,6 +64,11 @@ def letter_outline_strokes(letter_polys, panel, ppm, inset_mm=0.75, outset_mm=0.
                     f"splits it into {n_in} part(s) -- stroke too thin"
                 )
             for r in _rings(inn):
+                if r.length < min_loop_mm * ppm:
+                    c = r.centroid
+                    warns.append(f"inset ring at ({c.x / ppm:.0f},{c.y / ppm:.0f})mm is only "
+                                 f"{r.length / ppm:.0f}mm round -- not etched (warmup laps would burn it)")
+                    continue
                 strokes.append(list(r.coords))
         if outset_mm > 0:
             out = g.buffer(outset_mm * ppm, join_style=_ROUND)

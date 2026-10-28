@@ -1,0 +1,7 @@
+ring_prototype.py BRIAN+GILLIAN+LUCY+MAIA --seed 2 --font round --center-text CAVAGNOLO --center-style ring --center-split --center-cap-max-mm 18 --pack-words --keep-seams --material plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left --corner-feet --gcode out/final/cavagnolo_s2.gcode
+WARNING outline etch: letter at (217,66)mm (LUCY's L, image coords): 1.0mm inset splits it into 1 part(s) -- the inset outline is complete; no tiny separate cut loop there (same warning on seeds 1-4)
+MOTION QA (info, UNVERIFIED machine profile): 6 etch stroke(s) > x1.3 energy/mm; worst etch stroke 64 (loop) x1.51 (worst 2mm x1.84)
+BRIAN-GILLIAN-LUCY-MAIA: cap 18.0mm, min letter gap 14.2mm, hub r 77mm, 106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) = (0, 0, 0, 0, 0, 35)
+G-code: 15497 lines, $32=1 x1, M3 only. Order: etch (S400 F2000; 90 strokes, 3.8 min predicted) -> cut (S1000 F350 x1) -> 2 stand feet from the right-hand corners (base on x=295, 4.1mm from the disc cut; 12 paths) -> frame notches LAST (left edge, one U each x 7.0 -> 0.0, then 2mm alternating slices 0.0 -> -10.0; 18 paths).
+Extents: X -10.0..295.0, Y -5.0..295.0 (X < 0 only in the notch pass; X > 290 / Y < 0 / Y > 290 only in the feet pass); cut pass lint clean (85 laser-on paths, 9183 moves), cut motion QA 0 flagged.
+Seed 1 (107 pieces) was also QA-clean but its cut pass had a lint 'shuttle' (3+ in-place reversals at a seam landing on BRIAN's I) -- not delivered.
