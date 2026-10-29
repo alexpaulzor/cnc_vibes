@@ -216,6 +216,10 @@ class RingParams:
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
+    center_spokes: int = 3  # flat text: pinwheel wedges in the small central disc (4 came out
+    # as slivers between the letters and merged)
+    center_ring_piece_mm2: float = 1800.0
+    center_mark_gap_mm: float = 8.0  # min arc between landings on the spoked disc  # flat text: target piece area in the ring around it
     center_fan_deg: float = 60.0  # flat text: fan seams land within +-this of 12 / 6 o'clock
     center_fan_arc_frac: float = 0.65  # flat text: cross arc radius / hub radius (50mm at 77)
     center_row_mm: float = 30.0  # flat-text grid: target row height above/below the text
@@ -751,6 +755,251 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         seams.insert(0, dict(pts=arc_pts(C, r_i, marks[q], marks[(q + 1) % len(marks)], 2 * ppm),
                              kind="innerarc", ends=("J", "J")))
     return [p % (2 * math.pi) for p in radials]
+
+
+def _center_flat_spoke_seams(letters, C, r_h, ppm, rp, seams, rng):
+    """Seams for a split hub under FLAT center text (Alex, after the fan
+    layout's centre pieces came out too tall):
+
+      * a small spoked disc in the middle -- its circle runs through the
+        centres of the second and second-last letters (BROWN: R and W) --
+        cut into center_spokes pinwheel wedges whose spokes converge inside
+        the middle letter (plan_center_pinwheel, near-miss-free);
+      * ONE ring of ordinary pieces between it and the rotating hub circle,
+        split by straight radials long enough to carry their own tabs, each
+        nudged up to +-12deg to cross letters cleanly (single stroke, no
+        near miss, no open notch).
+
+    Appends to `seams`; returns the hub-circle landing angles."""
+    letters = sorted(letters, key=lambda g: g.centroid.x)
+    n = len(letters)
+    clear = rp.center_min_gap_mm * ppm
+    solids = unary_union([solid_of(g) for g in letters])
+    # the disc's centre: midway between the R and W centres (Alex: the disc
+    # "spans the center of the R to center of the W"), not the hub's
+    if n >= 4:
+        c1, c2 = letters[1].centroid, letters[-2].centroid
+        D = ((c1.x + c2.x) / 2, (c1.y + c2.y) / 2)
+    else:
+        D = C
+
+    def shallow(line, steps=20):
+        """How many times `line` leaves (or skims) a letter at a shallow
+        angle -- the wood between them a thin wedge. A clean crossing gains
+        >= 0.6mm of clearance per mm along the seam for 10mm."""
+        bad = 0
+        outside = line.difference(solids)
+        for part in (outside.geoms if hasattr(outside, "geoms") else [outside]):
+            if part.is_empty or part.length < 0.5 * ppm:
+                continue
+            for end in (0, 1):
+                e = Point(part.coords[0] if end == 0 else part.coords[-1])
+                if e.distance(solids) > 0.3 * ppm:
+                    continue  # a free end (the rim, a junction), not on a letter
+                for k_ in range(1, steps + 1):
+                    t = k_ * 0.5 * ppm
+                    if t >= part.length:
+                        break
+                    q = part.interpolate(t if end == 0 else part.length - t)
+                    if solids.distance(q) < 0.6 * t:
+                        bad += 1
+                        break
+        return bad
+
+    if n >= 4:
+        r0 = Point(D).distance(letters[1].centroid)
+        # the circle through the R and W centres, moved a few mm to where it
+        # crosses them most squarely
+        # (never smaller: the band round the O is only ~15mm, and pieces
+        # under 14mm thick are slivers)
+        r_i = min((r0 + dr * ppm for dr in [x * 0.5 for x in range(0, 11)]),
+                  key=lambda r: (shallow(Point(D).buffer(r, quad_segs=96).exterior), abs(r - r0)))
+    else:
+        r_i = 0.35 * r_h
+    # the spoked disc: straight spokes out from the middle letter (the O),
+    # one to 12 (or 6) o'clock and two mirrored +-delta about the opposite
+    # side, about 120deg apart -- a pinwheel's curved spokes crossed the O
+    # and grazed the W's foot. The wedges interlock through their spokes
+    # (the circle's arcs between ~10 ring radials are too short for tabs),
+    # so prefer the layout whose shortest spoke is longest.
+    mid_l = letters[n // 2]
+    Pc = (mid_l.centroid.x, mid_l.centroid.y)
+
+    def spoke_pts(phi):  # from the middle letter's edge to the circle, along the ray from Pc
+        u = (math.sin(phi), -math.cos(phi))
+        w = (Pc[0] - D[0], Pc[1] - D[1])
+        wu = w[0] * u[0] + w[1] * u[1]
+        t = -wu + math.sqrt(wu * wu - (w[0] ** 2 + w[1] ** 2 - r_i ** 2))
+        ln = LineString([Pc, (Pc[0] + t * u[0], Pc[1] + t * u[1])]).difference(mid_l.buffer(0.01 * ppm))
+        q = max(getattr(ln, "geoms", [ln]), key=lambda q: Point(q.coords[-1]).distance(Point(Pc)))
+        k_ = max(2, int(q.length / (2 * ppm)))
+        return [tuple(q.interpolate(i / k_, normalized=True).coords[0]) for i in range(k_ + 1)]
+
+    def land(pts):
+        e = pts[-1]
+        return math.atan2(e[0] - D[0], -(e[1] - D[1])) % (2 * math.pi)
+
+    best = None
+    for up in (0.0, math.pi):
+        for dl in range(45, 75, 5):
+            phis = [up, up + math.pi - math.radians(dl), up + math.pi + math.radians(dl)]
+            sps = [spoke_pts(ph) for ph in phis]
+            bad = 0
+            for pts in sps:
+                ln = LineString(pts)
+                bad += len(spoke_near_misses(pts, letters, clear)) + shallow(ln)
+                bad += sum(1 for g in letters if g is not mid_l and ln.intersects(g))
+            key = (bad, -min(LineString(q).length for q in sps))
+            if best is None or key < best[0]:
+                best = (key, sps)
+    sps = best[1]
+    print(f"spoked disc: centre {(D[0] - C[0]) / ppm:+.1f},{(D[1] - C[1]) / ppm:+.1f}mm from hub, "
+          f"r0 {r0 / ppm if n >= 4 else 0:.1f}mm, r_i {r_i / ppm:.1f}mm, "
+          f"spokes {[round(math.degrees(land(q))) for q in sps]}deg, bad {best[0][0]}, "
+          f"shortest spoke {-best[0][1] / ppm:.0f}mm")
+    marks = []
+    for pts in sps:
+        seams.append(dict(pts=pts, kind="spoke", ends=("L", "J")))
+        marks.append(land(pts))
+    spoke_ends = list(marks)
+    # the ring of pieces: straight radials, evenly spaced, each nudged clean
+    notches = [(g.convex_hull, g.convex_hull.difference(g.buffer(0.5 * ppm))) for g in letters]
+    def radial(phi):  # along the ray from D: the disc's circle to the hub's
+        u = (math.sin(phi), -math.cos(phi))
+        a = (D[0] + r_i * u[0], D[1] + r_i * u[1])
+        w = (D[0] - C[0], D[1] - C[1])
+        wu = w[0] * u[0] + w[1] * u[1]
+        t = -wu + math.sqrt(wu * wu - (w[0] ** 2 + w[1] ** 2 - r_h ** 2))
+        b = (D[0] + t * u[0], D[1] + t * u[1])
+        return [(a[0] + (b[0] - a[0]) * t / 30, a[1] + (b[1] - a[1]) * t / 30) for t in range(31)]
+
+    def badness(phi):
+        pts = radial(phi)
+        ln = LineString(pts)
+        bad = len(spoke_near_misses(pts, letters, clear))
+        bad += sum(1 for h, nt in notches if not nt.is_empty and ln.intersects(h)
+                   and ln.intersection(nt).length > 1.0 * ppm)
+        bad += shallow(ln)
+        # land clear of the marks already on the disc's circle, or the
+        # arc between them is a stub too short to cut (left gaps in it)
+        if any(1e-6 < abs(math.remainder(phi - m, 2 * math.pi)) * r_i < rp.center_mark_gap_mm * ppm
+               for m in marks):
+            bad += 3
+        for g in letters:  # crossing a letter: one solid stroke only
+            if not ln.intersects(g) and ln.distance(g) < clear:
+                bad += 1  # e.g. landing on the disc's circle a mm from R
+            if ln.intersects(g):
+                hit, hs = ln.intersection(g), ln.intersection(solid_of(g))
+                if not (hit.geom_type == "LineString" and hs.geom_type == "LineString"
+                        and abs(hit.length - hs.length) < 0.5):
+                    bad += 1
+        return bad
+
+    def place(phi):
+        seams.append(dict(pts=radial(phi), kind="hubradial", ends=("J", "J")))
+        marks.append(phi % (2 * math.pi))
+        e = radial(phi)[-1]
+        landings.append(math.atan2(e[0] - C[0], -(e[1] - C[1])) % (2 * math.pi))
+
+    landings = []
+    # bracket each end letter (wholly in the ring: B, N) with a radial just
+    # clear of it on either side -- evenly spaced radials got nudged off
+    # them and left the two pieces holding B and N oversized
+    brackets = []
+    for g in (letters[0], letters[-1]):
+        if g.distance(Point(D)) < r_i:
+            continue
+        ph = [math.atan2(x - D[0], -(y - D[1])) for x, y in g.exterior.coords]
+        mid = math.atan2(g.centroid.x - D[0], -(g.centroid.y - D[1]))
+        rel = [math.remainder(q - mid, 2 * math.pi) for q in ph]
+        for side, ext in ((-1, min(rel)), (1, max(rel))):
+            phi = mid + ext
+            for _ in range(80):
+                phi += side * math.radians(0.5)
+                if LineString(radial(phi)).distance(g) >= clear and badness(phi) == 0:
+                    break
+            place(phi)
+            brackets.append(phi % (2 * math.pi))
+    # ...and split each end letter's wedge across the text line, the way
+    # the ring's seams run: rim -> end letter, end letter -> its neighbour
+    # (each at the height where it meets both letters squarely)
+    if brackets:
+        cap = max(g.bounds[3] for g in letters) - min(g.bounds[1] for g in letters)
+        mid = (max(g.bounds[3] for g in letters) + min(g.bounds[1] for g in letters)) / 2
+        for g, h, sgn in ((letters[0], letters[1], -1), (letters[-1], letters[-2], 1)):
+            if g.distance(Point(D)) < r_i:
+                continue
+            for x_far, ends in ((C[0] + sgn * (r_h + ppm), ("J", "L")), (h.centroid.x, ("L", "L"))):
+                best = None
+                for dy in sorted(range(-int(0.35 * cap / ppm), int(0.35 * cap / ppm) + 1), key=abs):
+                    y = mid + dy * ppm
+                    seg = LineString([(x_far, y), (g.centroid.x, y)]).difference(solids)
+                    seg = seg.intersection(Point(C).buffer(r_h, quad_segs=96))
+                    parts = [q for q in (seg.geoms if hasattr(seg, "geoms") else [seg])
+                             if not q.is_empty and q.length > 0.5 * ppm
+                             and not any(l_.convex_hull.contains(q.interpolate(0.5, normalized=True))
+                                         for l_ in letters)]  # not a stub inside N's counter
+                    if not parts:
+                        continue
+                    q = min(parts, key=lambda q: q.distance(Point(g.centroid.x, y)))
+                    pts = list(q.coords)
+                    if Point(pts[0]).distance(Point(g.centroid.x, y)) < Point(pts[-1]).distance(Point(g.centroid.x, y)):
+                        pts = pts[::-1]
+                    bad = shallow(q) + len(spoke_near_misses(pts, letters, clear))
+                    if best is None or bad < best[0]:
+                        best = (bad, pts)
+                    if bad == 0:
+                        break
+                if best:
+                    pts = best[1]  # runs from x_far's side to g
+                    seams.append(dict(pts=pts, kind="divider", ends=ends))
+                    if ends[0] == "J":
+                        landings.append(math.atan2(pts[0][0] - C[0], -(pts[0][1] - C[1])) % (2 * math.pi))
+    # fill the gaps between brackets with evenly spaced radials, each
+    # piece ~center_ring_piece_mm2, each nudged clean within its slot
+    ring_area = math.pi * (r_h ** 2 - r_i ** 2)
+    target = rp.center_ring_piece_mm2 * ppm ** 2
+    if brackets:
+        bs = sorted(brackets)
+        gaps = [(bs[q], (bs[(q + 1) % len(bs)] - bs[q]) % (2 * math.pi) or 2 * math.pi)
+                for q in range(len(bs))]
+        # the wedges holding the letters themselves need no split
+        gaps = [(g0, w) for g0, w in gaps
+                if not any(abs(math.remainder(g0 + w / 2 - math.atan2(g.centroid.x - D[0], -(g.centroid.y - D[1])), 2 * math.pi)) < w / 2
+                           for g in (letters[0], letters[-1]))]
+    else:
+        gaps = [(rng.uniform(0, 2 * math.pi), 2 * math.pi)]
+    for g0, w in gaps:
+        kk = max(1, math.ceil(ring_area * w / (2 * math.pi) / target)) - (1 if brackets else 0)
+        step = w / (kk + (1 if brackets else 0))
+        for j in range(kk):
+            nom = g0 + step * (j + (1 if brackets else 0))
+            lim = max(1, int(math.degrees(step) / 2.2))  # room to reach a spoke's end
+            cands = [nom + math.radians(dd * 0.5) for dd in sorted(range(-2 * lim, 2 * lim + 1), key=abs)]
+            # a radial near a spoke's end continues the spoke out to the rim
+            # (landing beside it left a 1mm stub of circle)
+            snaps = [nom + math.remainder(m - nom, 2 * math.pi) for m in spoke_ends
+                     if abs(math.remainder(m - nom, 2 * math.pi)) <= math.radians(lim)]
+            best = min(snaps + cands, key=lambda q: (badness(q), q not in snaps, abs(q - nom)))
+            place(best)
+    # the spoked disc's circle, split at every landing -- and cut where it
+    # meets a letter, ending ON the letter (as the ring's seams do): run
+    # through R and W it crossed each several times and left bridges/slivers
+    import globe_land as GL_
+
+    marks = sorted(set(round(m, 9) for m in marks))
+    for q in range(len(marks)):
+        arc = dict(pts=arc_pts(D, r_i, marks[q], marks[(q + 1) % len(marks)], 2 * ppm),
+                   kind="innerarc", ends=("J", "J"))
+        if LineString(arc["pts"]).intersects(solids.buffer(0.5 * ppm)):
+            for part in GL_.chop_seams([arc], solids, ppm, min_mm=2.0, approach_mm=0.5):
+                part["kind"] = "innerarc"
+                part["keep"] = True
+                seams.insert(0, part)
+        else:
+            arc["keep"] = True
+            seams.insert(0, arc)
+    return sorted(landings)
 
 
 def _center_flat_letter_seams(letters, C, r_h, ppm, rp, seams):
@@ -1776,7 +2025,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
             # short radials across the letter band through the wide gaps
             # between letters -- normal-size, tabbed pieces, and no word owns
             # the disc's "up" (RING_SPEC.md §16.2).
-            split = (_center_flat_letter_seams(center_polys, C, r_h, ppm, rp, seams)
+            split = (_center_flat_spoke_seams(center_polys, C, r_h, ppm, rp, seams, rng)
                      if rp.center_style == "flat"
                      else _center_split_seams(center_polys, C, r_h, ppm, rp, seams, rng))
         elif k_hub > 1 and center_polys:
@@ -2143,6 +2392,11 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
         ls0 = LineString(pts)
         if ls0.intersection(background).length < 3 * ppm:
             s["status"] = "short"
+            if s.get("keep"):  # structural (a closed circle): cut it plain anyway
+                tabbed.append(pts)
+                accepted.append(ls0)
+                s["final"] = ls0
+                s["status"] = "plain"
             continue
         n = max(6, int(ls0.length / (2 * ppm)))
         rs = [ls0.interpolate(t / n, normalized=True) for t in range(n + 1)]

@@ -95,9 +95,8 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
   notches on the **left (−X) edge**.
 - Material: `plywood_veneer_3ply_3mm`, cut F350 × 1 pass at 100% (S1000).
 - Letter outline etch: `--outline-etch-mm 1.0 --etch-smooth-mm 0.10
-  --etch-feed 2000 --etch-power 40`. The same energy/mm as F5000/100%
-  but far fewer motion-QA hotspots. The darkness at 40% is not yet verified
-  on veneer, so scrap-test it.
+  --etch-feed 2000 --etch-power 60` (Alex: "more like 60% at F2000";
+  it was 40).
 - Job order: etch → puzzle cut → corner feet → frame notches **LAST**.
 - Frame notches (`--frame-notches --notch-edge left`): 3.2 mm wide, 12 mm
   deep, 200 mm apart. Each slot is one U from the slot end down to x = 0,
@@ -119,8 +118,10 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
   `generate` runs the variant search.
   - `_center_split_seams`: ring-style centre text (PARKER/MCGUIRE,
     CAVAGNOLO).
-  - `_center_flat_letter_seams`: flat centre text, the newest; seams fan
-    from the letters.
+  - `_center_flat_spoke_seams`: flat centre text, the CURRENT one (spoked
+    disc + one ring of pieces).
+  - `_center_flat_letter_seams`: flat centre text, fan seams; Alex rejected
+    its centre pieces as too tall. Unused.
   - `_center_flat_grid_seams`: the old grid, now unused.
   - `frame_notch_pass`, `corner_feet_pass`.
 - `scripts/geo_font.py`: the geometric font.
@@ -154,18 +155,33 @@ cd jigsawzall && python3 scripts/ring_prototype.py CHELSEA+KYLE+KARSON+KAIDEN \
   --center-split --pack-words --keep-seams --out /path/preview.png
 ```
 
-Latest centre layout is `_center_flat_letter_seams` (commit fe2aa4b):
-- From each letter's top and bottom, a fan seam out to the rim, spread
-  ±60° about 12 and 6 o'clock.
-- Bridges across the gaps between letters, plus from B and N out to the
-  9 and 3 o'clock edges.
-- Concentric arcs at 0.65 × the hub radius, between neighbouring fans.
+Alex rejected the fan layout (`_center_flat_letter_seams`, centre pieces
+too tall) and asked for: "the spoked center, only large enough so that the
+center disc spans the center of the R to center of the W, and then one ring
+of regular puzzle pieces before the rotating circle interface".
 
-The seed-1 one-variant run scored `(0,0,0,0,0,70)` with 109 pieces. Preview:
-`out/final/brown_fan_s1_preview.png`. **Alex has not approved it yet.** Show
-it to him, iterate on his feedback, and only then run seeds 1–4 and let him
-pick. G-code then uses the same flags as CAVAGNOLO: material, etch, and
-`--frame-notches --notch-edge left --corner-feet`.
+Current layout, `_center_flat_spoke_seams`:
+- The disc is centred midway between the R and W centroids, not on the hub.
+  Its radius starts at half their distance and may only grow, by up to 5mm,
+  to cross R/W squarely. Shrinking it makes slivers: the band round the O
+  is only ~15mm wide, and the sliver limit is 14mm.
+- Three straight spokes out of the O: one to 12 or 6 o'clock, two at
+  180 ± δ, δ in 45..70. Picked for clean crossings and the longest
+  shortest spoke. The wedges interlock through the spokes, because the
+  circle's arcs between ~10 ring radials are too short for tabs.
+- The ring: radials bracket B and N; ring-style dividers run hub circle →
+  B → R and W → N → hub circle at text height. The gaps are filled with
+  radials so each piece is ~`center_ring_piece_mm2` (1800 mm²). A radial
+  near a spoke end snaps onto it (no circle stubs).
+- The inner-circle arcs are `keep=True`: cut even when short.
+
+Seed-1 one-variant run: `(0,0,0,0,0,72)`, 100 pieces. Disc r 28.3mm (24.3mm
+would be exactly R-centre to W-centre). Preview:
+`out/final/brown_spoke_s1_preview.png`. **Awaiting Alex's OK**, then
+seeds 1–4 and let him pick. G-code then uses `--material
+plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+--etch-feed 2000 --etch-power 60 --frame-notches --notch-edge left
+--corner-feet`.
 
 Open items:
 - Some fan-to-fan pieces are long-ish, and the W–N column above the text has
