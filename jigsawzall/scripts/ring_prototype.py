@@ -735,6 +735,114 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
     return [p % (2 * math.pi) for p in radials]
 
 
+def _center_flat_grid_seams(letters, C, r_h, ppm, rp, seams):
+    """Seams for a split hub under FLAT center text (center_split with
+    center_style "flat"): a grid, not a pinwheel. Out of a pinwheel's centre
+    every spoke heading across a W or N runs through its open notches, so
+    the wedge under them can never split (BROWN: one oversized piece on
+    every seed). Instead:
+
+      * a tabbed chord across the disc center_band_gap_mm above the text and
+        one the same distance below;
+      * vertical seams through letter gaps or a single letter stem (one
+        solid stroke, no near miss), continued up and down to the hub
+        circle, picked by a DP that keeps the largest piece (band or cap)
+        as small as possible with every chord segment >= center_arc_min_mm
+        long (room for its tab).
+
+    Appends to `seams`; returns the hub-circle landing angles."""
+    import globe_land as GL_
+
+    U = unary_union(letters)
+    lx0, ly0, lx1, ly1 = U.bounds
+    gap = rp.center_band_gap_mm * ppm
+    yt, yb = ly0 - gap, ly1 + gap  # image y runs down: yt above the text
+    clear = rp.center_min_gap_mm * ppm
+    dmax = max(abs(yt - C[1]), abs(yb - C[1]))
+    halfc = math.sqrt(max(0.0, r_h ** 2 - dmax ** 2))
+    seg_min = rp.center_arc_min_mm * ppm
+
+    def ok_x(x):
+        ln = LineString([(x, yt), (x, yb)])
+        hits = [g for g in letters if ln.intersects(g)]
+        if not hits:
+            return U.distance(ln) >= clear
+        if len(hits) > 1:
+            return False
+        g = hits[0]
+        h, hs = ln.intersection(g), ln.intersection(solid_of(g))
+        pts = [(x, yt + t * (yb - yt) / 30) for t in range(31)]
+        return (h.geom_type == "LineString" and hs.geom_type == "LineString"
+                and abs(h.length - hs.length) < 0.5 and not spoke_near_misses(pts, letters, clear))
+
+    cands, run = [], []
+    x = C[0] - halfc + seg_min
+    while x <= C[0] + halfc - seg_min:
+        if ok_x(x):
+            run.append(x)
+        elif run:
+            cands.append(run[len(run) // 2])
+            run = []
+        x += 0.5 * ppm
+    if run:
+        cands.append(run[len(run) // 2])
+    disc = Point(C).buffer(r_h, quad_segs=128)
+    regions = [disc.intersection(box(C[0] - r_h, C[1] - r_h, C[0] + r_h, yt)),
+               disc.intersection(box(C[0] - r_h, yt, C[0] + r_h, yb)),
+               disc.intersection(box(C[0] - r_h, yb, C[0] + r_h, C[1] + r_h))]
+
+    def worst(a, b):
+        sl = box(a, C[1] - r_h, b, C[1] + r_h)
+        return max(r.intersection(sl).area for r in regions)
+
+    pts = [C[0] - halfc] + cands + [C[0] + halfc]
+    n = len(pts)
+    best = [(0.0, None)] + [(math.inf, None)] * (n - 1)
+    for j in range(1, n):
+        for i in range(j):
+            if pts[j] - pts[i] >= seg_min and best[i][0] < math.inf:
+                w = max(best[i][0], worst(pts[i], pts[j]))
+                if w < best[j][0]:
+                    best[j] = (w, i)
+    sel, j = [], best[n - 1][1]
+    while j:
+        sel.append(pts[j])
+        j = best[j][1]
+    sel.sort()
+
+    def line(a, b):
+        k = max(4, int(math.dist(a, b) / (2 * ppm)))
+        return [(a[0] + (b[0] - a[0]) * t / k, a[1] + (b[1] - a[1]) * t / k) for t in range(k + 1)]
+
+    def circ_x(y, side):
+        return C[0] + side * math.sqrt(max(0.0, r_h ** 2 - (y - C[1]) ** 2))
+
+    landings = []
+    # the two chords, split at the vertical seams (one tab per segment)
+    for y in (yt, yb):
+        xs = [circ_x(y, -1)] + sel + [circ_x(y, 1)]
+        for a, b in zip(xs, xs[1:]):
+            seams.append(dict(pts=line((a, y), (b, y)), kind="divider", ends=("J", "J")))
+        landings += [ang_of((xs[0], y), C) % (2 * math.pi), ang_of((xs[-1], y), C) % (2 * math.pi)]
+    # vertical seams: cap (circle -> chord), band (chord -> chord, chopped at
+    # a letter it crosses), cap (chord -> circle)
+    for x in sel:
+        ytop = C[1] - math.sqrt(max(0.0, r_h ** 2 - (x - C[0]) ** 2))
+        ybot = C[1] + math.sqrt(max(0.0, r_h ** 2 - (x - C[0]) ** 2))
+        seams.append(dict(pts=line((x, ytop), (x, yt)), kind="hubradial", ends=("J", "J")))
+        seams.append(dict(pts=line((x, yb), (x, ybot)), kind="hubradial", ends=("J", "J")))
+        band = dict(pts=line((x, yt), (x, yb)), kind="hubradial", ends=("J", "J"))
+        if LineString(band["pts"]).intersects(U):
+            for part in GL_.chop_seams([band], unary_union([solid_of(g) for g in letters]), ppm,
+                                       min_mm=2.0, approach_mm=0.5):
+                part["kind"] = "hubradial"
+                seams.append(part)
+        else:
+            seams.append(band)
+        landings += [ang_of((x, ytop), C) % (2 * math.pi), ang_of((x, ybot), C) % (2 * math.pi)]
+    return sorted(landings)
+
+
 def spoke_near_misses(pts, letters, thresh_px):
     """Interior points where a cut passes a letter WITHOUT touching it,
     closer than thresh_px: a strict local minimum of distance-to-letter that
@@ -1509,7 +1617,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
             # short radials across the letter band through the wide gaps
             # between letters -- normal-size, tabbed pieces, and no word owns
             # the disc's "up" (RING_SPEC.md §16.2).
-            split = _center_split_seams(center_polys, C, r_h, ppm, rp, seams, rng)
+            split = (_center_flat_grid_seams(center_polys, C, r_h, ppm, rp, seams)
+                     if rp.center_style == "flat"
+                     else _center_split_seams(center_polys, C, r_h, ppm, rp, seams, rng))
         elif k_hub > 1 and center_polys:
             # Loose center text: pick a pinwheel whose spokes never pass a
             # center letter without touching it (see plan_center_pinwheel).
