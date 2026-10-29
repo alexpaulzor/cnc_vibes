@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 STROKE = 0.17  # stroke width / cap height (3.1mm at an 18mm cap)
 CAP_RATIO = 0.72  # cap height / "font size", like a TrueType face
 SIDE = 0.10  # side bearing each side / cap height
+SERIF_MM = 3.0  # serif lobe diameter
 FILLET_MM = 0.75  # every corner of the outline rounded to this radius
 NOTCH_MIN_MM = 3.0  # a serif bump keeps this much wood to a stroke straight ahead of it
 
@@ -100,10 +101,9 @@ def _letters():
     rp = (top - 0.44) / 2
     ap = h + 0.30
     L["P"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)]])
-    # tail: from ON the ring (a joint) at -50deg, out at a shallow 30deg to
-    # the baseline, where it ends in a normal tab clear of the ring
-    qa = math.radians(-50)
-    q0 = (0.5 + R * math.cos(qa), 0.5 + R * math.sin(qa))
+    # tail: from inside the bowl, across the ring at 30deg, out to the
+    # baseline -- long enough that its outer end's tab clears the ring
+    q0 = (0.60, 0.30)
     q1 = (q0[0] + q0[1] / math.tan(math.radians(30)), 0.0)
     L["Q"] = (q1[0] + 0.05, [_arc(0.5, 0.5, R, 0, 360), [q0, q1]])
     L["R"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)],
@@ -143,12 +143,17 @@ def _extend(pl, k, d):
     return [e] + pl if k == 0 else pl + [e]
 
 
-def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, log=None):
+def glyph_units(ch, serif_mm=None, cap_mm=18.0, stroke=STROKE, fillet_mm=None, log=None):
     """Letter outline in cap units (y up, baseline 0), and its width. `log`
     (a list) collects each serif bump's (end point, side, kept?, mm ahead)."""
     w, strokes = LETTERS[ch]
     s = stroke
+    serif_mm = SERIF_MM if serif_mm is None else serif_mm
     r = serif_mm / cap_mm / 2  # serif semicircle radius, cap units
+    f = (FILLET_MM if fillet_mm is None else fillet_mm) / cap_mm
+
+    def closing(gg):  # fills inside corners, as the final rounding will
+        return gg.buffer(f, quad_segs=12).buffer(-f, quad_segs=12) if f > 0 else gg
     notch = NOTCH_MIN_MM / cap_mm  # a lobe keeps this much wood to a stroke ahead of it
     strokes = [list(pl) for pl in strokes]
     lines = [LineString(pl) for pl in strokes]
@@ -271,15 +276,23 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, lo
             # on a curve the edge bends toward one circle and away from the
             # other, so equal circles SHOW unequal amounts (S: 80%): push the
             # smaller-showing one out along its normal until they match
-            vis = [b.difference(body).area for b in pair]
+            # measured AFTER the corner rounding, which fills a lobe's neck
+            # more where the stroke curves back toward it (G's terminal, J's
+            # hook): balanced before rounding, they still LOOKED unequal
+            base = closing(body)
+
+            def shows(b):
+                return closing(unary_union([body, b])).difference(base).area
+
+            vis = [shows(b) for b in pair]
             lo = 0 if vis[0] < vis[1] else 1
             if vis[lo] < 0.99 * vis[1 - lo]:
                 nrm = lobes(P, d, strokes[i], k)[lo][1]
                 a_, b_ = 0.0, r
-                for _ in range(24):
+                for _ in range(16):
                     m = (a_ + b_) / 2
                     t = affinity.translate(pair[lo], nrm[0] * m, nrm[1] * m)
-                    if t.difference(body).area < vis[1 - lo]:
+                    if shows(t) < vis[1 - lo]:
                         a_ = m
                     else:
                         b_ = m
@@ -291,7 +304,6 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, lo
     # round EVERY corner, inside and out (Alex: square corners next to the
     # round serifs "just look weird"): close (fills inside corners, e.g.
     # where a half-circle meets its stroke) then open (rounds outside ones)
-    f = (FILLET_MM if fillet_mm is None else fillet_mm) / cap_mm
     if f > 0:
         g = g.buffer(f, quad_segs=12).buffer(-2 * f, quad_segs=12).buffer(f, quad_segs=12)
     return g, w
@@ -300,7 +312,7 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, lo
 class GeoFont:
     """Stand-in for a PIL FreeTypeFont at `size` px: cap height size*CAP_RATIO."""
 
-    def __init__(self, size, serif_mm=3.0, ppm=5.0):
+    def __init__(self, size, serif_mm=None, ppm=5.0):
         self.size = size
         self.cap = size * CAP_RATIO
         self.serif_mm, self.ppm = serif_mm, ppm
