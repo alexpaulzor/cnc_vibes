@@ -216,6 +216,8 @@ class RingParams:
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
+    center_fan_deg: float = 60.0  # flat text: fan seams land within +-this of 12 / 6 o'clock
+    center_fan_arc_frac: float = 0.65  # flat text: cross arc radius / hub radius (50mm at 77)
     center_row_mm: float = 30.0  # flat-text grid: target row height above/below the text
     center_end_seg_mm: float = 10.0  # flat-text grid: shortest chord end (circle to first seam)
     center_flat_band_gap_mm: float = 15.0  # flat-text grid: wood above/below the text (>14 sliver floor)
@@ -749,6 +751,84 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         seams.insert(0, dict(pts=arc_pts(C, r_i, marks[q], marks[(q + 1) % len(marks)], 2 * ppm),
                              kind="innerarc", ends=("J", "J")))
     return [p % (2 * math.pi) for p in radials]
+
+
+def _center_flat_letter_seams(letters, C, r_h, ppm, rp, seams):
+    """Seams for a split hub under FLAT center text, woven through the
+    letters the way the ring's are (Alex: a plain grid with the word
+    "plopped" on it was boring):
+
+      * a fan seam from the top of every letter out to the hub circle, and
+        one from its bottom, leaving the letter square and arriving radially,
+        their landings spread evenly over +-center_fan_deg about 12 and 6;
+      * a seam bridging each gap between letters, and from the end letters
+        out to 9 and 3 o'clock, at the text's mid-height;
+      * a concentric arc (radius center_fan_arc_frac x r_h) across each pair
+        of neighbouring fan seams that both reach it, so no column runs from
+        the letters all the way to the rim.
+
+    Appends to `seams`; returns the hub-circle landing angles."""
+    letters = sorted(letters, key=lambda g: g.centroid.x)
+    U = unary_union(letters)
+    solids = unary_union([solid_of(g) for g in letters])
+    n = len(letters)
+    mid = (U.bounds[1] + U.bounds[3]) / 2
+
+    def anchor(g, top):  # the letter's top (bottom) point nearest its centre
+        ys = [y for _x, y in g.exterior.coords]
+        yext = min(ys) if top else max(ys)
+        band = [(x, y) for x, y in g.exterior.coords if abs(y - yext) < 0.6 * ppm]
+        return min(band, key=lambda q: abs(q[0] - g.centroid.x))
+
+    def on_circle(phi):  # clockwise from 12 o'clock
+        return (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
+
+    landings, fans = [], {True: [], False: []}
+    spread = math.radians(rp.center_fan_deg)
+    for i, g in enumerate(letters):
+        f = -1 + 2 * i / (n - 1) if n > 1 else 0.0
+        for top in (True, False):
+            a = anchor(g, top)
+            phi = (f * spread) if top else (math.pi - f * spread)
+            b = on_circle(phi)
+            pts = G._vg_bez(a, (0, -1) if top else (0, 1), b, (-math.sin(phi), math.cos(phi)),
+                            0.45 * math.dist(a, b))
+            seams.append(dict(pts=pts, kind="hubradial", ends=("L", "J")))
+            fans[top].append(LineString(pts))
+            landings.append(phi % (2 * math.pi))
+
+    def bridge(x0, x1):  # the stretch of y=mid between x0, x1 outside the letters
+        seg = LineString([(x0, mid), (x1, mid)]).difference(solids)
+        parts = list(seg.geoms) if hasattr(seg, "geoms") else [seg]
+        return [q for q in parts if q.length > 0.5 * ppm]
+
+    for g1, g2 in zip(letters, letters[1:]):
+        for q in bridge(g1.centroid.x, g2.centroid.x):
+            seams.append(dict(pts=list(q.coords), kind="divider", ends=("L", "L")))
+    xl = C[0] - math.sqrt(max(0.0, r_h ** 2 - (mid - C[1]) ** 2))
+    xr = C[0] + math.sqrt(max(0.0, r_h ** 2 - (mid - C[1]) ** 2))
+    for q, end in ((bridge(xl, letters[0].centroid.x)[:1], 0), (bridge(letters[-1].centroid.x, xr)[-1:], 1)):
+        for seg in q:
+            pts = list(seg.coords)
+            seams.append(dict(pts=pts, kind="divider", ends=("J", "L") if end == 0 else ("L", "J")))
+            landings.append(ang_of(pts[0] if end == 0 else pts[-1], C) % (2 * math.pi))
+    r_c = rp.center_fan_arc_frac * r_h
+    ring_c = Point(C).buffer(r_c, quad_segs=128).exterior
+    for top in (True, False):
+        row = sorted(fans[top], key=lambda ln: ln.coords[-1][0])
+        hits = []
+        for ln in row:
+            x = ln.intersection(ring_c)
+            hits.append(x if x.geom_type == "Point" else None)
+        for h1, h2 in zip(hits, hits[1:]):
+            if h1 is None or h2 is None:
+                continue
+            a1, a2 = ang_of((h1.x, h1.y), C), ang_of((h2.x, h2.y), C)
+            da = math.remainder(a2 - a1, 2 * math.pi)
+            pts = [(C[0] + r_c * math.sin(a1 + da * t / 24), C[1] - r_c * math.cos(a1 + da * t / 24))
+                   for t in range(25)]
+            seams.append(dict(pts=pts, kind="innerarc", ends=("T", "T")))
+    return sorted(landings)
 
 
 def _center_flat_grid_seams(letters, C, r_h, ppm, rp, seams):
@@ -1696,7 +1776,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
             # short radials across the letter band through the wide gaps
             # between letters -- normal-size, tabbed pieces, and no word owns
             # the disc's "up" (RING_SPEC.md §16.2).
-            split = (_center_flat_grid_seams(center_polys, C, r_h, ppm, rp, seams)
+            split = (_center_flat_letter_seams(center_polys, C, r_h, ppm, rp, seams)
                      if rp.center_style == "flat"
                      else _center_split_seams(center_polys, C, r_h, ppm, rp, seams, rng))
         elif k_hub > 1 and center_polys:
