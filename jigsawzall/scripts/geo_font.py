@@ -10,12 +10,10 @@ its neck, so in the cut puzzle each end locks into the surround like a tab
 (Alex: "the end of each letter effectively becomes a puzzle tab").
 Symmetric letters come out exactly symmetric because their strokes are.
 
-Serif styles (`serif=`):
-  "feet"  two semicircles of diameter `serif_mm`, flat side on the stroke
-          end's cap line, one flanking each side of the stroke (a serif
-          foot, rounded);
-  "knob"  one round knob of diameter stroke + serif_mm at the end, flush
-          with the baseline/cap line.
+Serif: at each free end, half a circle of diameter `serif_mm` on each side
+of the stroke, flat side against the stroke's side edge from the end
+corner back, bulging outward -- e.g. the I's foot flares into a round bulb
+on a stroke-wide neck, the shape of the puzzle's own tabs.
 
 Units below are cap heights (H = 1, y up, baseline 0). GeoFont mimics the
 bits of PIL's FreeTypeFont that ring_prototype reads (getbbox("H") for the
@@ -74,7 +72,9 @@ def _letters():
     rj = (w - s) / 2
     L["J"] = (w, [[(w - h, 1), (w - h, h + rj)] + _arc(h + rj, h + rj, rj, 0, -180) + [(h, h + rj + 0.08)]])
     w = 0.80
-    L["K"] = (w, [[(h, 0), (h, 1)], [(h, 0.42), (w, 1)], [(0.30, 0.62), (w, 0)]])
+    kx = 0.30  # lower leg starts ON the upper one (no lump at the joint)
+    L["K"] = (w, [[(h, 0), (h, 1)], [(h, 0.42), (w, 1)],
+                  [(kx, 0.42 + (kx - h) / (w - h) * 0.58), (w, 0)]])
     w = 0.66
     L["L"] = (w, [[(h, 1), (h, 0)], [(h, bot), (w - h, bot)]])
     w = 1.0
@@ -123,7 +123,7 @@ def _extend(pl, k, d):
     return [e] + pl if k == 0 else pl + [e]
 
 
-def glyph_units(ch, serif="feet", serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
+def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
     """Letter outline in cap units (y up, baseline 0), and its width."""
     w, strokes = LETTERS[ch]
     s = stroke
@@ -157,31 +157,31 @@ def glyph_units(ch, serif="feet", serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
     for p, d, free in ends:
         if not free:
             continue
-        if p[1] <= 1e-6 or p[1] >= 1 - 1e-6:  # on the baseline / cap line
+        # the end's two corners: on the baseline / cap line where the stroke
+        # is clipped flat, else square across the stroke end
+        if p[1] <= 1e-6 or p[1] >= 1 - 1e-6:
             y = 0.0 if p[1] <= 1e-6 else 1.0
             seg = body.intersection(LineString([(p[0] - 3 * s, y), (p[0] + 3 * s, y)]))
             xa, _y0, xb, _y1 = seg.bounds
-            inward = 1 if y == 0.0 else -1
-            if serif == "knob":
-                rk = (xb - xa) / 2 + r
-                serifs.append(Point((xa + xb) / 2, y + inward * rk).buffer(rk, quad_segs=24))
-            else:
-                for xc in (xa - r, xb + r):
-                    half = box(xc - r, min(y, y + inward * r), xc + r, max(y, y + inward * r))
-                    serifs.append(Point(xc, y).buffer(r, quad_segs=24).intersection(half))
-        else:  # mid-air end (C, G, J, S terminals; E, F, L, T, Z bar ends)
+            corners = [(xa, y), (xb, y)]
+        else:
             nx, ny = -d[1], d[0]
-            if serif == "knob":
-                rk = s / 2 + r
-                serifs.append(Point(p[0] - d[0] * (rk - s / 2), p[1] - d[1] * (rk - s / 2)).buffer(rk, quad_segs=24))
-            else:
-                for sg in (1, -1):
-                    c = (p[0] + sg * nx * (s / 2 + r), p[1] + sg * ny * (s / 2 + r))
-                    disc = Point(c).buffer(r, quad_segs=24)
-                    back = Polygon([(c[0] + nx * 2 * r, c[1] + ny * 2 * r), (c[0] - nx * 2 * r, c[1] - ny * 2 * r),
-                                    (c[0] - nx * 2 * r - d[0] * 2 * r, c[1] - ny * 2 * r - d[1] * 2 * r),
-                                    (c[0] + nx * 2 * r - d[0] * 2 * r, c[1] + ny * 2 * r - d[1] * 2 * r)])
-                    serifs.append(disc.intersection(back))
+            corners = [(p[0] + nx * s / 2, p[1] + ny * s / 2), (p[0] - nx * s / 2, p[1] - ny * s / 2)]
+        mid = ((corners[0][0] + corners[1][0]) / 2, (corners[0][1] + corners[1][1]) / 2)
+        for c in corners:
+            # half a circle of diameter serif_mm, flat side ON the stroke's
+            # side edge, starting at the corner and running back along the
+            # stroke, bulging outward: with its mirror on the other side the
+            # stroke end becomes a puzzle-tab bulb on a stroke-wide neck
+            o = (c[0] - mid[0], c[1] - mid[1])
+            on = math.hypot(*o) or 1.0
+            o = (o[0] / on, o[1] / on)
+            cc = (c[0] - d[0] * r, c[1] - d[1] * r)
+            disc = Point(cc).buffer(r, quad_segs=24)
+            half = Polygon([(cc[0] + d[0] * 2 * r, cc[1] + d[1] * 2 * r), (cc[0] - d[0] * 2 * r, cc[1] - d[1] * 2 * r),
+                            (cc[0] - d[0] * 2 * r + o[0] * 2 * r, cc[1] - d[1] * 2 * r + o[1] * 2 * r),
+                            (cc[0] + d[0] * 2 * r + o[0] * 2 * r, cc[1] + d[1] * 2 * r + o[1] * 2 * r)])
+            serifs.append(disc.intersection(half))
     g = unary_union([body] + serifs).intersection(box(-1, 0, w + 1, 1)).buffer(0)
     return g, w
 
@@ -189,10 +189,10 @@ def glyph_units(ch, serif="feet", serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
 class GeoFont:
     """Stand-in for a PIL FreeTypeFont at `size` px: cap height size*CAP_RATIO."""
 
-    def __init__(self, size, serif="feet", serif_mm=3.0, ppm=5.0):
+    def __init__(self, size, serif_mm=3.0, ppm=5.0):
         self.size = size
         self.cap = size * CAP_RATIO
-        self.serif, self.serif_mm, self.ppm = serif, serif_mm, ppm
+        self.serif_mm, self.ppm = serif_mm, ppm
         self._cache = {}
 
     def getbbox(self, text):
@@ -206,7 +206,7 @@ class GeoFont:
         """Outline in glyph_local's frame: x centred on the letter's outline
         (serifs included), baseline y=0, y DOWN (cap line at -cap)."""
         if ch not in self._cache:
-            g, _w = glyph_units(ch, self.serif, self.serif_mm, self.cap / self.ppm)
+            g, _w = glyph_units(ch, self.serif_mm, self.cap / self.ppm)
             b = g.bounds
             g = affinity.translate(g, -(b[0] + b[2]) / 2, 0)
             self._cache[ch] = affinity.scale(g, self.cap, -self.cap, origin=(0, 0))
@@ -217,15 +217,15 @@ def specimen(out, text="ABCDEFGHIJKLMNOPQRSTUVWXYZ", cap_mm=18.0):
     from PIL import Image, ImageDraw
 
     k = 8.0  # px per mm
-    rows = [("feet", text[:13]), ("feet", text[13:]), ("knob", text[:13]), ("knob", text[13:])]
+    rows = [text[:13], text[13:]]
     W, Hh = int(19 * cap_mm * k), int((len(rows) * 1.7 + 0.6) * cap_mm * k)
     img = Image.new("RGB", (W, Hh), "white")
     d = ImageDraw.Draw(img)
-    for ri, (style, row) in enumerate(rows):
-        f = GeoFont(cap_mm * 5.0 / CAP_RATIO, serif=style, ppm=5.0)
+    f = GeoFont(cap_mm * 5.0 / CAP_RATIO, ppm=5.0)
+    for ri, row in enumerate(rows):
         x = 0.5 * cap_mm * k
         base = (ri * 1.7 + 1.4) * cap_mm * k
-        d.text((6, base - 1.3 * cap_mm * k), f"serif={style!r} (3mm), {cap_mm:.0f}mm cap, stroke "
+        d.text((6, base - 1.3 * cap_mm * k), f"3mm half-circle tab serifs, {cap_mm:.0f}mm cap, stroke "
                f"{STROKE * cap_mm:.1f}mm", fill=(0, 0, 0))
         for ch in row:
             g = f.glyph(ch)

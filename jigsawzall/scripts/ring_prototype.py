@@ -222,6 +222,7 @@ class RingParams:
     # 0.5mm steps and keeps the largest that fits -- i.e. it fills the hub
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
     center_loose_cap_max_mm: float = 30.0
+    center_match_ring_cap: bool = True  # center letters at the ring's cap height
     # Print one line per variant (score + elapsed + ETA) while generating.
     progress: bool = False
     # Globe land as CUT pieces (RING_SPEC.md §13.14): (lon0, lat0) of an
@@ -301,7 +302,19 @@ def symmetrize_glyph(ch, g):
     return g
 
 
+def _find_font(size, name=None):
+    """TrueType face (geometry.find_font), or the geometric stroke font for
+    name "geo" (geo_font.py: straight strokes + arcs, tab-bulb serifs)."""
+    if name == "geo":
+        import geo_font
+
+        return geo_font.GeoFont(size)
+    return G.find_font(size, name)
+
+
 def glyph_local(ch, font):
+    if hasattr(font, "glyph"):  # geo_font.GeoFont: exact geometry, no tracing
+        return font.glyph(ch)
     gl, gt, gr, gb = font.getbbox(ch)
     pad = 6
     w, h = int(gr - gl) + 2 * pad, int(gb - gt) + 2 * pad
@@ -431,9 +444,9 @@ def center_text_block(rp, ppm):
     cap_mm = rp.center_text_cap_mm
     w1, w2 = rp.center_text
     while cap_mm >= rp.center_text_cap_min_mm:
-        ref = G.find_font(1000, rp.font)
+        ref = _find_font(1000, rp.font)
         cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
-        font = G.find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
+        font = _find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
         b1 = _center_text_word(w1, font, rp.center_text_baseline_mm, ppm)
         b2 = _center_text_word(w2, font, rp.center_text_baseline_mm, ppm)
         gap = rp.center_text_gap_mm * ppm
@@ -448,9 +461,9 @@ def center_text_block(rp, ppm):
 
 
 def _center_font(rp, cap_mm, ppm):
-    ref = G.find_font(1000, rp.font)
+    ref = _find_font(1000, rp.font)
     cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
-    return G.find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
+    return _find_font(max(8, int(round(cap_mm * ppm / cap_ratio))), rp.font)
 
 
 def _word_advances(word, font, track_px):
@@ -1025,7 +1038,7 @@ def fit_ring(words, rp: RingParams, ppm):
     if is_logo_font:
         _logo_glyphs, _logo_cap_ref_px, _ = _load_planet_logo_glyphs()
     else:
-        ref = G.find_font(1000, rp.font)
+        ref = _find_font(1000, rp.font)
         cap_ratio = (ref.getbbox("H")[3] - ref.getbbox("H")[1]) / 1000.0
     while True:
         cap = h_mm * ppm
@@ -1034,7 +1047,7 @@ def fit_ring(words, rp: RingParams, ppm):
             # `font` when is_logo_font, except L["font_size"] below.
             logo_scale = cap / _logo_cap_ref_px
         else:
-            font = G.find_font(max(10, int(round(cap / cap_ratio))), rp.font)
+            font = _find_font(max(10, int(round(cap / cap_ratio))), rp.font)
             cap = font.getbbox("H")[3] - font.getbbox("H")[1]
         Rin = Ro - cap
 
@@ -1309,7 +1322,11 @@ def build_ring(words, seed, rp: RingParams, cfg):
         # medallion, no exemption, spokes stay. They join letter_union (so
         # they become pockets/pieces like any letter) but NOT the outer
         # letters' seam-routing obstacles -- only tab clearance sees them.
-        cl, ccap = center_letters(rp, ppm, r_h, C)
+        # center letters the SAME size as the ring's (Alex: interchangeable,
+        # and less annoying to assemble) unless that doesn't fit the hub
+        rp_c = (replace(rp, center_loose_cap_max_mm=min(rp.center_loose_cap_max_mm, L["cap_mm"]))
+                if rp.center_match_ring_cap else rp)
+        cl, ccap = center_letters(rp_c, ppm, r_h, C)
         if cl is None:
             warnings.warn(
                 f"center_text {rp.center_text!r} ({rp.center_style}) doesn't fit "
