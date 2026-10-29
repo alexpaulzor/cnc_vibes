@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 STROKE = 0.17  # stroke width / cap height (3.1mm at an 18mm cap)
 CAP_RATIO = 0.72  # cap height / "font size", like a TrueType face
 SIDE = 0.10  # side bearing each side / cap height
+NOTCH_MIN_MM = 4.5  # a serif bump keeps this far from the letter's other strokes
 
 
 def _arc(cx, cy, r, a0, a1, n=None):
@@ -154,9 +155,13 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
               if not free and 1e-6 < p[1] < 1 - 1e-6]
     body = unary_union([body] + joints).intersection(box(-1, 0, w + 1, 1))
     serifs = []
+    notch = NOTCH_MIN_MM / cap_mm  # serif must leave this much room to other strokes
+    stroke_bodies = [ln.buffer(s / 2, cap_style="flat") for ln in ext]
     for p, d, free in ends:
         if not free:
             continue
+        own = min(range(len(ext)), key=lambda i: ext[i].distance(Point(p)))
+        others = unary_union([b for i, b in enumerate(stroke_bodies) if i != own])
         # the end's two corners: on the baseline / cap line where the stroke
         # is clipped flat, else square across the stroke end
         if p[1] <= 1e-6 or p[1] >= 1 - 1e-6:
@@ -181,7 +186,12 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
             half = Polygon([(cc[0] + d[0] * 2 * r, cc[1] + d[1] * 2 * r), (cc[0] - d[0] * 2 * r, cc[1] - d[1] * 2 * r),
                             (cc[0] - d[0] * 2 * r + o[0] * 2 * r, cc[1] - d[1] * 2 * r + o[1] * 2 * r),
                             (cc[0] + d[0] * 2 * r + o[0] * 2 * r, cc[1] + d[1] * 2 * r + o[1] * 2 * r)])
-            serifs.append(disc.intersection(half))
+            bump = disc.intersection(half)
+            # inside a narrow opening (between E's arms, F's) a bulge would
+            # pinch the surround's tongue of wood to a breakable neck: skip it
+            if not others.is_empty and bump.distance(others) < notch:
+                continue
+            serifs.append(bump)
     g = unary_union([body] + serifs).intersection(box(-1, 0, w + 1, 1)).buffer(0)
     return g, w
 

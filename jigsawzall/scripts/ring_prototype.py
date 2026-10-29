@@ -216,6 +216,9 @@ class RingParams:
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
     center_band_gap_mm: float = 6.0  # inner circle this far inside the letters
+    center_row_mm: float = 30.0  # flat-text grid: target row height above/below the text
+    center_end_seg_mm: float = 10.0  # flat-text grid: shortest chord end (circle to first seam)
+    center_flat_band_gap_mm: float = 15.0  # flat-text grid: wood above/below the text (>14 sliver floor)
     center_arc_min_mm: float = 24.0  # min inner-circle arc between landings (room for a tab)
     center_cross_min_deg: float = 70.0  # inner-disc pieces at least this wide (else absorbed)
     # Loose center text (flat/ring) searches DOWN from this cap height in
@@ -750,109 +753,168 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
 
 def _center_flat_grid_seams(letters, C, r_h, ppm, rp, seams):
     """Seams for a split hub under FLAT center text (center_split with
-    center_style "flat"): a grid, not a pinwheel. Out of a pinwheel's centre
-    every spoke heading across a W or N runs through its open notches, so
-    the wedge under them can never split (BROWN: one oversized piece on
-    every seed). Instead:
+    center_style "flat"): a brick-like grid, not a pinwheel. Out of a
+    pinwheel's centre every spoke heading across a W or N runs through its
+    open notches, so the wedge under them can never split (BROWN: one
+    oversized piece on every seed). Instead:
 
-      * a tabbed chord across the disc center_band_gap_mm above the text and
-        one the same distance below;
-      * vertical seams through letter gaps or a single letter stem (one
-        solid stroke, no near miss), continued up and down to the hub
-        circle, picked by a DP that keeps the largest piece (band or cap)
-        as small as possible with every chord segment >= center_arc_min_mm
-        long (room for its tab).
+      * a tabbed chord across the disc center_flat_band_gap_mm above the
+        text and one the same distance below, and more chords splitting the caps
+        above/below into rows about center_row_mm tall (Alex: one row each
+        side made "long and thin" pieces);
+      * each row gets its own vertical seams (bricks, staggered): through
+        letter gaps or a single letter stem in the text band, anywhere in
+        the other rows -- a DP per row keeps its largest piece as small as
+        possible, with every chord segment >= center_arc_min_mm long (room
+        for a tab) and a seam either meeting a neighbour row's seam exactly
+        or landing that far from it.
 
     Appends to `seams`; returns the hub-circle landing angles."""
     import globe_land as GL_
 
     U = unary_union(letters)
     lx0, ly0, lx1, ly1 = U.bounds
-    gap = rp.center_band_gap_mm * ppm
+    # wood above/below the text: a band piece is mostly letter pocket, so
+    # with 6mm strips no part of it was 14mm thick -- _vg_absorb took it for
+    # a sliver and merged it into the row next to it
+    gap = rp.center_flat_band_gap_mm * ppm
     yt, yb = ly0 - gap, ly1 + gap  # image y runs down: yt above the text
     clear = rp.center_min_gap_mm * ppm
-    dmax = max(abs(yt - C[1]), abs(yb - C[1]))
-    halfc = math.sqrt(max(0.0, r_h ** 2 - dmax ** 2))
     seg_min = rp.center_arc_min_mm * ppm
+    top_y, bot_y = C[1] - r_h, C[1] + r_h
 
-    def ok_x(x):
+    def half(y):  # chord half-length at height y
+        return math.sqrt(max(0.0, r_h ** 2 - (y - C[1]) ** 2))
+
+    # chord levels: rows ~center_row_mm tall above and below the text band
+    row = rp.center_row_mm * ppm
+    n_up = max(1, round((yt - top_y) / row))
+    n_dn = max(1, round((bot_y - yb) / row))
+    ups = [yt - k * (yt - top_y) / n_up for k in range(1, n_up)]  # moving up
+    dns = [yb + k * (bot_y - yb) / n_dn for k in range(1, n_dn)]  # moving down
+    chords = {y: [] for y in [yt, yb] + ups + dns}  # y -> seam x's landing on it
+
+    def ok_band(x):
         ln = LineString([(x, yt), (x, yb)])
         hits = [g for g in letters if ln.intersects(g)]
-        if not hits:
-            return U.distance(ln) >= clear
+        if not hits:  # a gap seam running alongside a letter leaves a strip
+            return U.distance(ln) >= max(clear, 7.0 * ppm)
         if len(hits) > 1:
             return False
         g = hits[0]
         h, hs = ln.intersection(g), ln.intersection(solid_of(g))
         pts = [(x, yt + t * (yb - yt) / 30) for t in range(31)]
-        return (h.geom_type == "LineString" and hs.geom_type == "LineString"
-                and abs(h.length - hs.length) < 0.5 and not spoke_near_misses(pts, letters, clear))
+        if not (h.geom_type == "LineString" and hs.geom_type == "LineString"
+                and abs(h.length - hs.length) < 0.5 and not spoke_near_misses(pts, letters, clear)):
+            return False
+        # and it must leave the letter steeply: crossing a serif bulb and then
+        # running down beside a slanted leg (W) leaves a wedge-thin strip
+        hy0, hy1 = h.bounds[1], h.bounds[3]
+        for k in range(1, 21):
+            t = k * 0.5 * ppm
+            for yy in (hy0 - t, hy1 + t):
+                if yt <= yy <= yb and g.distance(Point(x, yy)) < 0.6 * t:
+                    return False
+        return True
 
-    cands, run = [], []
-    x = C[0] - halfc + seg_min
-    while x <= C[0] + halfc - seg_min:
-        if ok_x(x):
-            run.append(x)
-        elif run:
-            cands.append(run[len(run) // 2])
-            run = []
-        x += 0.5 * ppm
-    if run:
-        cands.append(run[len(run) // 2])
+    def fits_chord(x, y):
+        # the end bit, out to the (untabbed) hub circle, needn't carry a tab:
+        # both its pieces are held by their other seams
+        if abs(x - C[0]) > half(y) - rp.center_end_seg_mm * ppm:
+            return False
+        return all(abs(x - q) < 0.5 or abs(x - q) >= seg_min for q in chords[y])
+
     disc = Point(C).buffer(r_h, quad_segs=128)
-    regions = [disc.intersection(box(C[0] - r_h, C[1] - r_h, C[0] + r_h, yt)),
-               disc.intersection(box(C[0] - r_h, yt, C[0] + r_h, yb)),
-               disc.intersection(box(C[0] - r_h, yb, C[0] + r_h, C[1] + r_h))]
 
-    def worst(a, b):
-        sl = box(a, C[1] - r_h, b, C[1] + r_h)
-        return max(r.intersection(sl).area for r in regions)
+    def do_row(ya, yb_, band=False):
+        """One row between ya (above) and yb_ (below); a y that is not a
+        chord is the hub circle. Picks its vertical seams, records them on
+        the chords, returns [(x, y_from, y_to)]."""
+        reg = disc.intersection(box(C[0] - r_h, ya, C[0] + r_h, yb_))
+        on = [y for y in (ya, yb_) if y in chords]
+        xr = max(half(y) for y in on)
+        cands, run = [], []
+        x = C[0] - xr
+        while x <= C[0] + xr:
+            ok = all(fits_chord(x, y) for y in on) and (not band or ok_band(x))
+            if ok:
+                run.append(x)
+            if run and (not ok or x + 0.5 * ppm > C[0] + xr):
+                if band:  # the middle of each clean run (a gap or a stem)
+                    cands.append(run[len(run) // 2])
+                else:  # open wood: anywhere, every 1mm
+                    cands.extend(run[::2])
+                run = []
+            x += 0.5 * ppm
+        if not band:  # carrying a neighbour row's seam straight on is allowed too
+            cands = sorted(set(cands) | {q for y in on for q in chords[y]
+                                         if all(fits_chord(q, y2) for y2 in on)})
+        pts = [C[0] - xr] + cands + [C[0] + xr]
+        n = len(pts)
 
-    pts = [C[0] - halfc] + cands + [C[0] + halfc]
-    n = len(pts)
-    best = [(0.0, None)] + [(math.inf, None)] * (n - 1)
-    for j in range(1, n):
-        for i in range(j):
-            if pts[j] - pts[i] >= seg_min and best[i][0] < math.inf:
-                w = max(best[i][0], worst(pts[i], pts[j]))
+        def area(a, b):
+            # a piece's cost: its area, or its width squared (x0.8) when it is
+            # long and flat -- area alone left 70 x 26mm planks (Alex: "so
+            # long and thin")
+            return max(reg.intersection(box(a, ya, b, yb_)).area, 0.8 * (b - a) ** 2)
+
+        best = [(0.0, None)] + [(math.inf, None)] * (n - 1)
+        for j in range(1, n):
+            for i in range(j):
+                if best[i][0] == math.inf:
+                    continue
+                if 0 < i and j < n - 1 and pts[j] - pts[i] < seg_min:
+                    continue
+                w = max(best[i][0], area(pts[i], pts[j]))
                 if w < best[j][0]:
                     best[j] = (w, i)
-    sel, j = [], best[n - 1][1]
-    while j:
-        sel.append(pts[j])
-        j = best[j][1]
-    sel.sort()
+        sel, j = [], best[n - 1][1]
+        while j:
+            sel.append(pts[j])
+            j = best[j][1]
+        out = []
+        for x in sorted(sel):
+            for y in on:
+                if all(abs(x - q) >= 0.5 for q in chords[y]):
+                    chords[y].append(x)
+            y0 = ya if ya in chords else C[1] - half_x(x)
+            y1 = yb_ if yb_ in chords else C[1] + half_x(x)
+            out.append((x, y0, y1))
+        return out
+
+    def half_x(x):
+        return math.sqrt(max(0.0, r_h ** 2 - (x - C[0]) ** 2))
+
+    verts = [(v, True) for v in do_row(yt, yb, band=True)]
+    levels_up = [yt] + ups + [top_y]
+    for y_lo, y_hi in zip(levels_up, levels_up[1:]):  # rows above, inner first
+        verts += [(v, False) for v in do_row(y_hi, y_lo)]
+    levels_dn = [yb] + dns + [bot_y]
+    for y_hi, y_lo in zip(levels_dn, levels_dn[1:]):  # rows below, inner first
+        verts += [(v, False) for v in do_row(y_hi, y_lo)]
 
     def line(a, b):
         k = max(4, int(math.dist(a, b) / (2 * ppm)))
         return [(a[0] + (b[0] - a[0]) * t / k, a[1] + (b[1] - a[1]) * t / k) for t in range(k + 1)]
 
-    def circ_x(y, side):
-        return C[0] + side * math.sqrt(max(0.0, r_h ** 2 - (y - C[1]) ** 2))
-
     landings = []
-    # the two chords, split at the vertical seams (one tab per segment)
-    for y in (yt, yb):
-        xs = [circ_x(y, -1)] + sel + [circ_x(y, 1)]
+    for y, xs in chords.items():  # every chord, split where seams land (one tab each)
+        xs = [C[0] - half(y)] + sorted(xs) + [C[0] + half(y)]
         for a, b in zip(xs, xs[1:]):
             seams.append(dict(pts=line((a, y), (b, y)), kind="divider", ends=("J", "J")))
         landings += [ang_of((xs[0], y), C) % (2 * math.pi), ang_of((xs[-1], y), C) % (2 * math.pi)]
-    # vertical seams: cap (circle -> chord), band (chord -> chord, chopped at
-    # a letter it crosses), cap (chord -> circle)
-    for x in sel:
-        ytop = C[1] - math.sqrt(max(0.0, r_h ** 2 - (x - C[0]) ** 2))
-        ybot = C[1] + math.sqrt(max(0.0, r_h ** 2 - (x - C[0]) ** 2))
-        seams.append(dict(pts=line((x, ytop), (x, yt)), kind="hubradial", ends=("J", "J")))
-        seams.append(dict(pts=line((x, yb), (x, ybot)), kind="hubradial", ends=("J", "J")))
-        band = dict(pts=line((x, yt), (x, yb)), kind="hubradial", ends=("J", "J"))
-        if LineString(band["pts"]).intersects(U):
-            for part in GL_.chop_seams([band], unary_union([solid_of(g) for g in letters]), ppm,
-                                       min_mm=2.0, approach_mm=0.5):
+    solids = unary_union([solid_of(g) for g in letters])
+    for (x, y0, y1), in_band in verts:
+        sm = dict(pts=line((x, y0), (x, y1)), kind="hubradial", ends=("J", "J"))
+        if in_band and LineString(sm["pts"]).intersects(U):
+            for part in GL_.chop_seams([sm], solids, ppm, min_mm=2.0, approach_mm=0.5):
                 part["kind"] = "hubradial"
                 seams.append(part)
         else:
-            seams.append(band)
-        landings += [ang_of((x, ytop), C) % (2 * math.pi), ang_of((x, ybot), C) % (2 * math.pi)]
+            seams.append(sm)
+        for y in (y0, y1):
+            if y not in chords:
+                landings.append(ang_of((x, y), C) % (2 * math.pi))
     return sorted(landings)
 
 
