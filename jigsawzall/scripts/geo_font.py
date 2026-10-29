@@ -32,7 +32,8 @@ from shapely.ops import unary_union
 STROKE = 0.17  # stroke width / cap height (3.1mm at an 18mm cap)
 CAP_RATIO = 0.72  # cap height / "font size", like a TrueType face
 SIDE = 0.10  # side bearing each side / cap height
-NOTCH_MIN_MM = 4.5  # a serif bump keeps this far from the letter's other strokes
+FILLET_MM = 0.75  # every corner of the outline rounded to this radius
+NOTCH_MIN_MM = 3.0  # a serif bump keeps this much wood to a stroke straight ahead of it
 
 
 def _arc(cx, cy, r, a0, a1, n=None):
@@ -66,14 +67,16 @@ def _letters():
     L["C"] = (1.0, [_arc(0.5, 0.5, R, 42, 318)])
     a = h + 0.16
     L["D"] = (a + R + h, [[(h, 0), (h, 1)], [(h, top), (a, top)] + _arc(a, 0.5, R, 90, -90) + [(h, bot)]])
-    w = 0.70
+    w = 0.80
     # middle bar short of the others: the top/bottom bar ends' serif bumps
-    # then clear it and stay (a bump facing another bar head-on is dropped)
-    mb = w - h - 0.27
-    L["E"] = (w, [[(h, 0), (h, 1)], [(h, top), (w - h, top)], [(h, 0.52), (mb, 0.52)],
-                  [(h, bot), (w - h, bot)]])
-    L["F"] = (w, [[(h, 0), (h, 1)], [(h, top), (w - h, top)], [(h, 0.52), (mb, 0.52)]])
-    L["G"] = (1.0, [_arc(0.5, 0.5, R, 42, 360), [(0.5 + R, 0.5), (0.56, 0.5)]])
+    # then keep NOTCH_MIN_MM of wood to it and stay
+    mb = w - h - 0.35
+    L["E"] = (w, [[(h, 0), (h, 1)], [(h, top), (w - h, top)], [(h, 0.5), (mb, 0.5)],
+                  [(h, bot), (w - h, bot)]])  # middle bar centred: same room above and below
+    L["F"] = (w, [[(h, 0), (h, 1)], [(h, top), (w - h, top)], [(h, 0.5), (mb, 0.5)]])
+    # terminal at 48deg, crossbar at 0.45: the terminal's inner bump keeps
+    # 3.2mm to the bar (at 42deg / 0.5 it was 2.0mm and got dropped)
+    L["G"] = (1.0, [_arc(0.5, 0.5, R, 48, 360) + [(0.5 + R, 0.45)], [(0.5 + R, 0.45), (0.56, 0.45)]])
     w = 0.80
     L["H"] = (w, [[(h, 0), (h, 1)], [(w - h, 0), (w - h, 1)], [(h, 0.5), (w - h, 0.5)]])  # top = bottom
     L["I"] = (s, [[(h, 0), (h, 1)]])
@@ -132,11 +135,9 @@ def _extend(pl, k, d):
     return [e] + pl if k == 0 else pl + [e]
 
 
-CURVE_END = "round"  # curve terminals (C G J S): "tab" | "round" | "ball"
-
-
-def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
-    """Letter outline in cap units (y up, baseline 0), and its width."""
+def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, log=None):
+    """Letter outline in cap units (y up, baseline 0), and its width. `log`
+    (a list) collects each serif bump's (end point, side, kept?, mm ahead)."""
     w, strokes = LETTERS[ch]
     s = stroke
     r = serif_mm / cap_mm / 2  # serif semicircle radius, cap units
@@ -167,7 +168,7 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
             d = (d[0] / n, d[1] / n)
             closed = math.dist(pl[0], pl[-1]) < 1e-6  # O, Q's ring: no ends at all
             free = not closed and (others is None or others.distance(Point(p)) > 0.6 * s)
-            ends.append((p, d, free, len(pl) > 3))  # curved stroke (an arc)
+            ends.append((p, d, free))
         # ends on the baseline / cap line: extend past it, then clip flat
         q = list(pl)
         for k in (0, -1):
@@ -179,8 +180,8 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
     # round over a joint only where two stroke ENDS meet (W's peak, M's
     # middle): an end landing part-way along another stroke (A's crossbar)
     # would poke a bump out past it
-    tips = [p for p, _d, _f, _c in ends]
-    joints = [Point(p).buffer(s / 2, quad_segs=16) for p, _d, free, _c in ends
+    tips = [p for p, _d, _f in ends]
+    joints = [Point(p).buffer(s / 2, quad_segs=16) for p, _d, free in ends
               if not free and 1e-6 < p[1] < 1 - 1e-6
               and sum(1 for q in tips if math.dist(p, q) < 0.6 * s) >= 2]
     # clip to the letter's own box: no spur where N's / M's diagonal meets
@@ -189,30 +190,28 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
     serifs = []
     notch = NOTCH_MIN_MM / cap_mm  # serif must leave this much room to other strokes
     stroke_bodies = [ln.buffer(s / 2, cap_style="flat") for ln in ext]
-    for p, d, free, curved in ends:
+    for p, d, free in ends:
         if not free:
             continue
         own = min(range(len(ext)), key=lambda i: ext[i].distance(Point(p)))
         others = unary_union([b for i, b in enumerate(stroke_bodies) if i != own])
-        ce = curve_end or CURVE_END
-        if curved and 1e-6 < p[1] < 1 - 1e-6 and ce != "tab":
-            # a curve's mid-air end (C, G, S, J): plain round end, or a small
-            # ball terminal (stroke + one serif radius wide)
-            rb = s / 2 if ce == "round" else s / 2 + r / 2
-            serifs.append(Point(p[0] - d[0] * (rb - s / 2), p[1] - d[1] * (rb - s / 2)).buffer(rb, quad_segs=24))
-            continue
         # the end's two corners: on the baseline / cap line where the stroke
         # is clipped flat, else square across the stroke end
         if p[1] <= 1e-6 or p[1] >= 1 - 1e-6:
             y = 0.0 if p[1] <= 1e-6 else 1.0
             seg = body.intersection(LineString([(p[0] - 3 * s, y), (p[0] + 3 * s, y)]))
+            # just this stroke's own stretch of the line -- the scan can also
+            # take in a neighbour (K's arm beside its stem) and put the inner
+            # bump on the wrong stroke
+            parts = list(seg.geoms) if hasattr(seg, "geoms") else [seg]
+            seg = min(parts, key=lambda g_: g_.distance(Point(p[0], y)))
             xa, _y0, xb, _y1 = seg.bounds
             corners = [(xa, y), (xb, y)]
         else:
             nx, ny = -d[1], d[0]
             corners = [(p[0] + nx * s / 2, p[1] + ny * s / 2), (p[0] - nx * s / 2, p[1] - ny * s / 2)]
         mid = ((corners[0][0] + corners[1][0]) / 2, (corners[0][1] + corners[1][1]) / 2)
-        n_before = len(serifs)
+        pair = []
         for c in corners:
             # half a circle of diameter serif_mm, flat side ON the stroke's
             # side edge, starting at the corner and running back along the
@@ -227,19 +226,32 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
                             (cc[0] - d[0] * 2 * r + o[0] * 2 * r, cc[1] - d[1] * 2 * r + o[1] * 2 * r),
                             (cc[0] + d[0] * 2 * r + o[0] * 2 * r, cc[1] + d[1] * 2 * r + o[1] * 2 * r)])
             bump = disc.intersection(half)
-            # inside a narrow opening (between E's arms, F's) a bulge would
-            # pinch the surround's tongue of wood to a breakable neck: skip it
-            # -- only when another stroke lies straight AHEAD of the bulge
-            # (L's and T's bar ends sit near their stem sideways, and keep it)
+            # a bulge with another stroke within NOTCH_MIN_MM straight AHEAD
+            # of it would pinch the surround's wood between them to a neck
+            # (E's middle bar, under its top bar): skip it. Beside it (T's,
+            # L's bar ends near the stem) or with more room ahead (K's inside
+            # bumps, 3.3mm) it stays
             ahead = unary_union([bump, affinity.translate(bump, o[0] * notch, o[1] * notch)]).convex_hull
-            if not others.is_empty and ahead.intersects(others):
+            dropped = not others.is_empty and ahead.intersects(others)
+            if log is not None:
+                log.append((p, o, not dropped, bump.distance(others) * cap_mm if not others.is_empty else None))
+            if dropped:
                 continue
-            serifs.append(bump)
-        if len(serifs) == n_before and 1e-6 < p[1] < 1 - 1e-6:
-            # both bumps dropped (Q's tail inside the bowl): round the end
-            # off rather than leave it square
-            serifs.append(Point(p).buffer(s / 2, quad_segs=16))
+            pair.append(bump)
+        # both bumps or neither: a lone bump on one side of an end looks
+        # lopsided (Q's tail foot, whose inner bump can't clear the bowl).
+        # One may still be clipped off by the baseline / cap line (L's bar)
+        if len(pair) == 2:
+            serifs.extend(pair)
+        elif log is not None and pair:
+            log.append((p, None, False, None))  # its partner, dropped with it
     g = unary_union([body] + serifs).intersection(box(-1, 0, w + 1, 1)).buffer(0)
+    # round EVERY corner, inside and out (Alex: square corners next to the
+    # round serifs "just look weird"): close (fills inside corners, e.g.
+    # where a half-circle meets its stroke) then open (rounds outside ones)
+    f = (FILLET_MM if fillet_mm is None else fillet_mm) / cap_mm
+    if f > 0:
+        g = g.buffer(f, quad_segs=12).buffer(-2 * f, quad_segs=12).buffer(f, quad_segs=12)
     return g, w
 
 
