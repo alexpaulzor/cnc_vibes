@@ -132,7 +132,10 @@ def _extend(pl, k, d):
     return [e] + pl if k == 0 else pl + [e]
 
 
-def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
+CURVE_END = "round"  # curve terminals (C G J S): "tab" | "round" | "ball"
+
+
+def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, curve_end=None):
     """Letter outline in cap units (y up, baseline 0), and its width."""
     w, strokes = LETTERS[ch]
     s = stroke
@@ -191,11 +194,12 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE):
             continue
         own = min(range(len(ext)), key=lambda i: ext[i].distance(Point(p)))
         others = unary_union([b for i, b in enumerate(stroke_bodies) if i != own])
-        if curved and 1e-6 < p[1] < 1 - 1e-6:
-            # a curve's mid-air end (C, G, S, J): a ball terminal as wide as
-            # a stem's serif bulb (stroke + 2 x serif radius)
-            rb = s / 2 + r
-            serifs.append(Point(p[0] - d[0] * r, p[1] - d[1] * r).buffer(rb, quad_segs=24))
+        ce = curve_end or CURVE_END
+        if curved and 1e-6 < p[1] < 1 - 1e-6 and ce != "tab":
+            # a curve's mid-air end (C, G, S, J): plain round end, or a small
+            # ball terminal (stroke + one serif radius wide)
+            rb = s / 2 if ce == "round" else s / 2 + r / 2
+            serifs.append(Point(p[0] - d[0] * (rb - s / 2), p[1] - d[1] * (rb - s / 2)).buffer(rb, quad_segs=24))
             continue
         # the end's two corners: on the baseline / cap line where the stroke
         # is clipped flat, else square across the stroke end
