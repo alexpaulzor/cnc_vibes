@@ -75,8 +75,11 @@ def _letters():
                   [(h, bot), (w - h, bot)]])  # middle bar centred: same room above and below
     L["F"] = (w, [[(h, 0), (h, 1)], [(h, top), (w - h, top)], [(h, 0.5), (mb, 0.5)]])
     # terminal at 48deg, crossbar at 0.45: the terminal's inner bump keeps
-    # 3.2mm to the bar (at 42deg / 0.5 it was 2.0mm and got dropped)
-    L["G"] = (1.0, [_arc(0.5, 0.5, R, 48, 360) + [(0.5 + R, 0.45)], [(0.5 + R, 0.45), (0.56, 0.45)]])
+    # 3.2mm to the bar. The arc ends exactly ON the crossbar's centre line,
+    # so the two meet in one rounded joint (ending it at 0.5 left a step)
+    ge = 360 + math.degrees(math.asin((0.45 - 0.5) / R))
+    gx = 0.5 + R * math.cos(math.radians(ge))
+    L["G"] = (1.0, [_arc(0.5, 0.5, R, 48, ge), [(gx, 0.45), (0.56, 0.45)]])
     w = 0.80
     L["H"] = (w, [[(h, 0), (h, 1)], [(w - h, 0), (w - h, 1)], [(h, 0.5), (w - h, 0.5)]])  # top = bottom
     L["I"] = (s, [[(h, 0), (h, 1)]])
@@ -97,7 +100,12 @@ def _letters():
     rp = (top - 0.44) / 2
     ap = h + 0.30
     L["P"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)]])
-    L["Q"] = (1.0, [_arc(0.5, 0.5, R, 0, 360), [(0.62, 0.30), (0.98, 0)]])
+    # tail: from ON the ring (a joint) at -50deg, out at a shallow 30deg to
+    # the baseline, where it ends in a normal tab clear of the ring
+    qa = math.radians(-50)
+    q0 = (0.5 + R * math.cos(qa), 0.5 + R * math.sin(qa))
+    q1 = (q0[0] + q0[1] / math.tan(math.radians(30)), 0.0)
+    L["Q"] = (q1[0] + 0.05, [_arc(0.5, 0.5, R, 0, 360), [q0, q1]])
     L["R"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)],
                             [(ap - 0.02, 0.44), (ap + rp + h, 0)]])
     # S: two 3/4 circles meeting at the centre, 180deg-symmetric
@@ -141,110 +149,144 @@ def glyph_units(ch, serif_mm=3.0, cap_mm=18.0, stroke=STROKE, fillet_mm=None, lo
     w, strokes = LETTERS[ch]
     s = stroke
     r = serif_mm / cap_mm / 2  # serif semicircle radius, cap units
-    # a slanted stroke ending at the letter's side (A, V, W, X, Y feet and
-    # tops): move its end in so the stroke's OUTER edge, not its centre
-    # line, lands on the side
-    fixed = []
-    for pl in strokes:
-        pl = list(pl)
-        for k, nb in ((0, 1), (-1, -2)):
-            (x, y), (x2, y2) = pl[k], pl[nb]
-            if (y <= 1e-6 or y >= 1 - 1e-6) and (x <= 1e-6 or x >= w - 1e-6) and abs(x2 - x) > 1e-6:
-                sin = abs(y2 - y) / math.hypot(x2 - x, y2 - y)
-                hw = (s / 2) / max(sin, 0.3)
-                pl[k] = (hw if x <= 1e-6 else w - hw, y)
-        fixed.append(pl)
-    strokes = fixed
-    lines = [LineString(p) for p in strokes]
-    ends = []  # (point, outward direction, free?)
-    ext = []
+    notch = NOTCH_MIN_MM / cap_mm  # a lobe keeps this much wood to a stroke ahead of it
+    strokes = [list(pl) for pl in strokes]
+    lines = [LineString(pl) for pl in strokes]
+
+    def unit(v):
+        n_ = math.hypot(*v) or 1.0
+        return (v[0] / n_, v[1] / n_)
+
+    # every stroke end: free (gets the tab lobes) or a joint
+    ends = []  # (stroke i, k, point, outward direction d, free?, on the baseline/cap line?)
     for i, pl in enumerate(strokes):
         others = unary_union([ln for j, ln in enumerate(lines) if j != i]) if len(lines) > 1 else None
+        closed = math.dist(pl[0], pl[-1]) < 1e-6  # O, Q's ring: no ends at all
         for k in (0, -1):
             p = pl[k]
             q = pl[1] if k == 0 else pl[-2]
-            d = (p[0] - q[0], p[1] - q[1])
-            n = math.hypot(*d) or 1.0
-            d = (d[0] / n, d[1] / n)
-            closed = math.dist(pl[0], pl[-1]) < 1e-6  # O, Q's ring: no ends at all
+            d = unit((p[0] - q[0], p[1] - q[1]))
             free = not closed and (others is None or others.distance(Point(p)) > 0.6 * s)
-            ends.append((p, d, free))
-        # ends on the baseline / cap line: extend past it, then clip flat
-        q = list(pl)
-        for k in (0, -1):
-            if q[k][1] <= 1e-6 or q[k][1] >= 1 - 1e-6:
-                q = _extend(q, k, 2 * s)
-        ext.append(LineString(q))
-    body = unary_union([ln.buffer(s / 2, cap_style="flat", join_style="round") for ln in ext])
-    # round joins only where strokes meet: give joined (non-free) ends a round cap
+            on_line = p[1] <= 1e-6 or p[1] >= 1 - 1e-6
+            ends.append((i, k, p, d, free, on_line))
+
+    def edge_points(pl, k, P, d):
+        """The two points on the stroke's side EDGES (offset curves of its
+        centre line, s/2 either side) one serif radius back from end k,
+        measured along each edge -- on a curve the tangent would put the
+        inner and outer circle in unequal spots."""
+        nrm = (-d[1], d[0])
+        out = []
+        for sg in (1, -1):
+            corner = Point(P[0] + nrm[0] * sg * s / 2, P[1] + nrm[1] * sg * s / 2)
+            # offset_curve's + side is LEFT of the line's own direction; at a
+            # stroke's start (k=0) that direction points into the stroke, so
+            # left/right swap relative to the outward normal
+            side = sg if k == -1 else -sg
+            edge = LineString(pl).offset_curve(side * s / 2, join_style="round")
+            if edge.is_empty or edge.length < 2 * r:
+                out.append(None)
+                continue
+            a_, b_ = Point(edge.coords[0]), Point(edge.coords[-1])
+            t = r if a_.distance(corner) < b_.distance(corner) else edge.length - r
+            q = edge.interpolate(t)
+            out.append(((q.x, q.y), (nrm[0] * sg, nrm[1] * sg)))
+        return out
+
+    def lobes(P, d, pl=None, k=None):
+        """The tab at a stroke end whose square end-line is centred on P
+        (outward direction d): a circle of radius r on EACH side edge, level
+        with the end line less r, bulging outward -- a mirror pair about the
+        stroke's own axis, whatever its angle. Returns [(circle, normal)]."""
+        out = []
+        on_edge = edge_points(pl, k, P, d) if pl is not None else [None, None]
+        for sg, ep in zip((1, -1), on_edge):
+            nrm = (-d[1] * sg, d[0] * sg)
+            c = ep[0] if ep else (P[0] + nrm[0] * s / 2 - d[0] * r, P[1] + nrm[1] * s / 2 - d[1] * r)
+            # a FULL circle centred on the edge: on a straight stroke its inner
+            # half hides inside the stroke (same as a half circle); on a curve
+            # it blends into the bending edge instead of leaving a notch where
+            # a flat half-circle side ran off along the tangent (C, S)
+            out.append((Point(c).buffer(r, quad_segs=24), nrm))
+        return out
+
+    def end_square(P, d):
+        nrm = (-d[1], d[0])
+        return Polygon([(P[0] + nrm[0] * s / 2, P[1] + nrm[1] * s / 2), (P[0] - nrm[0] * s / 2, P[1] - nrm[1] * s / 2),
+                        (P[0] - nrm[0] * s / 2 - d[0] * 2 * r, P[1] - nrm[1] * s / 2 - d[1] * 2 * r),
+                        (P[0] + nrm[0] * s / 2 - d[0] * 2 * r, P[1] + nrm[1] * s / 2 - d[1] * 2 * r)])
+
+    # a FREE end on the baseline / cap line ends square across its stroke
+    # (never cut along the line: a slanted foot cut flat gave A and C unequal
+    # inner and outer lobes) and is pulled back along the stroke until its
+    # lowest (highest) point just touches the line
+    tab_at = {}
+    for i, k, p, d, free, on_line in ends:
+        if not (free and on_line):
+            continue
+        shape = unary_union([end_square(p, d)] + [lb for lb, _n in lobes(p, d)])
+        over = -shape.bounds[1] if p[1] <= 1e-6 else shape.bounds[3] - 1.0
+        t = max(0.0, over) / max(abs(d[1]), 1e-6)
+        P = (p[0] - d[0] * t, p[1] - d[1] * t)
+        strokes[i][k] = P
+        tab_at[(i, k)] = P
+    # joints on the baseline / cap line (V's point, N's corners): run the
+    # stroke past the line and cut it flat there, inside the letter's box
+    # (no spur beside N's / M's stem)
+    pieces, extensions = [], []
+    for i, pl in enumerate(strokes):
+        pieces.append(LineString(pl).buffer(s / 2, cap_style="flat", join_style="round"))
+        for ii, k, p, d, free, on_line in ends:
+            if ii == i and on_line and not free:
+                e = (p[0] + d[0] * 2 * s, p[1] + d[1] * 2 * s)
+                extensions.append(LineString([p, e]).buffer(s / 2, cap_style="flat"))
+    body = unary_union(pieces + [x.intersection(box(0, 0, w, 1)) for x in extensions])
     # round over a joint only where two stroke ENDS meet (W's peak, M's
     # middle): an end landing part-way along another stroke (A's crossbar)
     # would poke a bump out past it
-    tips = [p for p, _d, _f in ends]
-    joints = [Point(p).buffer(s / 2, quad_segs=16) for p, _d, free in ends
+    tips = [p for _i, _k, p, _d, _f, _o in ends]
+    joints = [Point(p).buffer(s / 2, quad_segs=16) for _i, _k, p, _d, free, _o in ends
               if not free and 1e-6 < p[1] < 1 - 1e-6
               and sum(1 for q in tips if math.dist(p, q) < 0.6 * s) >= 2]
-    # clip to the letter's own box: no spur where N's / M's diagonal meets
-    # a stem at the cap line or baseline
-    body = unary_union([body] + joints).intersection(box(0, 0, w, 1))
+    body = unary_union([body] + joints).intersection(box(-1, 0, w + 1, 1))
     serifs = []
-    notch = NOTCH_MIN_MM / cap_mm  # serif must leave this much room to other strokes
-    stroke_bodies = [ln.buffer(s / 2, cap_style="flat") for ln in ext]
-    for p, d, free in ends:
+    for i, k, p, d, free, on_line in ends:
         if not free:
             continue
-        own = min(range(len(ext)), key=lambda i: ext[i].distance(Point(p)))
-        others = unary_union([b for i, b in enumerate(stroke_bodies) if i != own])
-        # the end's two corners: on the baseline / cap line where the stroke
-        # is clipped flat, else square across the stroke end
-        if p[1] <= 1e-6 or p[1] >= 1 - 1e-6:
-            y = 0.0 if p[1] <= 1e-6 else 1.0
-            seg = body.intersection(LineString([(p[0] - 3 * s, y), (p[0] + 3 * s, y)]))
-            # just this stroke's own stretch of the line -- the scan can also
-            # take in a neighbour (K's arm beside its stem) and put the inner
-            # bump on the wrong stroke
-            parts = list(seg.geoms) if hasattr(seg, "geoms") else [seg]
-            seg = min(parts, key=lambda g_: g_.distance(Point(p[0], y)))
-            xa, _y0, xb, _y1 = seg.bounds
-            corners = [(xa, y), (xb, y)]
-        else:
-            nx, ny = -d[1], d[0]
-            corners = [(p[0] + nx * s / 2, p[1] + ny * s / 2), (p[0] - nx * s / 2, p[1] - ny * s / 2)]
-        mid = ((corners[0][0] + corners[1][0]) / 2, (corners[0][1] + corners[1][1]) / 2)
+        P = tab_at.get((i, k), p)
+        others = unary_union([pc for j, pc in enumerate(pieces) if j != i])
         pair = []
-        for c in corners:
-            # half a circle of diameter serif_mm, flat side ON the stroke's
-            # side edge, starting at the corner and running back along the
-            # stroke, bulging outward: with its mirror on the other side the
-            # stroke end becomes a puzzle-tab bulb on a stroke-wide neck
-            o = (c[0] - mid[0], c[1] - mid[1])
-            on = math.hypot(*o) or 1.0
-            o = (o[0] / on, o[1] / on)
-            cc = (c[0] - d[0] * r, c[1] - d[1] * r)
-            disc = Point(cc).buffer(r, quad_segs=24)
-            half = Polygon([(cc[0] + d[0] * 2 * r, cc[1] + d[1] * 2 * r), (cc[0] - d[0] * 2 * r, cc[1] - d[1] * 2 * r),
-                            (cc[0] - d[0] * 2 * r + o[0] * 2 * r, cc[1] - d[1] * 2 * r + o[1] * 2 * r),
-                            (cc[0] + d[0] * 2 * r + o[0] * 2 * r, cc[1] + d[1] * 2 * r + o[1] * 2 * r)])
-            bump = disc.intersection(half)
-            # a bulge with another stroke within NOTCH_MIN_MM straight AHEAD
-            # of it would pinch the surround's wood between them to a neck
-            # (E's middle bar, under its top bar): skip it. Beside it (T's,
-            # L's bar ends near the stem) or with more room ahead (K's inside
-            # bumps, 3.3mm) it stays
+        for bump, o in lobes(P, d, strokes[i], k):
+            # a lobe with another stroke within NOTCH_MIN_MM straight AHEAD of
+            # it would pinch the surround's wood between them to a neck (E's
+            # middle bar, under its top bar): skip it
             ahead = unary_union([bump, affinity.translate(bump, o[0] * notch, o[1] * notch)]).convex_hull
             dropped = not others.is_empty and ahead.intersects(others)
             if log is not None:
-                log.append((p, o, not dropped, bump.distance(others) * cap_mm if not others.is_empty else None))
-            if dropped:
-                continue
-            pair.append(bump)
-        # both bumps or neither: a lone bump on one side of an end looks
-        # lopsided (Q's tail foot, whose inner bump can't clear the bowl).
-        # One may still be clipped off by the baseline / cap line (L's bar)
+                log.append((P, o, not dropped, bump.distance(others) * cap_mm if not others.is_empty else None))
+            if not dropped:
+                pair.append(bump)
+        # both lobes or neither: a lone lobe on one side of an end looks lopsided
         if len(pair) == 2:
+            # on a curve the edge bends toward one circle and away from the
+            # other, so equal circles SHOW unequal amounts (S: 80%): push the
+            # smaller-showing one out along its normal until they match
+            vis = [b.difference(body).area for b in pair]
+            lo = 0 if vis[0] < vis[1] else 1
+            if vis[lo] < 0.99 * vis[1 - lo]:
+                nrm = lobes(P, d, strokes[i], k)[lo][1]
+                a_, b_ = 0.0, r
+                for _ in range(24):
+                    m = (a_ + b_) / 2
+                    t = affinity.translate(pair[lo], nrm[0] * m, nrm[1] * m)
+                    if t.difference(body).area < vis[1 - lo]:
+                        a_ = m
+                    else:
+                        b_ = m
+                pair[lo] = affinity.translate(pair[lo], nrm[0] * b_, nrm[1] * b_)
             serifs.extend(pair)
         elif log is not None and pair:
-            log.append((p, None, False, None))  # its partner, dropped with it
+            log.append((P, None, False, None))  # its partner, dropped with it
     g = unary_union([body] + serifs).intersection(box(-1, 0, w + 1, 1)).buffer(0)
     # round EVERY corner, inside and out (Alex: square corners next to the
     # round serifs "just look weird"): close (fills inside corners, e.g.
