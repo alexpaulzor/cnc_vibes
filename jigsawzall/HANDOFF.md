@@ -65,24 +65,20 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
   TrueType outlines.
 - Symmetric letters must be exactly symmetric: mirror (A H I M O T U V W X
   Y), half-turn (N S Z), top/bottom (H I O X). The H crossbar is centred.
-- Serif "lobes": at every free stroke end, a circle on EACH side edge, one
-  radius back from the end, bulging outward. With the stroke as the neck,
-  the end becomes a puzzle-tab bulb. Diameter **2 mm** (`SERIF_MM`; Alex
-  picked 2 over 3 and 1.5).
-- Model each stroke as drawn with a round pen: lobes sit on the stroke's own
-  axis, mirrored about it, at any angle. Slanted ends are cut square to the
-  stroke (not flat along the baseline) and pulled back until they touch the
-  line. On curves, lobes sit on the true edge (offset curve) and are balanced
-  by visible area after rounding.
-- **No balls** and no plain round terminals. Every free end gets the lobe
-  pair, curved ends (C G J S) included.
+- **Serif "lobes" on the I only** (`LOBE_LETTERS = {"I"}`; Alex: "the
+  rest of the letters were fine with rounded stroke ends"). The I's lobes:
+  2 mm (`SERIF_MM`) circles on each side edge one radius back from each
+  end, mirrored about the stroke, so each end is a puzzle-tab bulb.
+- **Every other free stroke end is a plain round end** (round-pen model):
+  trimmed half a stroke width ALONG the stroke (on curves too, or the end
+  kinks) and capped with a half-stroke circle; ends on the baseline/cap
+  line are pulled back so the round end just touches the line. No balls.
 - **Round every corner**, inside and out (`FILLET_MM = 0.75`).
-- Each end gets both lobes or neither, never one. A lobe is dropped only
-  when another stroke is within 3 mm straight ahead of it (`NOTCH_MIN_MM`),
-  where it would pinch the wood (E/F middle bars at larger sizes).
-- Lobes must not create concavities except the natural neck behind the bulb.
+- (Lobe machinery for other letters still exists if LOBE_LETTERS grows:
+  both-or-neither, dropped when a stroke is < 3 mm ahead, balanced by
+  visible area on curves.)
 - Q tail: radial, square across the ring at 45°, from inside the bowl to the
-  baseline. Its lobes may touch the ring.
+  baseline.
 - Specimen: `PYTHONPATH=. python3 scripts/geo_font.py OUT.png`. The current
   sheet is `out/final/geo_font_specimen.png` (2 mm). `glyph_units(ch,
   log=[])` logs every lobe decision.

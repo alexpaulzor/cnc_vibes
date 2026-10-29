@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 STROKE = 0.17  # stroke width / cap height (3.1mm at an 18mm cap)
 CAP_RATIO = 0.72  # cap height / "font size", like a TrueType face
 SIDE = 0.10  # side bearing each side / cap height
+LOBE_LETTERS = {"I"}  # only these get the tab lobes; every other free end is plain round (Alex)
 SERIF_MM = 2.0  # serif lobe diameter (Alex picked 2mm over 3 and 1.5)
 FILLET_MM = 0.75  # every corner of the outline rounded to this radius
 NOTCH_MIN_MM = 3.0  # a serif bump keeps this much wood to a stroke straight ahead of it
@@ -225,9 +226,34 @@ def glyph_units(ch, serif_mm=None, cap_mm=18.0, stroke=STROKE, fillet_mm=None, l
     # (never cut along the line: a slanted foot cut flat gave A and C unequal
     # inner and outer lobes) and is pulled back along the stroke until its
     # lowest (highest) point just touches the line
+    tabbed = ch in LOBE_LETTERS
     tab_at = {}
     for i, k, p, d, free, on_line in ends:
-        if not (free and on_line):
+        if not free:
+            continue
+        if not tabbed:
+            # plain round end (a round pen): pull the stroke back half its
+            # width so the round end lands where the square end was -- on
+            # the baseline / cap line it just touches the line
+            if on_line:
+                over = -(p[1] - s / 2) if p[1] <= 1e-6 else (p[1] + s / 2) - 1.0
+                t = max(0.0, over) / max(abs(d[1]), 1e-6)
+            else:
+                # mid-air: trim half a stroke width ALONG the stroke (a
+                # straight step back off a curve kinked C's and S's ends)
+                from shapely.ops import substring
+
+                ls = LineString(strokes[i])
+                cut = substring(ls, s / 2, ls.length) if k == 0 else substring(ls, 0, ls.length - s / 2)
+                strokes[i] = [tuple(c) for c in cut.coords]
+                P = strokes[i][k]
+                tab_at[(i, k)] = P
+                continue
+            P = (p[0] - d[0] * t, p[1] - d[1] * t)
+            strokes[i][k] = P
+            tab_at[(i, k)] = P
+            continue
+        if not on_line:
             continue
         shape = unary_union([end_square(p, d)] + [lb for lb, _n in lobes(p, d)])
         over = -shape.bounds[1] if p[1] <= 1e-6 else shape.bounds[3] - 1.0
@@ -259,6 +285,9 @@ def glyph_units(ch, serif_mm=None, cap_mm=18.0, stroke=STROKE, fillet_mm=None, l
         if not free:
             continue
         P = tab_at.get((i, k), p)
+        if not tabbed:
+            serifs.append(Point(P).buffer(s / 2, quad_segs=24))
+            continue
         # a closed ring (Q's bowl) doesn't count: the tail's lobes may touch it
         others = unary_union([pc for j, pc in enumerate(pieces)
                               if j != i and math.dist(strokes[j][0], strokes[j][-1]) > 1e-6])
