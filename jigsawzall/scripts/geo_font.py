@@ -32,7 +32,7 @@ from shapely.ops import unary_union
 STROKE = 0.17  # stroke width / cap height (3.1mm at an 18mm cap)
 CAP_RATIO = 0.72  # cap height / "font size", like a TrueType face
 SIDE = 0.10  # side bearing each side / cap height
-SERIF_MM = 3.0  # serif lobe diameter
+SERIF_MM = 2.0  # serif lobe diameter (Alex picked 2mm over 3 and 1.5)
 FILLET_MM = 0.75  # every corner of the outline rounded to this radius
 NOTCH_MIN_MM = 3.0  # a serif bump keeps this much wood to a stroke straight ahead of it
 
@@ -101,10 +101,10 @@ def _letters():
     rp = (top - 0.44) / 2
     ap = h + 0.30
     L["P"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)]])
-    # tail: from inside the bowl, across the ring at 30deg, out to the
-    # baseline -- long enough that its outer end's tab clears the ring
-    q0 = (0.60, 0.30)
-    q1 = (q0[0] + q0[1] / math.tan(math.radians(30)), 0.0)
+    # tail: on the ring's own radius at -45deg -- square across the ring
+    # (Alex) -- from inside the bowl out to the baseline
+    q0 = (0.5 + 0.25 * math.cos(math.radians(-45)), 0.5 + 0.25 * math.sin(math.radians(-45)))
+    q1 = (q0[0] + q0[1], 0.0)
     L["Q"] = (q1[0] + 0.05, [_arc(0.5, 0.5, R, 0, 360), [q0, q1]])
     L["R"] = (ap + rp + h, [[(h, 0), (h, 1)], [(h, top), (ap, top)] + _arc(ap, 0.44 + rp, rp, 90, -90) + [(h, 0.44)],
                             [(ap - 0.02, 0.44), (ap + rp + h, 0)]])
@@ -259,7 +259,9 @@ def glyph_units(ch, serif_mm=None, cap_mm=18.0, stroke=STROKE, fillet_mm=None, l
         if not free:
             continue
         P = tab_at.get((i, k), p)
-        others = unary_union([pc for j, pc in enumerate(pieces) if j != i])
+        # a closed ring (Q's bowl) doesn't count: the tail's lobes may touch it
+        others = unary_union([pc for j, pc in enumerate(pieces)
+                              if j != i and math.dist(strokes[j][0], strokes[j][-1]) > 1e-6])
         pair = []
         for bump, o in lobes(P, d, strokes[i], k):
             # a lobe with another stroke within NOTCH_MIN_MM straight AHEAD of
