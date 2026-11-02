@@ -72,7 +72,7 @@
 
 - id: plywood_veneer_3ply_3mm
   family: wood
-  thickness_mm: 3.0
+  thickness_mm: 2.63   # measured by Alex; sold as 3mm (id kept for existing references)
   laser:
     power_percent: 100
     feed_mm_per_min: 350
