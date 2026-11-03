@@ -28,6 +28,12 @@
 #                      cut-through control (slower = deeper)
 #     passes           cut-through passes (1 = single pass; more = deeper)
 #     notes            free-form safety / quality / technique notes
+#   fit (optional):    measured fit data for slot/tab and hole work:
+#     kerf_mm          kerf to compensate (kept wood grows kerf/2 per edge,
+#                      holes shrink kerf/2)
+#     slot_extra_mm    extra slot width over thickness_mm for a tab fit
+#                      (0 = slot drawn exactly at thickness_mm)
+#     verified         what was cut and how it fit
 #   etch (optional):   a SHALLOW, non-cutting score pass (e.g. an orientation
 #                      mark or decorative line design) -- much lower power
 #                      and/or higher feed than `laser`, same static-M3 /
@@ -124,7 +130,15 @@
 
 - id: mdf_3mm
   family: wood
-  thickness_mm: 3.1   # measured: 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
+  thickness_mm: 3.1   # sold as 1/8"; measured 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
+  fit:
+    kerf_mm: 0.10
+    slot_extra_mm: 0.0
+    verified: |
+      2026-11-03, marbles wheel box (scads marbles/clock/wheel_box_gcode.py):
+      10 mm tabs into slots drawn at exactly 3.1 mm, kerf-compensated with
+      0.10 mm, cut at 100% F500 x2. Tabs fit tight and snug with no
+      deforming. Use these values for all MDF slot/tab work.
   laser:
     power_percent: 100
     feed_mm_per_min: 500
