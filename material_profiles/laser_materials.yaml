@@ -124,7 +124,7 @@
 
 - id: mdf_3mm
   family: wood
-  thickness_mm: 3.0
+  thickness_mm: 3.1   # measured: 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
   laser:
     power_percent: 100
     feed_mm_per_min: 500
