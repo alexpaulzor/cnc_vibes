@@ -140,12 +140,15 @@
       and update this block.
   laser:
     power_percent: 100
-    feed_mm_per_min: 500
-    passes: 2
+    feed_mm_per_min: 700
+    passes: 3
     notes: |
-      Recipe carried over from mdf3old (3.1 mm, F500 x2), not re-checked on
-      this thinner, denser batch. It may sever in 1 pass; check a test piece.
-      Smoke is heavy; air assist mandatory.
+      2026-11-04: F500 x2 (carried over from mdf3old) scorched badly on this
+      batch, and every cut needed knife cleanup after the parts were punched out.
+      Now 3 lighter passes: less heat per pass, and about 7% more total dwell
+      (3/700 = 0.00429 vs 2/500 = 0.00400 min per mm) so it severs fully.
+      UNVERIFIED: cut the fit coupon first. Still scorched: try F800 x3. Still
+      needs the knife: try F600 x3. Smoke is heavy; air assist mandatory.
 
 - id: mdf3old
   family: wood
