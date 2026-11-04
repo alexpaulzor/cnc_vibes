@@ -130,7 +130,26 @@
 
 - id: mdf3
   family: wood
-  thickness_mm: 3.1   # sold as 1/8"; measured 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
+  thickness_mm: 2.82  # NEW SUPPLIER batch (2026-11-04), measured 2.82 by Alex; much better quality than mdf3old
+  fit:
+    kerf_mm: 0.10
+    slot_extra_mm: 0.0
+    verified: |
+      NOT YET for this batch. Kerf 0.10 and slot = thickness are carried over
+      from mdf3old (verified there). Cut a tab-fit coupon in the new stock
+      and update this block.
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 500
+    passes: 2
+    notes: |
+      Recipe carried over from mdf3old (3.1 mm, F500 x2), not re-checked on
+      this thinner, denser batch. It may sever in 1 pass; check a test piece.
+      Smoke is heavy; air assist mandatory.
+
+- id: mdf3old
+  family: wood
+  thickness_mm: 3.1   # previous supplier, sold as 1/8"; measured 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
   fit:
     kerf_mm: 0.10
     slot_extra_mm: 0.0
@@ -138,7 +157,7 @@
       2026-11-03, marbles wheel box (scads marbles/clock/wheel_box_gcode.py):
       10 mm tabs into slots drawn at exactly 3.1 mm, kerf-compensated with
       0.10 mm, cut at 100% F500 x2. Tabs fit tight and snug with no
-      deforming. Use these values for all MDF slot/tab work.
+      deforming. Use these values for slot/tab work in THIS (old) stock.
   laser:
     power_percent: 100
     feed_mm_per_min: 500
