@@ -120,10 +120,10 @@ def test_top_tab_fixed_distance_from_outer_edge():
 
 def test_disc_gcode_open_cuts_and_order():
     cfg = SpiralConfig()
-    material = load_material("mdf_3mm")
+    material = load_material("mdf3")
     profile, cuts = build_disc(cfg)
     g = emit_disc_gcode(profile, cuts, material, "test", cfg)
-    assert "$32=1" in g and ";MATERIAL: mdf_3mm" in g and ";LASER_MODE: static" in g
+    assert "$32=1" in g and ";MATERIAL: mdf3" in g and ";LASER_MODE: static" in g
     assert "\nM4 " not in g  # static M3 only
     assert g.count("; --- spiral cut") == cfg.n_spirals
     assert "disc profile" in g
@@ -139,7 +139,7 @@ def test_disc_gcode_open_cuts_and_order():
 
 def test_ribs_gcode_conventions():
     cfg = SpiralConfig()
-    material = load_material("mdf_3mm")
+    material = load_material("mdf3")
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
     assert "\nM4 " not in g
@@ -152,7 +152,7 @@ def test_multipass_pingpongs_no_laseron_jump():
     A later pass never repositions to the start, so there is no G0 between passes
     and no long laser-on chord back across the part (the bug that ruined a cut)."""
     cfg = SpiralConfig()
-    material = load_material("mdf_3mm")  # 2 passes
+    material = load_material("mdf3")  # 2 passes
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
     assert "pass 2 of 2 (reverse)" in g

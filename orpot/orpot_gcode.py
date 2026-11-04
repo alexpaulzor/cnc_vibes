@@ -16,8 +16,8 @@ Everything is driven by orpot.scad (single source of truth); the spiral echo
 uses the same parameters as the cut, so they can't drift.
 
 Usage:
-  ./orpot_gcode.py --material mdf_3mm            # -> build/orpot.gcode
-  ./orpot_gcode.py --material mdf_3mm --warmup-ms 1200 --origin center
+  ./orpot_gcode.py --material mdf3            # -> build/orpot.gcode
+  ./orpot_gcode.py --material mdf3 --warmup-ms 1200 --origin center
   ./orpot_gcode.py --scad orpot.scad -o build/orpot.gcode -- --feed 300 --power 90
 
 Anything after `--` (or any unrecognized flag) is passed through to svg2laser;

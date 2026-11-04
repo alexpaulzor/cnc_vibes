@@ -185,7 +185,7 @@ def main(argv=None):
     print(f"sheet {W}x{H}mm, parts {counts}")
     print(f"-> {out.with_suffix('.svg')}\n-> {out.with_suffix('.png')}")
     print("gcode (after measuring pitch): python quickcut/svg2gcode.py "
-          f"{out.with_suffix('.svg')} --material plywood_veneer_3ply_3mm")
+          f"{out.with_suffix('.svg')} --material ply3")
 
 
 if __name__ == "__main__":

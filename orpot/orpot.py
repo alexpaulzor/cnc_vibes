@@ -11,7 +11,7 @@ Subcommands:
 
 Examples:
   orpot.py preview --part both --svg
-  orpot.py cut --part both --material mdf_3mm
+  orpot.py cut --part both --material mdf3
   orpot.py cut --part top --strip-w 12 --top-pitch 12
 """
 
@@ -304,7 +304,7 @@ def main() -> int:
 
     ct = sub.add_parser("cut", help="emit GRBL laser GCode (+ a PNG)")
     _add_geometry_args(ct)
-    ct.add_argument("--material", default="mdf_3mm")
+    ct.add_argument("--material", default="mdf3")
     ct.add_argument("--feed", type=int, default=None, help="override feed mm/min")
     ct.add_argument("--power", type=float, default=None, help="override power percent")
     ct.set_defaults(func=cmd_cut)

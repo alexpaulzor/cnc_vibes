@@ -22,9 +22,9 @@ Cut order: interior loops first (smallest area first), the outer boundary last,
 so the workpiece stays attached to the sheet until the final pass.
 
 Examples:
-  svg2laser.py cut.svg -o cut.gcode --material mdf_3mm
+  svg2laser.py cut.svg -o cut.gcode --material mdf3
   svg2laser.py cut.svg --feed 350 --power 100 --passes 2 --warmup-ms 1000
-  svg2laser.py cut.svg --material mdf_3mm --origin center
+  svg2laser.py cut.svg --material mdf3 --origin center
 
 Material profiles are read from the shared ../material_profiles/laser_materials.yaml
 at the repo root (same format as the jigsawzall/orpot tools). --feed/--power/--passes

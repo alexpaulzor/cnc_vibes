@@ -36,7 +36,7 @@ python lessons/mill/01_spacer/mill_spacer.py \
     --height 6.0 \
     --od 8.0 \
     --id 3.2 \
-    --material plywood_baltic_birch_6mm \
+    --material birch6 \
     --tool flat_3.175mm_2flute \
     --spindle-rpm 18000
 ```
@@ -50,7 +50,7 @@ python lessons/mill/01_spacer/mill_spacer.py \
 | `--bottom-od FLOAT` | (= `--od`) | Override the bottom outer diameter. |
 | `--top-id FLOAT` | (= `--id`) | Override the top inner diameter. |
 | `--bottom-id FLOAT` | (= `--id`) | Override the bottom inner diameter. |
-| `--material ID` | `plywood_baltic_birch_6mm` | From `profiles/materials.yaml`. Used for chipload, doc_fraction, and to confirm `--height` matches `thickness_mm`. |
+| `--material ID` | `birch6` | From `profiles/materials.yaml`. Used for chipload, doc_fraction, and to confirm `--height` matches `thickness_mm`. |
 | `--tool ID` | `flat_3.175mm_2flute` | From `profiles/tools.yaml`. Used for diameter, max_rpm, max_plunge. |
 | `--spindle-rpm INT` | 18000 | Used for feed derivation (`chipload × flutes × rpm`). |
 | `--out PATH` | derived | Output path. Simple case: `.gcode`. 3D case: `.scad` (and `.csg` after running openscad). |
@@ -141,7 +141,7 @@ The hybrid-toolchain pattern is the only new concept; the implementing code is s
 - **No through-tabs strategy choice.** Tabs are placed at the same Z (0.5mm above stock bottom) regardless of part thickness. For thick stock with tall parts you'd want tabs midway. Extension.
 - **No support for non-axisymmetric geometry.** A spacer with a flat on one side, or an oval hole, or any non-rotational feature falls outside this script entirely. Different lesson.
 - **Tool change not handled.** If the simple-case helical bore needs a smaller tool than the perimeter profile, the user has to break the job into two GCode files manually. Could be auto-split (with an M0 pause between), but adds complexity.
-- **Material thickness mismatch isn't enforced.** If `--height 6.0` but `--material plywood_baltic_birch_3mm`, the script just emits the cut depths as if the material were 6mm. Could warn or error; deferred.
+- **Material thickness mismatch isn't enforced.** If `--height 6.0` but `--material birch3`, the script just emits the cut depths as if the material were 6mm. Could warn or error; deferred.
 
 ## Validation that the lesson works end-to-end
 

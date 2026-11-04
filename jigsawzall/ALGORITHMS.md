@@ -326,7 +326,7 @@ without reading G-code. Emitted by default with every `cut`.
 
 - **Fire risk on cardboard/paper.** Air assist non-negotiable; never
   leave unattended.
-- **`cardboard_corrugated_3mm`**: static M3, 100% power, ~600–800mm/min,
+- **`corrugated3`**: static M3, 100% power, ~600–800mm/min,
   single pass, air assist. The air gap in the flutes usually lets a
   single fast pass through; prefer a 2nd pass over more power (high power
   chars + flares the kerf).

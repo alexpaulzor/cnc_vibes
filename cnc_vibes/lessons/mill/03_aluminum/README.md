@@ -1,7 +1,7 @@
 # Lesson 4d — Aluminum milling
 
 > Two parts:
-> 1. **Use lesson 4a with aluminum** — the existing spacer generator already supports `--material aluminum_6061_3mm`. No new code needed for simple cylindrical aluminum parts.
+> 1. **Use lesson 4a with aluminum** — the existing spacer generator already supports `--material alu3`. No new code needed for simple cylindrical aluminum parts.
 > 2. **Trochoidal slot demonstration** — a new generator (`trochoidal_slot.py`) that shows the low-engagement clearing strategy aluminum needs to avoid the 500W spindle stalling.
 
 ## Why aluminum on a 500W router is different
@@ -16,11 +16,11 @@ The 500W spindle can mill aluminum but is **massively underpowered** compared to
 
 ## Part 1: cylindrical aluminum spacer (using 4a)
 
-Lesson 4a's `mill_spacer.py` already handles aluminum. Material `aluminum_6061_3mm` is in `profiles/materials.yaml` with chipload + DOC values calibrated for the 500W spindle.
+Lesson 4a's `mill_spacer.py` already handles aluminum. Material `alu3` is in `profiles/materials.yaml` with chipload + DOC values calibrated for the 500W spindle.
 
 ```
 python lessons/mill/01_spacer/mill_spacer.py \
-    --material aluminum_6061_3mm \
+    --material alu3 \
     --height 3 --od 12 --id 4.2 \
     --tool flat_3.175mm_2flute \
     --spindle-rpm 18000
@@ -56,7 +56,7 @@ The slot runs along +X from `(x0, y0)` for `length` mm, with width `width` mm. T
 | `--width FLOAT` | required | Slot width along Y (mm). Must be > tool_diameter. |
 | `--depth FLOAT` | required | Slot depth (negative Z reached). |
 | `--tool ID` | `flat_3.175mm_2flute` | Tool from `profiles/tools.yaml`. |
-| `--material ID` | `aluminum_6061_3mm` | Material from `profiles/materials.yaml`. |
+| `--material ID` | `alu3` | Material from `profiles/materials.yaml`. |
 | `--spindle-rpm INT` | 18000 | Within tool max. |
 | `--trochoidal-radius-frac FLOAT` | 0.4 | Loop radius as fraction of tool diameter. |
 | `--trochoidal-step-frac FLOAT` | 0.15 | Per-loop X advance as fraction of tool diameter. |

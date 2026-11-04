@@ -19,7 +19,7 @@ same file. Read off which slugs fell out cleanly to determine cut
 settings; write back into material_profiles/laser_materials.yaml.
 
 Usage:
-  python calibration.py --material plywood_baltic_birch_3mm \\
+  python calibration.py --material birch3 \\
                         --max-passes 5 \\
                         --powers 100,75,50,25 \\
                         --speeds 200,400,600
@@ -279,7 +279,7 @@ def generate_gcode(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--material", default="plywood_baltic_birch_3mm")
+    p.add_argument("--material", default="birch3")
     p.add_argument("--max-passes", type=int, default=5)
     p.add_argument(
         "--powers",

@@ -47,7 +47,7 @@ All arguments optional; defaults produce a 6 mm tall, 8 mm OD, 3.2 mm ID (M3 cle
 | `--bottom-od FLOAT` | (= `--od`) | Override bottom outer. |
 | `--top-id FLOAT` | (= `--id`) | Override top inner. |
 | `--bottom-id FLOAT` | (= `--id`) | Override bottom inner. |
-| `--material ID` | `plywood_baltic_birch_6mm` | From `profiles/materials.yaml`. |
+| `--material ID` | `birch6` | From `profiles/materials.yaml`. |
 | `--tool ID` | `flat_3.175mm_2flute` | From `profiles/tools.yaml`. |
 | `--spindle-rpm INT` | 18000 | Used to derive feed rate via `chipload × flutes × rpm`. |
 | `--out PATH` | derived | Output `.gcode` path (cylindrical case only). |
@@ -115,7 +115,7 @@ The §6 click-through in the main guide covers the FreeCAD setup steps in detail
 
 - **Tabs are not yet implemented.** The generated perimeter cut goes through to spoilboard depth on the final pass, which means the part will release before the cut completes. The GCode contains a `TODO` comment about this. Workarounds: clamp the part from below (sacrificial fixture), or hand-edit the GCode to add an `M0` pause before the last pass so you can re-clamp.
 - **Tool change is not handled.** If your helical bore needs a different tool than your perimeter profile, run the script twice with different `--tool` values and combine the GCode files manually (with an `M0` pause + tool-change instructions between).
-- **Material thickness vs `--height` is not enforced.** If you pass `--material plywood_baltic_birch_3mm` and `--height 6`, the script happily cuts to Z=-6.2 even though the material is 3mm thick. Sanity-check yourself.
+- **Material thickness vs `--height` is not enforced.** If you pass `--material birch3` and `--height 6`, the script happily cuts to Z=-6.2 even though the material is 3mm thick. Sanity-check yourself.
 
 These are in the SPEC's extensions list and are reasonable next iterations.
 
@@ -123,7 +123,7 @@ These are in the SPEC's extensions list and are reasonable next iterations.
 
 - **Tabs**: split the perimeter into arcs that step up over tab locations.
 - **Multi-tool sequencing**: generate two GCode files (hole + perimeter) when the optimal tools differ, plus a "swap-tool-and-probe" macro between.
-- **Aluminum support**: the chipload tables already cover `aluminum_6061_3mm`. Run `--material aluminum_6061_3mm` and the feeds derive correctly — but you'll want to validate that trochoidal/adaptive clearing isn't necessary at the proposed DOC. That's lesson 4d's job.
+- **Aluminum support**: the chipload tables already cover `alu3`. Run `--material alu3` and the feeds derive correctly — but you'll want to validate that trochoidal/adaptive clearing isn't necessary at the proposed DOC. That's lesson 4d's job.
 - **Roughing + finishing path** for the cylindrical case: take a roughing pass leaving 0.3 mm, then a single-pass finishing cut at full depth. Better surface finish on the perimeter.
 
 ## Status

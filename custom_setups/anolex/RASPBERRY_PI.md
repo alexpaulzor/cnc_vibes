@@ -102,7 +102,7 @@ pip install bCNC   # or `apt install bcnc` if your Bookworm has it
 # Verify the toolchain runs
 python3 cnc.py doctor
 python3 cnc.py cam profile --shape circle --diameter 30 \
-    --depth 2 --material plywood_baltic_birch_3mm --tool flat_3.175mm_2flute
+    --depth 2 --material birch3 --tool flat_3.175mm_2flute
 
 # Verify the network link to the controller (replace IP)
 python3 cnc.py ip          # find machine on the LAN

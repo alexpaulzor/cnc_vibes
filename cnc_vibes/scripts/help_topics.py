@@ -310,7 +310,7 @@ Required keys:
   gcode         path (relative to repo root) to the expected .gcode
 
 Example:
-  material: plywood_baltic_birch_3mm
+  material: birch3
   tool: flat_3.175mm_2flute
   spindle_rpm: 18000
   gcode: examples/hole_in_sheet/build/hole_in_sheet.gcode
@@ -447,13 +447,13 @@ parametric parts.
 Usage:
   python lessons/laser/01_spacer/spacer.py \\
       --od 6.0 --id 3.2 \\
-      --material plywood_baltic_birch_3mm \\
+      --material birch3 \\
       --out lessons/laser/01_spacer/build/spacer.gcode
 
 Defaults:
   --od         6.0 mm (small PCB-standoff footprint)
   --id         3.2 mm (M3 screw clearance)
-  --material   plywood_baltic_birch_3mm
+  --material   birch3
   --out        build/spacer_<od>_<id>.gcode under the lesson dir
 
 Notes:
@@ -481,7 +481,7 @@ material_profiles/laser_materials.yaml.
 
 Usage:
   python lessons/laser/02_calibration/calibration.py \\
-      --material plywood_baltic_birch_3mm \\
+      --material birch3 \\
       --max-passes 5 \\
       --powers 100,75,50,25 \\
       --speeds 200,400,600
@@ -537,7 +537,7 @@ Defaults:
   --height       6.0 mm
   --od           8.0 mm (sets top + bottom unless overridden)
   --id           3.2 mm (M3 clearance; sets top + bottom)
-  --material     plywood_baltic_birch_6mm
+  --material     birch6
   --tool         flat_3.175mm_2flute
   --spindle-rpm  18000
 
@@ -602,7 +602,7 @@ advancing along the slot, keeping cutting forces low enough for the
 500W spindle to handle.
 
 For plain cylindrical aluminum spacers, use lesson 4a directly with
---material aluminum_6061_3mm; the material profile gives safe feeds.
+--material alu3; the material profile gives safe feeds.
 
 Usage:
   python lessons/mill/03_aluminum/trochoidal_slot.py \\
@@ -615,7 +615,7 @@ Flags:
   --length, --width   slot dimensions (required; width > tool diameter)
   --depth             negative-Z reached (required)
   --tool              default flat_3.175mm_2flute
-  --material          default aluminum_6061_3mm
+  --material          default alu3
   --spindle-rpm       default 18000
   --trochoidal-radius-frac  default 0.4 (loop r as fraction of tool dia)
   --trochoidal-step-frac    default 0.15 (per-loop X advance as fraction)
@@ -809,14 +809,14 @@ Use --no-validate to skip (useful when piping into a previewer).
 
 Examples:
   cnc.py cam profile --shape rrect --width 60 --height 40 --radius 5 \\
-      --depth 6 --material plywood_baltic_birch_3mm --tool flat_3.175mm_2flute \\
+      --depth 6 --material birch3 --tool flat_3.175mm_2flute \\
       --side outside
   cnc.py cam drill --pattern grid --cols 3 --rows 3 --spacing 20 \\
-      --depth 5 --material plywood_baltic_birch_3mm --tool drill_3.2mm_m4_clearance
+      --depth 5 --material birch3 --tool drill_3.2mm_m4_clearance
   cnc.py cam engrave --text "BIN A" --x 5 --y 5 --height 6 --depth 0.3 \\
-      --material plywood_baltic_birch_3mm --tool vbit_60deg_6mm
+      --material birch3 --tool vbit_60deg_6mm
   cnc.py cam profile --head laser --shape circle --diameter 30 \\
-      --material cardboard_thin_1mm
+      --material card1
   cnc.py cam                          # interactive — walks every prompt
 
 See also: cam-library, openscad-loader

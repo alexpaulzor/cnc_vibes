@@ -23,7 +23,7 @@ import laser_cam  # noqa: E402
 
 def _mat():
     return laser_cam.LaserMaterial(
-        id="cardboard_thin_1mm",
+        id="card1",
         family="paper",
         thickness_mm=1.0,
         power_percent=50.0,
@@ -33,8 +33,8 @@ def _mat():
 
 
 def test_load_laser_material_real():
-    m = laser_cam.load_laser_material("cardboard_thin_1mm")
-    assert m.id == "cardboard_thin_1mm"
+    m = laser_cam.load_laser_material("card1")
+    assert m.id == "card1"
     assert 0 < m.power_percent <= 100
     assert m.feed_mm_per_min > 0
 
@@ -53,7 +53,7 @@ def test_laser_profile_required_headers_default_static():
     out = laser_cam.laser_profile(box(-10, -10, 10, 10), _mat())
     text = out.text
     assert ";HEAD: laser" in text
-    assert ";MATERIAL: cardboard_thin_1mm" in text
+    assert ";MATERIAL: card1" in text
     assert "$32=1" in text
     assert "M3 S500" in text  # 50% -> S500, static M3 by default
     assert "F2500" in text

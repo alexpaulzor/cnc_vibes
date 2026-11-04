@@ -1772,7 +1772,7 @@ def main():
         "(0 = off). Shows which side is up, and reads before painting",
     )
     ap.add_argument("--gcode", default=None, help="also emit cut GCode to this path")
-    ap.add_argument("--material", default="plywood_baltic_birch_3mm")
+    ap.add_argument("--material", default="birch3")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")

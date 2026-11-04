@@ -27,7 +27,7 @@ python lessons/mill/05_generic_cam/mounting_plate.py \
     --plate-w-mm 80 --plate-h-mm 50 \
     --pocket-w-mm 30 --pocket-h-mm 15 \
     --plate-thickness-mm 12 \
-    --material plywood_baltic_birch_6mm
+    --material birch6
 
 # CI-safe: fail loud on any sketchy default-pick
 python lessons/mill/05_generic_cam/mounting_plate.py --strict

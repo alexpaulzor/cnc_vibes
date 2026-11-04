@@ -386,7 +386,7 @@ def main() -> None:
     p.add_argument("--bottom-od", type=float, default=None)
     p.add_argument("--top-id", type=float, default=None)
     p.add_argument("--bottom-id", type=float, default=None)
-    p.add_argument("--material", default="plywood_baltic_birch_6mm")
+    p.add_argument("--material", default="birch6")
     p.add_argument("--tool", default="flat_3.175mm_2flute")
     p.add_argument("--spindle-rpm", type=int, default=18000)
     p.add_argument("--out", type=Path, default=None)

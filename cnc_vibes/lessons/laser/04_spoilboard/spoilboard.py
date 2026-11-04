@@ -15,7 +15,7 @@ Usage:
   python spoilboard.py
   python spoilboard.py --stock-w 250 --stock-h 250
   python spoilboard.py --panel-w 400 --panel-h 300 --hole-rows 6
-  python spoilboard.py --material plywood_baltic_birch_3mm
+  python spoilboard.py --material birch3
   python cnc.py validate lessons/laser/04_spoilboard/build/spoilboard_tile_1.gcode
 
 Loose-fit holes: cut on centerline, kerf widens each hole by ~0.2mm
@@ -49,7 +49,7 @@ DEFAULT_HOLE_SPACING = 45.0
 DEFAULT_HOLE_DIA = 6.5  # M6 clearance fit; kerf adds ~0.2mm in cut
 DEFAULT_STOCK_W = 300.0
 DEFAULT_STOCK_H = 300.0
-DEFAULT_MATERIAL = "mdf_3mm"
+DEFAULT_MATERIAL = "mdf3"
 DEFAULT_MARGIN_PX_PER_MM = 2  # for the verification image only
 
 

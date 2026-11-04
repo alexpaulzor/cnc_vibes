@@ -43,7 +43,7 @@ Not a lesson per se, but the foundation for code-first 2.5D milling. Pure-functi
 from cam import profile_cut, pocket_mill, drill_array, engrave_text, load_tool, load_material
 out_cut = profile_cut(my_polygon, depth_mm=6.0,
                       tool=load_tool("flat_6mm_2flute"),
-                      material=load_material("plywood_baltic_birch_6mm"))
+                      material=load_material("birch6"))
 ```
 
 For one-off shell-driven cuts (rrect + holes, circle pocket, label engrave), use `cnc.py cam <op>` — a thin CLI/TUI shim over the library that handles common shape primitives (rect, rrect, circle, ellipse, polygon, svg, scad) and hole patterns (grid, bolt-circle, linear, explicit) without writing Python. Supports both `--head spindle` and `--head laser`. Run `cnc.py cam` with no arguments for an interactive prompt_toolkit wizard, or `cnc.py help cam-cli` for the full flag catalog.

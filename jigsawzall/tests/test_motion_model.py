@@ -220,7 +220,7 @@ def _etch(**kw):
                           puzzle_h_px=100.0)
     loop = [(50 + 5 * math.cos(2 * math.pi * i / 60), 100 - 50 - 5 * math.sin(2 * math.pi * i / 60))
             for i in range(61)]
-    return emit_etch_gcode([loop], load_material("plywood_veneer_3ply_3mm"), cfg, "t",
+    return emit_etch_gcode([loop], load_material("ply3"), cfg, "t",
                            simplify_mm=0.0, **kw)
 
 

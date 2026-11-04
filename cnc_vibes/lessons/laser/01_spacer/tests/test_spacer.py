@@ -121,8 +121,8 @@ def test_negative_dimensions_rejected():
 
 def test_load_material_finds_real_entry():
     # Smoke-test against the actual profiles file shipped in the repo.
-    m = load_material("plywood_baltic_birch_3mm")
-    assert m["id"] == "plywood_baltic_birch_3mm"
+    m = load_material("birch3")
+    assert m["id"] == "birch3"
     assert m["laser"]["passes"] >= 1
 
 

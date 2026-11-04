@@ -154,8 +154,8 @@ def _validate(path: Path) -> None:
     assert r.returncode == 0, f"validator failed:\n{r.stdout}\n{r.stderr}"
 
 
-SPINDLE = ["--material", "plywood_baltic_birch_3mm", "--tool", "flat_3.175mm_2flute"]
-LASER = ["--head", "laser", "--material", "cardboard_thin_1mm"]
+SPINDLE = ["--material", "birch3", "--tool", "flat_3.175mm_2flute"]
+LASER = ["--head", "laser", "--material", "card1"]
 
 
 @pytest.mark.parametrize(

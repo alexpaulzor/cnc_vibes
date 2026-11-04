@@ -149,7 +149,7 @@ def main() -> None:
     p.add_argument("--width", type=float, required=True)
     p.add_argument("--depth", type=float, required=True)
     p.add_argument("--tool", default="flat_3.175mm_2flute")
-    p.add_argument("--material", default="aluminum_6061_3mm")
+    p.add_argument("--material", default="alu3")
     p.add_argument("--spindle-rpm", type=int, default=18000)
     p.add_argument("--trochoidal-radius-frac", type=float, default=0.4)
     p.add_argument("--trochoidal-step-frac", type=float, default=0.15)

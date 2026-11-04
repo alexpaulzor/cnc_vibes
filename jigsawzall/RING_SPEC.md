@@ -757,7 +757,7 @@ double-etch and visibly darken it unevenly, unlike a cut where retracing
 the same kerf is invisible.
 
 `laser_materials.yaml` gained an optional `etch:` block per material.
-`plywood_baltic_birch_3mm`'s is **calibrated** (§13.10: 25% power /
+`birch3`'s is **calibrated** (§13.10: 25% power /
 2500mm/min / 1 pass, from a real scrap grid test) -- any other
 material's `etch:` block is still an unverified starting guess until it
 gets the same treatment. Score a scrap corner before trusting a real
@@ -972,7 +972,7 @@ the ring stays exactly circular (must, being pure translation) and the
 
 ### 13.10 Etch calibration: real numbers, not a guess
 Alex ran `scripts/etch_calibration.py`'s grid on scrap
-`plywood_baltic_birch_3mm` and picked **25% power / 2500mm/min** by
+`birch3` and picked **25% power / 2500mm/min** by
 inspection: clearly visible medium-brown contrast, no smoke, not
 approaching cut depth; 30% showed diminishing returns over 25% (no more
 visible, just more energy); 10-15% too faint to rely on once painted
