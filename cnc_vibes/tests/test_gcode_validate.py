@@ -194,3 +194,11 @@ def test_spindle_default_when_no_head_marker():
     # And no laser rules should fire.
     assert "laser_mode" not in rules
     assert "laser_dynamic_power" not in rules
+
+
+def test_long_line_flagged():
+    # Grbl_ESP32's SD runner reads lines into a 255-byte buffer; a longer line silently ends the job
+    ok = "; " + "x" * 252 + "\nG90\n"          # 254 characters: fine
+    bad = "; " + "x" * 253 + "\nG90\n"         # 255 characters: stops the SD job
+    assert "line_length" not in _rules(validate(ok, PROFILE, TOOLS))
+    assert "line_length" in _rules(validate(bad, PROFILE, TOOLS))

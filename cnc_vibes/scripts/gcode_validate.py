@@ -10,6 +10,11 @@ The validator detects the target head from a comment in the first 20 lines:
     ;HEAD: laser     -> apply laser-mode rules
     (no marker)      -> apply spindle rules (default)
 
+All files:
+  * line_length    — every line (comments included) is under 255 characters. Grbl_ESP32's SD
+                     runner reads lines into a 255-byte buffer (SDCard.cpp readFileLine(line, 255));
+                     a longer line ends the job there silently, without an error.
+
 Spindle rules (default):
   * bounds         — every coordinate is inside the machine envelope
   * max_feed       — every F value is <= machine max feed (XY or Z plunge)
@@ -120,6 +125,9 @@ def _tool_by_id(tools: list[dict], tool_id: str) -> dict | None:
     return next((t for t in tools if t.get("id") == tool_id), None)
 
 
+MAX_LINE = 255   # Grbl_ESP32 SDCard.cpp: readFileLine(fileLine, 255) fails on len >= 255
+
+
 def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violation]:
     head = detect_head(gcode_text)
     laser_mode = detect_laser_mode(gcode_text) if head == "laser" else "static"
@@ -146,6 +154,10 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
         )
 
     for line_no, raw in enumerate(gcode_text.splitlines(), start=1):
+        if len(raw) >= MAX_LINE:
+            violations.append(Violation(line_no, "line_length",
+                                        f"{len(raw)} characters; Grbl_ESP32's SD runner stops at a line of "
+                                        f"{MAX_LINE} or more (shorten or split the comment)"))
         if tool_id := _extract_tool_decl(raw):
             state.declared_tool_id = tool_id
 
