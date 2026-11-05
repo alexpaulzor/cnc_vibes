@@ -308,8 +308,10 @@ def notch_positions(stance_mm=200.0):
 # ~297mm, so nothing goes past 295.5.
 REACH_MIN_MM, REACH_MAX_MM = -10.0, 295.5
 # Y is shorter: the Y limit switch tripped at MPos Y=294.453 (X=295.000 was
-# fine) cutting a corner foot along the Y=295 stock edge -- keep 1mm under it
-REACH_MAX_Y_MM = 293.5
+# fine) cutting a corner foot along the Y=295 stock edge -- keep 1mm under it.
+# It tripped again on the HARVEY top foot at 293.5 (MPos Y=298.219); Alex:
+# "move the foot in by 1mm".
+REACH_MAX_Y_MM = 292.5
 
 
 def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5.0,
