@@ -31,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import shapely  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 from shapely import affinity  # noqa: E402
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box  # noqa: E402
-from shapely.ops import nearest_points, polygonize, unary_union  # noqa: E402
+from shapely.geometry import LineString, MultiPoint, MultiPolygon, Point, Polygon, box  # noqa: E402
+from shapely.ops import linemerge, nearest_points, polygonize, unary_union  # noqa: E402
 
 import geometry as G  # noqa: E402
 
@@ -126,8 +126,19 @@ class RingParams:
     # After assembly, split any piece whose longest side exceeds this (mm)
     # with a tabbed cross seam (0 = off).
     split_mm: float = 0.0
+    # Thinnest wood the stock survives (mm), normally the material profile's
+    # min_feature_mm (3.0 on the stiff 3-ply veneer). Every wood-strength limit
+    # left as None below is derived from it in __post_init__.
+    min_feature_mm: float = 3.0
+    # letterfirst style: tab space between the rim, the outer letters and the
+    # center words (see letter_first.py)
+    group_gap_mm: float = 15.0
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
-    hub_ring_min_mm: float = 26.0  # min radial thickness of the hub ring
+    # min radial depth of the band between the outer letters and the center
+    # disc. None = 4.4 * min_feature_mm: the largest tab class's bulb
+    # (2 * 1.2t) plus a t wall each side -- as thin as a tabbed seam allows,
+    # so every letter gets the room (was a hand-set 26mm).
+    hub_ring_min_mm: float | None = None
     hub_r_min_mm: float = 22.0
     target_w_mm: float = 46.0  # target arc width of rim / hub-ring pieces
     hub_piece_mm: float = 62.0  # max chord of a hub-disc wedge
@@ -159,10 +170,10 @@ class RingParams:
     # Tab / clearance sizing (defaults = the name-plate tabs). Small discs
     # (~140mm, 4-up on a 300mm panel) need scaled-down tabs: every seam must
     # hold tab_len + 2 * clearance, and 140mm-class seams are only 13-20mm long.
-    tab_r_px: int = 15
-    tab_stem_px: float = 30.0
-    border_floor_mm: float = 7.0
-    letter_clearance_mm: float = 4.0
+    tab_r_px: float | None = None  # bulb radius: min_feature_mm
+    tab_stem_px: float | None = None  # neck width: 2 * min_feature_mm
+    border_floor_mm: float | None = None  # tab <-> disc edge wall: min_feature_mm
+    letter_clearance_mm: float | None = None  # tab <-> letter wall: min_feature_mm
     # Solid outer frame: a continuous annulus this wide (mm) around the puzzle,
     # never cut radially. Rim seams stop on its inner circle (T-junctions) and the
     # circle itself is split into a few tabbed arcs so the pieces lock into it.
@@ -201,17 +212,22 @@ class RingParams:
     #                  word 1 across the top, word 2 across the bottom
     #                  flipped (reversed + rotated 180) so both read upright,
     #                  with both words' midlines on the same circle.
-    center_style: str = "medallion"
+    #   "hull"      -- (default) same loose letters, but no hub circle at all:
+    #                  the whole inside of the ring is one continuous puzzle
+    #                  grid; each center word's outline (never cut) is treated
+    #                  like one big ring letter -- seams stop at it and finish on
+    #                  the nearest small letter (see hull_center_seams).
+    center_style: str = "hull"
     # Leave the hub circle (centre disc <-> ring) as a plain, tab-free circular
     # cut so the assembled centre disc turns freely: nobody's name is favoured
     # as "up". The disc's own spokes keep their tabs and hold it together.
     hub_rotates: bool = True
     center_track_mm: float = 2.0  # starting extra spacing between loose center letters
     # Wood between two adjacent loose center letters is a short finger
-    # attached only at its ends -- must be at least this wide (Alex: 5mm
-    # floor for short spans on the 3-ply veneer stock). Tracking widens until
+    # attached only at its ends -- must be at least this wide (Alex: 3mm is
+    # fine on the stiff 3-ply veneer stock; was 5mm). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
-    center_min_gap_mm: float = 5.0
+    center_min_gap_mm: float | None = None  # = min_feature_mm
     # Split hub for two center words (center_style "ring"): a tabbed divider
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
@@ -255,6 +271,21 @@ class RingParams:
     # off radial by the rim (growing with radius, like the hub pinwheel).
     ring_seams: bool = True
     sector_twist_deg: float = 12.0
+
+    def __post_init__(self):
+        t, ppm = self.min_feature_mm, 5  # PuzzleConfig.px_per_mm
+        if self.tab_r_px is None:
+            self.tab_r_px = int(round(t * ppm))  # px canvas sizes derive from it
+        if self.tab_stem_px is None:
+            self.tab_stem_px = 2 * t * ppm
+        if self.border_floor_mm is None:
+            self.border_floor_mm = t
+        if self.letter_clearance_mm is None:
+            self.letter_clearance_mm = t
+        if self.center_min_gap_mm is None:
+            self.center_min_gap_mm = t
+        if self.hub_ring_min_mm is None:
+            self.hub_ring_min_mm = 2 * max(TAB_SIZE_CLASSES) * t + 2 * t
 
 
 # --------------------------------------------------------------------------
@@ -343,6 +374,7 @@ def glyph_local(ch, font):
 
 
 HEART_CAP_FRAC = 1.0  # heart height / cap height
+UPRIGHT_ORNAMENTS = {"laptop", "gradcap"}  # turned to read upright at the bottom
 
 
 def ornament_local(kind, cap_h):
@@ -409,6 +441,39 @@ def ornament_local(kind, cap_h):
         wing_r = box(bw / 2, -wh / 2, bw / 2 + ww, wh / 2)
         wing_l = box(-bw / 2 - ww, -wh / 2, -bw / 2, wh / 2)
         p = unary_union([body, wing_r, wing_l])
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+    if kind == "laptop":
+        # Open laptop from the front: screen (rounded) standing on a wider
+        # keyboard deck, fused along the hinge -- one solid piece, no holes;
+        # the deck is 0.11 cap tall so it stays >= min_feature at ~30mm caps.
+        sw, sh = 0.50 * cap_h, 0.36 * cap_h
+        dw_top, dw_bot, dh = 0.56 * cap_h, 0.68 * cap_h, 0.11 * cap_h
+        r = 0.04 * cap_h
+        screen = box(-sw / 2 + r, -sh + r, sw / 2 - r, -r).buffer(r, quad_segs=8)
+        deck = Polygon([(-dw_top / 2, 0), (dw_top / 2, 0), (dw_bot / 2, dh), (-dw_bot / 2, dh)])
+        deck = deck.buffer(0.02 * cap_h).buffer(-0.02 * cap_h)
+        p = unary_union([screen, deck.buffer(0.005 * cap_h)])
+        b = p.bounds
+        return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
+    if kind == "gradcap":
+        # Mortarboard: a wide flat diamond board over a narrower skull cap,
+        # a tassel cord hanging from near the board's right corner, ending in
+        # a tuft -- one solid piece, no holes.
+        bw, bh = 0.84 * cap_h, 0.22 * cap_h
+        board = Polygon([(-bw / 2, 0), (0, -bh / 2), (bw / 2, 0), (0, bh / 2)])
+        sk = 0.12 * cap_h
+        skull = box(-sk, 0.0, sk, 0.24 * cap_h).buffer(0.03 * cap_h, quad_segs=8).intersection(
+            box(-cap_h, 0.0, cap_h, 0.27 * cap_h))
+        cw = 0.10 * cap_h
+        tx = 0.36 * cap_h  # cord 0.16 cap clear of the skull: the wood finger
+        # between them stays ~2*min_feature wide (no bridge)
+        cord = box(tx - cw / 2, 0.0, tx + cw / 2, 0.30 * cap_h)
+        tuft = Polygon([(tx - 0.07 * cap_h, 0.28 * cap_h), (tx + 0.07 * cap_h, 0.28 * cap_h),
+                        (tx + 0.05 * cap_h, 0.44 * cap_h), (tx - 0.05 * cap_h, 0.44 * cap_h)])
+        tuft = tuft.buffer(0.015 * cap_h)
+        p = unary_union([board.buffer(0.015 * cap_h), skull, cord, tuft])
+        p = p.buffer(0.015 * cap_h).buffer(-0.015 * cap_h)
         b = p.bounds
         return affinity.translate(p, -(b[0] + b[2]) / 2, cy - (b[1] + b[3]) / 2)
     # heart (point toward the hub)
@@ -483,7 +548,8 @@ def _word_advances(word, font, track_px):
     """Per-letter local glyphs plus each letter's centre offset along the
     word (x=0 at the word's centre), using the font's own advances plus
     `track_px` extra between letters."""
-    glyphs = [glyph_local(ch, font) for ch in word]
+    # simplify: traced glyphs are 1px staircases (see letter_glyph in fit_ring)
+    glyphs = [glyph_local(ch, font).simplify(RingParams.outline_smooth_px) for ch in word]
     adv = [font.getlength(ch) for ch in word]
     pos, x = [], 0.0
     for a in adv:
@@ -524,8 +590,8 @@ def center_hub_r_needed_mm(rp, ppm):
     """Hub radius (mm) the loose center text needs to fit at exactly
     rp.center_cap_target_mm with rp.center_min_gap_mm between letters, using
     the same tracking search as center_letters but in an unbounded hub."""
-    if rp.center_style != "flat":
-        raise SystemExit("--center-cap-mm is only implemented for --center-style flat")
+    if rp.center_style not in ("flat", "hull"):
+        raise SystemExit("--center-cap-mm is only implemented for --center-style hull/flat")
     key = (rp.center_text, rp.font, rp.center_cap_target_mm, rp.center_min_gap_mm,
            rp.center_track_mm, rp.center_text_gap_mm, rp.center_text_fit_frac, ppm)
     if key not in _HUB_NEED_CACHE:
@@ -546,7 +612,8 @@ def _center_hub_r_needed_mm(rp, ppm):
         if min(gaps) >= rp.center_min_gap_mm * ppm:
             r = max(math.hypot(px, py) for g in out
                     for px, py in g.convex_hull.exterior.coords)
-            return r / ppm / rp.center_text_fit_frac
+            # +0.5mm: the fit check downstream is r <= r_h*frac; float ties fail it
+            return r / ppm / rp.center_text_fit_frac + 0.5
         track_mm += 0.5
     raise SystemExit(
         f"center text {rp.center_text!r} can't reach {rp.center_min_gap_mm}mm letter gaps "
@@ -588,14 +655,29 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
             x += w + gap
         return out
     w1, w2 = rp.center_text
-    if rp.center_style == "flat":
+    if rp.center_style in ("flat", "hull"):
         # the strip between the two lines is wood too -- same floor applies
         gap = max(rp.center_text_gap_mm, rp.center_min_gap_mm) * ppm + 1
+        if rp.center_style == "hull":
+            # room for a TABBED, wobbly seam between the two words: on each
+            # side the biggest tab (3 x its 1.2t bulb radius) + t of wood to
+            # the letters + the seam's 0.6t wobble
+            t_ = rp.min_feature_mm * ppm
+            gap = max(gap, 2 * (3 * max(TAB_SIZE_CLASSES) * t_ + t_ + 0.6 * t_) + 1)
         g1, x1, _t1 = _word_advances(w1, font, track)
         g2, x2, _t2 = _word_advances(w2, font, track)
         # line 1 baseline above centre, line 2 baseline below
         y1 = -gap / 2
         y2 = gap / 2 + cap
+        # Round letters overshoot the baseline / cap line (C O S G dip below,
+        # O C bulge above), so baseline spacing alone leaves < gap of wood
+        # between the lines. Measure the real shapes and push the lines apart.
+        l1 = unary_union([affinity.translate(g, x, 0) for g, x in zip(g1, x1)])
+        l2 = unary_union([affinity.translate(g, x, 0) for g, x in zip(g2, x2)])
+        d = affinity.translate(l1, 0, y1).distance(affinity.translate(l2, 0, y2))
+        if d < gap:
+            y1 -= (gap - d) / 2
+            y2 += (gap - d) / 2
         out = [affinity.translate(g, C[0] + x, C[1] + y1) for g, x in zip(g1, x1)]
         out += [affinity.translate(g, C[0] + x, C[1] + y2) for g, x in zip(g2, x2)]
         r = max(
@@ -1573,6 +1655,13 @@ def fit_ring(words, rp: RingParams, ppm):
             a1 = a0 + ((ths[ks[-1]] + ext[ks[-1]][1]) - a0) % (2 * math.pi)
             mid = (a0 + a1) / 2
             ths = [(x - mid) % (2 * math.pi) for x in ths]
+        # pictorial ornaments in the bottom half turn round so they stand
+        # upright to the reader (a heart or star reads either way)
+        orn_k = iter([o for i in range(len(words)) for o in [orn_kinds[i % len(orn_kinds)]] if o])
+        for k, lab in enumerate(labels):
+            if lab == "*" and next(orn_k) in UPRIGHT_ORNAMENTS \
+                    and math.pi / 2 < ths[k] % (2 * math.pi) < 3 * math.pi / 2:
+                locs[k] = affinity.rotate(locs[k], 180, origin=(0, -cap / 2))
         C = (0.0, 0.0)
         world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
         gaps = [
@@ -1750,12 +1839,15 @@ def build_ring(words, seed, rp: RingParams, cfg):
     ths, locs = L["ths"], L["locs"]
     n = len(locs)
     world = [place(g, th, Rin, C) for g, th in zip(locs, ths)]
-    global _center_medallion
+    global _center_medallion, _frame_exempt
     _center_medallion = None
+    _frame_exempt = rp.frame_mm > 0
     center_solids = []
     center_polys = []
+    center_words = []
+    hull_mode = bool(rp.center_text) and rp.center_style == "hull"
     L["center_cap_mm"] = None
-    if rp.center_text and rp.center_style in ("flat", "ring"):
+    if rp.center_text and rp.center_style in ("flat", "ring", "hull"):
         # Loose letters cut straight out of the ordinary pinwheel hub: no
         # medallion, no exemption, spokes stay. They join letter_union (so
         # they become pockets/pieces like any letter) but NOT the outer
@@ -1773,6 +1865,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
         else:
             world.extend(cl)
             center_polys = list(cl)
+            n1 = sum(1 for ch in rp.center_text[0] if not ch.isspace())
+            center_words = [cl[:n1], cl[n1:]]
             center_solids = [solid_of(g) for g in cl]
             L["center_cap_mm"] = ccap
     elif rp.center_text:
@@ -1881,23 +1975,23 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 na = xf_vec((0.0, -1.0), th)
                 phi = ang_of(a, C) + math.radians(rng.uniform(-4, 4))
                 b, nb, eb = rim_target(phi)
-                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="topcap", plain_ok=rp.plain_caps, ends=("L", eb)))
                 top_caps.setdefault(i, []).append(ang_of(b, C))
-            for p in bp:
+            for p in ([] if hull_mode else bp):
                 a = xf_pt(p, th, Rin, C)
                 na = xf_vec((0.0, 1.0), th)
                 phi = ang_of(a, C) + math.radians(rng.uniform(-6, 6))
                 b = (C[0] + r_h * math.sin(phi), C[1] - r_h * math.cos(phi))
                 nb = out_vec(phi)
-                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({i: "a"}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="botcap", plain_ok=rp.plain_caps, ends=("L", "T")))
                 hub_ends.append(phi % (2 * math.pi))
             for a, b, _side in bridges:
                 aw, bw = xf_pt(a, th, Rin, C), xf_pt(b, th, Rin, C)
                 na = xf_vec((1.0, 0.0) if b[0] >= a[0] else (-1.0, 0.0), th)
                 nb = (-na[0], -na[1])
-                pts = G._vg_curve(aw, na, bw, nb, obstacles({i: "ab"}), ppm) or [aw, bw]
+                pts = G._vg_curve(aw, na, bw, nb, obstacles({i: "ab"}), ppm, clear_mm=rp.min_feature_mm) or [aw, bw]
                 seams.append(dict(pts=curved(pts), kind="bridge", plain_ok=rp.plain_caps, ends=("L", "L")))
         # --- ring seams between neighbouring slots ---------------------------
         levels = [0.5] if rp.rows == 2 else list(rp.levels3)  # frac of cap h
@@ -1926,7 +2020,10 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 ]
                 pts = curved(pts)
                 ring_seams[(g, lv)] = pts
-                seams.append(dict(pts=pts, kind="ring", ends=("L", "L")))
+                # hull style: the innermost ring seams host the center grid's T
+                # ends -- dropping one leaves those grid seams dangling
+                seams.append(dict(pts=pts, kind="ring", ends=("L", "L"),
+                                  plain_ok=hull_mode, structural=hull_mode))
         # --- no ring seams (rp.ring_seams False): polar sectors instead -------
         # Each gap between letters is split by seams running from the hub
         # circle (T) out to the rim, bending further off radial the further
@@ -1995,7 +2092,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                 a = host[idx]
                 b, nb, eb = rim_target(ang_of(a, C) + math.radians(rng.uniform(-3, 3)))
                 na = out_vec(ang_of(a, C))
-                pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm) or [a, b]
+                pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                 seams.append(dict(pts=curved(pts), kind="rimsub", ends=("T", eb)))
         # --- middle-band subdivisions (wide gaps on short names) ---------------
         # every band between two neighbouring ring seams (1 band with rows=2,
@@ -2014,12 +2111,16 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     a = lo_h[closest_on(lo_h, phi, C)]
                     b = up_h[closest_on(up_h, phi, C)]
                     na, nb = out_vec(ang_of(a, C)), out_vec(ang_of(b, C) + math.pi)
-                    pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm) or [a, b]
+                    pts = G._vg_curve(a, na, b, nb, obstacles({}), ppm, clear_mm=rp.min_feature_mm) or [a, b]
                     seams.append(dict(pts=curved(pts), kind="midsub", ends=("T", "T")))
+        if hull_mode:
+            # --- no hub: one continuous grid inside the ring ------------------
+            seams.extend(hull_center_seams(
+                seams, solids, panel, C, Rin, center_words, rp, ppm, rng, curved))
         # --- hub-ring subdivisions: T off the innermost ring seam to the hub ---
-        hub_sorted = sorted(hub_ends)
+        hub_sorted = sorted(hub_ends) if not hull_mode else []
         r_hm = (Rin + r_h) / 2
-        for g in range(n):
+        for g in range(n if not hull_mode else 0):
             host = ring_seams.get((g, 0))
             if host is None:
                 continue
@@ -2064,7 +2165,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
             k_hub += 1
         a0 = rng.uniform(0, 2 * math.pi)
         split = []
-        if center_polys and rp.center_split:
+        if hull_mode:
+            pass  # no spokes, no hub circle
+        elif center_polys and rp.center_split:
             # Split hub for two center words (center_style "ring"): a tabbed
             # DIVIDER across the disc between the words, an inner circle just
             # inside the letters, a cross seam through the inner disc, and
@@ -2146,7 +2249,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     dict(pts=curved([a, b]), kind="cornersub", ends=("T", "B"))
                 )
         # --- hub circle: arcs between spoke landings (caps T onto it) ---------
-        hs = sorted(split)
+        hs = sorted(split) if not hull_mode else []
         for q in range(len(hs)):
             b0, b1 = hs[q], hs[(q + 1) % len(hs)]
             seams.insert(
@@ -2206,6 +2309,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
             # a coast-chopped seam may cut plain: never leave a rim piece gripless
             st["defects"] += [("loose_rim", q) for q in loose_rim_pieces(
                 [{"kind": "cell", "polygon": g} for g in surround], st["bulbs"], panel, cfg)]
+        # st["defects"] includes oversized pieces (assemble_qa): a piece too
+        # big to be fun, or wrapping all the way round, is a hard QA failure.
         sc = (len(st["defects"]),) + score(surround, panel, cfg) + (st["dropped"],)
         if rp.progress:
             el = _time.time() - _t_start
@@ -2235,6 +2340,329 @@ def build_ring(words, seed, rp: RingParams, cfg):
 # --------------------------------------------------------------------------
 
 
+def _wobble(pts, amp, wavelength, phase, flat_ends=False, step=2.0):
+    """Offset a polyline sideways by a smooth wave that vanishes at both ends
+    (endpoints stay put). flat_ends also zeroes the slope there, so the line
+    still meets whatever it lands on head-on (an S-curve)."""
+    ln = LineString(pts)
+    L = ln.length
+    if L < 3 * step or amp == 0:  # negative amp = wobble to the other side
+        return [tuple(p) for p in pts]
+    n = max(4, int(L / step))
+    out = []
+    for i in range(n + 1):
+        sd = L * i / n
+        a, b = ln.interpolate(max(0.0, sd - step / 2)), ln.interpolate(min(L, sd + step / 2))
+        dx, dy = b.x - a.x, b.y - a.y
+        m = math.hypot(dx, dy) or 1.0
+        u = sd / L
+        if flat_ends:
+            w = amp * math.sin(2 * math.pi * u) * math.sin(math.pi * u)
+        else:
+            w = amp * math.sin(2 * math.pi * sd / wavelength + phase) * math.sin(math.pi * u)
+        q = ln.interpolate(sd)
+        out.append((q.x - dy / m * w, q.y + dx / m * w))
+    return out
+
+
+def hull_center_seams(seams, ring_solids, panel, C, Rin, center_words, rp, ppm, rng, curved):
+    """Seams for the inside of the ring in "hull" style (no hub circle).
+
+    The two center words sit a seam's width apart (see _center_layout). Each
+    word's outline (convex hull padded by min_feature_mm, never cut) is
+    treated like one row of big letters:
+      * a wobbly middle seam runs along the gap between the words;
+      * a wobbly row seam runs ~5t outside each word, out to the grid;
+      * wavy column cuts run from each row seam onto a letter, and on from
+        that letter to the middle seam -- so the word is cut into slices.
+    A Lloyd-relaxed Voronoi grid fills the rest of the region inside the
+    innermost ring seams. Ends: "J" junction, "L" letter, "T" on a seam."""
+    t = rp.min_feature_mm * ppm
+    # ~35mm between column cuts: each row-seam stretch between two columns
+    # must hold a tab clear of both junctions' keep-out zones, or the slices
+    # come out tab-free and fall out of the finished puzzle
+    col = 0.75 * rp.target_w_mm * ppm
+    ring_letters = unary_union(ring_solids)
+    lines = [LineString(sm["pts"]) for sm in seams] + [g.boundary for g in ring_solids]
+    faces = list(polygonize(shapely.union_all(lines + [panel.boundary], grid_size=0.1)))
+    # The inner region is the face around the centre bounded by the innermost
+    # ring seams and the ring letters -- it reaches up BETWEEN the letters, so
+    # don't clip it to the letters' base circle (seams would end in mid-wood).
+    R = next((f for f in faces if f.contains(Point(C))), None)
+    if R is None:
+        raise SystemExit("hull style: no closed inner region inside the ring seams")
+    R = R.difference(ring_letters)
+    if R.area > math.pi * Rin ** 2 * 1.5:
+        raise SystemExit("hull style: inner region leaks past the ring letters (open ring seam)")
+    if R.geom_type == "MultiPolygon":
+        R = max(R.geoms, key=lambda g: g.area)
+    words = [unary_union(w) for w in center_words if w]
+    allw = unary_union(words)
+    blocks = [w.convex_hull.buffer(t) for w in words]
+    core = unary_union(blocks).convex_hull  # both outlines + the gap between them
+    row_d = 3 * t  # row seams this far outside the outlines
+    excl = core.buffer(row_d)
+    if not R.buffer(-t).contains(excl):
+        raise SystemExit("hull style: center words + row seams don't fit inside the ring")
+    out = []
+
+    # --- Voronoi grid outside the word rows --------------------------------
+    free = R.difference(excl)
+    a_target = 0.45 * (rp.target_w_mm * ppm) ** 2
+    k = max(2, round(free.area / a_target))
+    inner = free.buffer(-2 * t)
+    if inner.is_empty:
+        inner = free
+    bx0, by0, bx1, by1 = inner.bounds
+    pts = []
+    while len(pts) < k:
+        q = Point(rng.uniform(bx0, bx1), rng.uniform(by0, by1))
+        if inner.contains(q):
+            pts.append(q)
+    env = R.envelope.buffer(R.length)
+    for _ in range(4):  # Lloyd relaxation: even out piece sizes
+        cells = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env)
+        new = []
+        for q in pts:
+            cell = next(c for c in cells.geoms if c.contains(q))
+            cc = cell.intersection(free)
+            new.append(cc.centroid if not cc.is_empty else q)
+        pts = new
+    edges = shapely.voronoi_polygons(MultiPoint(pts), extend_to=env, only_edges=True)
+    net = edges.intersection(free)
+    segs = [g for g in getattr(net, "geoms", [net]) if g.geom_type == "LineString"]
+    segs = list(getattr(linemerge(segs), "geoms", [linemerge(segs)])) if segs else []
+    segs = [ln for ln in segs if ln.length >= 2 * t]
+    grid = unary_union(segs + [R.boundary])
+
+    def end_type(q):
+        return "L" if ring_letters.distance(Point(q)) < 2.0 else "T"
+
+    def reach(p0, d, far):
+        """First point on the grid along a ray from p0 (outside excl)."""
+        ray = LineString([p0, (p0[0] + d[0] * far, p0[1] + d[1] * far)])
+        hit = ray.difference(excl.buffer(-0.5)).intersection(grid)
+        cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
+        return min(cs, key=lambda c: math.dist(c, p0)) if cs else None
+
+    def horizontal(y, amp):
+        """A wobbly seam at height y across the word rows, reaching out to
+        the grid on both sides. Returns (pts, ends)."""
+        x0, x1 = excl.bounds[0], excl.bounds[2]
+        a = reach((x0 + 1, y), (-1, 0), 2 * col)
+        b = reach((x1 - 1, y), (1, 0), 2 * col)
+        if a is None:
+            a = reach((x0 + 1, y), (-1, 0), 4 * Rin)
+        if b is None:
+            b = reach((x1 - 1, y), (1, 0), 4 * Rin)
+        a = a or (x0, y)
+        b = b or (x1, y)
+        straight = [a, (x0, y), (x1, y), b]
+        for k_ in range(4):  # shrink the wave until it keeps t off every letter
+            pw = _wobble(straight, amp, 1.4 * col, rng.uniform(0, 2 * math.pi))
+            if LineString(pw).distance(allw) >= t:
+                break
+            amp *= 0.6
+        else:
+            pw = straight
+        return pw, (end_type(a), end_type(b))
+
+    # Horizontal seams are emitted LAST, split at every point where a column
+    # or grid seam lands on them: a seam carries at most one tab, so one long
+    # seam across the words would get a single tab for the whole row.
+    horiz = []  # [kind, pts, ends, contact points]
+    rows = {}  # word index -> row seam LineString
+    y_top = core.bounds[1] - row_d
+    y_bot = core.bounds[3] + row_d
+    pw, ends = horizontal(y_top, 0.8 * t)
+    horiz.append(["hullrow", pw, ends, []])
+    rows[0] = LineString(pw)
+    pw, ends = horizontal(y_bot, 0.8 * t)
+    horiz.append(["hullrow", pw, ends, []])
+    rows[len(words) - 1] = LineString(pw)
+    mid = None
+    if len(words) > 1:
+        y_mid = (blocks[0].bounds[3] + blocks[1].bounds[1]) / 2
+        pw, ends = horizontal(y_mid, 0.6 * t)
+        horiz.append(["hullmid", pw, ends, []])
+        mid = LineString(pw)
+
+    def touch(line, q):
+        """Record q as a contact point on the horizontal seam `line`."""
+        for h in horiz:
+            if LineString(h[1]).distance(Point(q)) < 1.0:
+                h[3].append(tuple(q))
+                return
+
+    def cross(line, x, y_hint):
+        """Where the vertical at x meets `line` (nearest to y_hint)."""
+        hit = LineString([(x, y_hint - 4 * Rin), (x, y_hint + 4 * Rin)]).intersection(line)
+        cs = [c for g in getattr(hit, "geoms", [hit]) for c in getattr(g, "coords", [])]
+        return min(cs, key=lambda c: abs(c[1] - y_hint)) if cs else None
+
+    # --- column cuts: row seam -> letter -> middle seam ----------------------
+    def edge_angle(g, pt):
+        ring = min([g.exterior] + list(g.interiors), key=lambda r: r.distance(Point(pt)))
+        d = ring.project(Point(pt))
+        p0, p1 = ring.interpolate(d - 0.8 * ppm), ring.interpolate(d + 0.8 * ppm)
+        dx, dy = p1.x - p0.x, p1.y - p0.y
+        n = math.hypot(dx, dy) or 1.0
+        return math.degrees(math.acos(min(1.0, abs(dy) / n)))  # 90 = edge square to the cut
+
+    def column(word, x):
+        """(top y, bottom y, quality) of the letter under column x. Quality 0
+        if the cut leaving either side would run alongside another part of
+        the same letter (a P's stem beside a cut from its bowl) -- that
+        leaves a sliver."""
+        for g in getattr(word, "geoms", [word]):
+            if g.bounds[0] < x < g.bounds[2]:
+                cut = LineString([(x, g.bounds[1] - 1), (x, g.bounds[3] + 1)]).intersection(g)
+                ys = [c[1] for k_ in getattr(cut, "geoms", [cut]) for c in getattr(k_, "coords", [])]
+                if ys:
+                    y0, y1 = min(ys), max(ys)
+                    q = min(edge_angle(g, (x, y0)), edge_angle(g, (x, y1)))
+                    # other parts of this letter within t + the cut's wobble
+                    # sideways, beyond where the cut leaves it (a P's stem
+                    # beside a cut from its bowl) would leave a sliver
+                    side = 1.8 * t
+                    for lo, hi in ((g.bounds[1], y0 - 0.5 * t), (y1 + 0.5 * t, g.bounds[3])):
+                        if hi > lo and not g.intersection(box(x - side, lo, x + side, hi)).is_empty:
+                            q = 0.0
+                    return y0, y1, q
+        return None
+
+    mid_x = []  # where columns already land on the middle seam
+    for wi, word in enumerate(words):
+        outer_up = wi == 0
+        good = []
+        x = word.bounds[0] + 0.5 * ppm
+        while x < word.bounds[2]:
+            c = column(word, x)
+            if c and c[2] >= 55:
+                good.append(x)
+            x += 0.5 * ppm
+        # columns spaced evenly along the WHOLE row seam (out to the grid at
+        # both ends): over the word they hop through a letter, beyond it
+        # they're plain cuts from the row seam to the middle seam
+        row = rows[wi]
+        xa, xb = sorted((row.coords[0][0], row.coords[-1][0]))
+        n_cols = max(1, round((xb - xa) / col) - 1)
+        xs, plain = [], []
+        for j in range(1, n_cols + 1):
+            w = xa + (xb - xa) * j / (n_cols + 1)
+            if word.bounds[0] - 0.25 * col < w < word.bounds[2] + 0.25 * col:
+                # on the middle seam, land exactly on the other word's column
+                # (one shared junction) or keep 4t clear of it -- a few mm
+                # apart chops the seam into stubs with no room for a tab
+                cand = [g for g in good if all(abs(g - u) > 0.5 * col for u in xs)
+                        and all(abs(g - m_) < 0.3 * ppm or abs(g - m_) >= 4 * t for m_ in mid_x)]
+                snap = [g for g in cand if any(abs(g - m_) < 0.3 * ppm for m_ in mid_x)
+                        and abs(g - w) < 0.5 * col]
+                if snap:
+                    cand = snap
+                if cand:
+                    best = min(cand, key=lambda g: abs(g - w))
+                    if abs(best - w) < 0.5 * col:
+                        xs.append(best)
+            elif mid is not None:
+                plain.append(w)
+        plain = [x for x in plain if all(abs(x - m_) >= 4 * t for m_ in mid_x)] + \
+            [m_ for m_ in mid_x if not (word.bounds[0] - 0.25 * col < m_ < word.bounds[2] + 0.25 * col)
+             and any(abs(m_ - x) < 0.5 * col for x in plain)]
+        for x in plain:
+            a_ = cross(row, x, row.centroid.y)
+            b_ = cross(mid, x, mid.centroid.y)
+            if a_ is None or b_ is None:
+                continue
+            ln_ = LineString([a_, b_])
+            if ln_.distance(allw) < 1.8 * t or not R.contains(ln_):  # t + wobble
+                continue
+            touch(row, a_)
+            touch(mid, b_)
+            mid_x.append(x)
+            pw = _wobble([a_, b_], min(0.8 * t, ln_.length / 6), 0, 0, flat_ends=True)
+            out.append(dict(pts=pw, kind="hullcut", plain_ok=True, structural=True,
+                            ends=("J", "J")))
+        for x in xs:
+            y0, y1, _q = column(word, x)
+            near_y, far_y = (y0, y1) if outer_up else (y1, y0)
+            o = cross(rows[wi], x, near_y)
+            if o is not None:
+                pw = [o, (x, near_y)]
+                amp = min(0.8 * t, LineString(pw).length / 6)
+                touch(rows[wi], o)
+                out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
+                                plain_ok=True, structural=True, ends=("J", "L")))
+            if mid is not None:
+                m = cross(mid, x, far_y)
+                if m is not None:
+                    pw = [(x, far_y), m]
+                    amp = min(0.8 * t, LineString(pw).length / 6)
+                    touch(mid, m)
+                    mid_x.append(x)
+                    out.append(dict(pts=_wobble(pw, amp, 0, 0, flat_ends=True), kind="hullcut",
+                                    plain_ok=True, structural=True, ends=("L", "J")))
+
+    # --- grid seams: ends on the rows land on the row seam; at the row ends
+    # they finish on the nearest letter ---------------------------------------
+    row_lines = [r for r in rows.values()] + ([mid] if mid is not None else [])
+    for ln in segs:
+        p = [tuple(c) for c in ln.coords]
+        ends = []
+        for e in (0, -1):
+            q = Point(p[e])
+            if excl.exterior.distance(q) < 1.0:
+                # carry on in the seam's own direction onto the nearest row seam
+                a_ = p[1] if e == 0 else p[-2]
+                dx, dy = q.x - a_[0], q.y - a_[1]
+                m_ = math.hypot(dx, dy) or 1.0
+                ray = LineString([(q.x, q.y), (q.x + dx / m_ * 3 * row_d, q.y + dy / m_ * 3 * row_d)])
+                hits = [h for r in row_lines for h in [ray.intersection(r)] if not h.is_empty]
+                cs = [c for h in hits for g in getattr(h, "geoms", [h]) for c in getattr(g, "coords", [])]
+                if cs:
+                    tgt, et = min(cs, key=lambda c: math.dist(c, (q.x, q.y))), "J"
+                    touch(None, tgt)
+                else:
+                    h = nearest_points(allw, q)[0]
+                    tgt, et = (h.x, h.y), "L"
+                if e == 0:
+                    p.insert(0, tgt)
+                else:
+                    p.append(tgt)
+                ends.append(et)
+            elif R.boundary.distance(q) < 1.0:
+                ends.append(end_type(q))
+            else:
+                ends.append("J")
+        if ends == ["J", "J"]:
+            p = curved(p)
+        # structural: a grid seam with no room for a tab is cut plain rather
+        # than dropped (dropping merges cells into oversized pieces)
+        out.append(dict(pts=p, kind="hullgrid", plain_ok=True, structural=True, ends=tuple(ends)))
+    # --- the horizontal seams, split at every contact ------------------------
+    for kind, pw, ends, contacts in horiz:
+        ln = LineString(pw)
+        cuts = sorted({round(ln.project(Point(q)), 3) for q in contacts
+                       if 0.5 < ln.project(Point(q)) < ln.length - 0.5})
+        stops = [0.0] + cuts + [ln.length]
+        for k_ in range(len(stops) - 1):
+            a, b = stops[k_], stops[k_ + 1]
+            if b - a < 0.5:
+                continue
+            n = max(2, int((b - a) / 2.0))
+            seg = [ln.interpolate(a + (b - a) * i / n) for i in range(n + 1)]
+            seg = [(q.x, q.y) for q in seg]
+            # contact ends sit exactly on the other seams' endpoints (J)
+            if k_ > 0:
+                seg[0] = min(contacts, key=lambda c: math.dist(c, seg[0]))
+            if k_ < len(stops) - 2:
+                seg[-1] = min(contacts, key=lambda c: math.dist(c, seg[-1]))
+            e0 = ends[0] if k_ == 0 else "J"
+            e1 = ends[1] if k_ == len(stops) - 2 else "J"
+            out.append(dict(pts=seg, kind=kind, plain_ok=True, structural=True, ends=(e0, e1)))
+    return out
+
+
 def _extend(pts, end, d):
     if end == 0:
         (x0, y0), (x1, y1) = pts[1], pts[0]
@@ -2252,7 +2680,7 @@ def _extend(pts, end, d):
 # the 22px/11px floor), and the largest is only a modest, likely-safe step
 # above the proven default -- not yet physically confirmed at 1.10x, so
 # don't push it further without a test cut.
-TAB_SIZE_CLASSES = (0.85, 1.0, 1.10)
+TAB_SIZE_CLASSES = (1.0, 1.10, 1.20)  # smallest = the full min_feature_mm tab
 
 
 def _tab_size_class(pts):
@@ -2306,32 +2734,31 @@ def _snap_notch_ends(seams, letters_solid, ppm, min_notch_mm=1.0):
     return snapped
 
 
-QA_NECK_MM = 3.0     # no material neck narrower than this (Alex: ~3mm material floor)
-QA_STRIP_W_MM = 3.0  # strips narrower than this ...
-QA_STRIP_L_MM = 6.0  # ... may not be longer than this
+# QA floors are the material's min_feature_mm (cfg.min_feature_mm): no neck
+# narrower than t, no strip narrower than t that is longer than 2t.
 
 
-def qa_defects(pieces, bulbs, ppm):
+def qa_defects(pieces, bulbs, ppm, t_mm=3.0):
     """Breakable features on background pieces: (kind, Point, piece_idx).
-    'bridge': eroding by QA_NECK_MM/2 splits off a chunk (a neck under
-    QA_NECK_MM) that is not a tab bulb. 'strip': material an opening of width
-    QA_STRIP_W_MM removes, longer than QA_STRIP_L_MM, not part of a tab."""
+    'bridge': eroding by t_mm/2 splits off a chunk (a neck under t_mm) that
+    is not a tab bulb. 'strip': material an opening of width t_mm removes,
+    longer than 2 * t_mm, not part of a tab."""
     def parts(g):
         return [q for q in getattr(g, "geoms", [g]) if not q.is_empty and q.area > 0]
     tabs = unary_union([b.buffer(1.5 * ppm) for b in bulbs]) if bulbs else None
     out = []
     for i, g in enumerate(pieces):
-        lobes = sorted(parts(g.buffer(-QA_NECK_MM / 2 * ppm)), key=lambda q: -q.area)
+        lobes = sorted(parts(g.buffer(-t_mm / 2 * ppm)), key=lambda q: -q.area)
         for q in lobes[1:]:
             if q.area < 2.0 * ppm ** 2:
                 continue
             if tabs is not None and tabs.contains(q):
                 continue
             out.append(("bridge", q.centroid, i))
-        r = QA_STRIP_W_MM / 2 * ppm
+        r = t_mm / 2 * ppm
         lost = g.difference(g.buffer(-r).buffer(r).buffer(0.05 * ppm))
         for q in parts(lost.buffer(-0.2 * ppm).buffer(0.2 * ppm)):
-            if q.length / 2 / ppm <= QA_STRIP_L_MM or q.area < 2.0 * ppm ** 2:
+            if q.length / 2 / ppm <= 2 * t_mm or q.area < 2.0 * ppm ** 2:
                 continue
             if tabs is not None and tabs.buffer(1.0 * ppm).contains(q):
                 continue
@@ -2340,7 +2767,7 @@ def qa_defects(pieces, bulbs, ppm):
 
 
 def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
-                distinct_tabs=True, rounds=8, untabbed_kinds=()):
+                distinct_tabs=True, rounds=8, untabbed_kinds=(), junction_keep_mm=7.0):
     """assemble(), then repair breakable features: ban the tab choice of every
     seam near a defect (so it moves / flips sides), and after a seam's tab
     options run out, drop the seam. Returns the best (fewest defects) result;
@@ -2351,14 +2778,21 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
     for _round in range(rounds):
         surround, counters, st = assemble(seams, letter_union, letters_solid, background,
                                           panel, cfg, C, distinct_tabs, bans=bans,
-                                          untabbed_kinds=untabbed_kinds)
-        defects = qa_defects(surround, st["bulbs"], ppm)
-        if best is None or len(defects) < len(best[3]):
-            best = (surround, counters, st, defects, {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
+                                          untabbed_kinds=untabbed_kinds,
+                                          junction_keep_mm=junction_keep_mm)
+        defects = qa_defects(surround, st["bulbs"], ppm, cfg.min_feature_mm)
+        # Oversized pieces count when picking the best round: dropping seams
+        # kills thin-strip defects by merging cells into giant pieces, and
+        # without this the loop would prefer exactly that.
+        over = [("oversized", f.representative_point(), i)
+                for i, f in enumerate(surround) if oversized_oriented(f, cfg)]
+        if best is None or len(defects) + len(over) < len(best[3]):
+            best = (surround, counters, st, defects + over,
+                    {k: (v if v == "drop" else set(v)) for k, v in bans.items()})
         if not defects:
             break
         changed = False
-        for _kind, pt, _pi in defects:
+        for _kind, pt, _pi in defects:  # thin features only: oversized has no seam to ban
             near = [(si, sm) for si, sm in enumerate(seams)
                     if sm.get("final") is not None and sm["final"].distance(pt) < 8 * ppm]
             near.sort(key=lambda t: t[1]["final"].distance(pt))
@@ -2382,7 +2816,7 @@ def assemble_qa(seams, letter_union, letters_solid, background, panel, cfg, C,
 
 
 def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, distinct_tabs=True,
-             bans=None, untabbed_kinds=()):
+             bans=None, untabbed_kinds=(), junction_keep_mm=7.0):
     """bans: {seam index: set of tab choices (fallback, i, side) to skip, or
     the string "drop" to force the seam out} -- used by the QA repair loop to
     make a seam pick its next tab position / the other side."""
@@ -2390,7 +2824,7 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
     bans = bans or {}
     st = {"total": 0, "centered": 0, "shifted": 0, "flipped": 0, "dropped": 0, "bulbs": []}
     min_gap = cfg.letter_clearance_px
-    jr = 7 * ppm  # tab bulbs keep this far from any junction point
+    jr = junction_keep_mm * ppm  # tab bulbs keep this far from any junction point
     # junction points = every non-letter/non-border endpoint (and T hosts' feet)
     junctions = []
     for s in seams:
@@ -2436,7 +2870,10 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
         if eb in ("L", "T", "B"):
             pts = _extend(pts, 1, 2)
         ls0 = LineString(pts)
-        if ls0.intersection(background).length < 3 * ppm:
+        bg_len = ls0.intersection(background).length
+        # a short structural seam still closes its faces -- skipping it
+        # leaves a hole that merges the pieces on either side
+        if bg_len < (0.3 if s.get("structural") else 3) * ppm:
             s["status"] = "short"
             if s.get("keep"):  # structural (a closed circle): cut it plain anyway
                 tabbed.append(pts)
@@ -2504,8 +2941,10 @@ def assemble(seams, letter_union, letters_solid, background, panel, cfg, C, dist
             # keep the seam untabbed only if it's needed for structure (hub
             # arcs, spokes); otherwise drop it like wave-grid does.
             cand = LineString(rs)
-            if s.get("keep") or (((ea, eb) == ("J", "J") or s.get("plain_ok"))
-                                 and not conflict(cand)):
+            # structural seams (hull-style grid) are always cut: dropping one
+            # merges cells into an oversized piece, worse than a crowded seam
+            if s.get("keep") or s.get("structural") or (
+                    ((ea, eb) == ("J", "J") or s.get("plain_ok")) and not conflict(cand)):
                 tabbed.append(rs)
                 accepted.append(cand)
                 s["final"] = cand
@@ -2640,6 +3079,13 @@ def absorb_ocean_into_land(surround, land, bulbs, cfg, min_feature_mm=3.0):
     return out, land
 
 
+_frame_exempt = False  # set by build_ring: only a frame_mm > 0 build has a legit annulus
+
+
+OVERSIZE_SHORT_MM = 34.0  # a piece's min-rotated-rectangle sides may not
+OVERSIZE_LONG_MM = 64.0   # exceed these (oversized_oriented)
+
+
 def oversized_oriented(poly, cfg):
     """Rotation-invariant _vg_oversized: ring pieces sit at every angle, so the
     axis-aligned bbox test would flag diagonal pieces falsely."""
@@ -2653,8 +3099,8 @@ def oversized_oriented(poly, cfg):
     # scoring away from an otherwise-clean layout during generate()'s search.
     polys = poly.geoms if poly.geom_type == "MultiPolygon" else [poly]
     hole_area = sum(Polygon(r).area for p in polys for r in p.interiors)
-    if hole_area > poly.area * 2:
-        return False
+    if _frame_exempt and hole_area > poly.area * 2:
+        return False  # only a real frame may be a giant annulus
     # The undivided hub medallion background around a center_text block is
     # correctly "oversized" by ordinary standards too -- it's deliberately
     # one big solid piece (spokes skipped) instead of pinwheel wedges, same
@@ -2670,7 +3116,7 @@ def oversized_oriented(poly, cfg):
         mrr = poly.minimum_rotated_rectangle
     xs, ys = mrr.exterior.coords.xy
     e = sorted(math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(2))
-    return e[0] > 34 * ppm or e[1] > 64 * ppm
+    return e[0] > OVERSIZE_SHORT_MM * ppm or e[1] > OVERSIZE_LONG_MM * ppm
 
 
 @contextlib.contextmanager
@@ -2695,9 +3141,8 @@ def score(surround, panel, cfg):
 
 
 def make_cfg(rp):
-    """Name-plate tab settings (banner_puzzle_config's fat capsule tabs, 4mm
-    letter clearance) on a square canvas. Both border floors are 7mm: a ring has
-    no 'short dimension', every tab near the rim gets the generous floor."""
+    """Ring tab settings on a square canvas: fat capsule tabs, letter and
+    border clearances, all derived from rp.min_feature_mm (see RingParams)."""
     return G.PuzzleConfig(
         panel_mm=rp.diameter_mm,
         panel_h_mm=rp.diameter_mm,
@@ -2709,6 +3154,7 @@ def make_cfg(rp):
         tab_border_floor_v_mm=rp.border_floor_mm,
         tab_border_floor_h_mm=rp.border_floor_mm,
         font_path=rp.font,
+        min_feature_mm=rp.min_feature_mm,
     )
 
 
@@ -2720,9 +3166,11 @@ def generate(words, seed, rp):
     cfg = make_cfg(rp)
     if rp.shape == "square":
         cfg = replace(cfg, corner_radius_mm=5.0)
-    piece_polys, letter_union, cfg, L, st, panel, C = build_ring(
-        words, seed, rp, cfg
-    )
+    if rp.center_style == "letterfirst":
+        from letter_first import build_letter_first as builder
+    else:
+        builder = build_ring
+    piece_polys, letter_union, cfg, L, st, panel, C = builder(words, seed, rp, cfg)
     land = st.get("land") or []
     cut_union = (unary_union([letter_union] + [p["polygon"] for p in land])
                  if land else letter_union)
@@ -2784,9 +3232,12 @@ def generate(words, seed, rp):
     # QA again on the FINAL pieces (after pocket carving / counter fusing /
     # sliver absorption), so nothing breakable slips in after the search.
     nonletter = [p for p in pieces if p["kind"] != "letter"]
-    defects = qa_defects([p["polygon"] for p in nonletter], st.get("bulbs", []), cfg.px_per_mm)
-    # small letter counters (an A's triangle) stay in place on breakaway
-    # bridges instead of dropping through the cutting bed
+    defects = qa_defects([p["polygon"] for p in nonletter], st.get("bulbs", []),
+                         cfg.px_per_mm, cfg.min_feature_mm)
+    # A letter counter too thin to survive as a loose piece (the triangle in a
+    # small A) isn't a puzzle piece anyone needs: leave it in place, held by a
+    # breakaway bridge on each face (see add_counter_bridges), and stop
+    # counting it as a defect.
     bridged = add_counter_bridges(
         {i for _k, _q, i in defects}, nonletter, letter_union_of(pieces), cfg)
     st["bridged_counters"] = len(bridged)
@@ -2794,6 +3245,10 @@ def generate(words, seed, rp):
     # breakaway bridges too, like small letter counters
     st["bridged_land"] = add_land_bridges(nonletter, cfg, rp.land_bridge_mm)
     st["defects_final"] = [(k, (q.x, q.y)) for k, q, i in defects if i not in bridged]
+    for p in nonletter:
+        if p["kind"] != "land" and oversized_oriented(p["polygon"], cfg):
+            c = p["polygon"].representative_point()
+            st["defects_final"].append(("oversized", (c.x, c.y)))
     st["land_oversized"] = sum(1 for p in nonletter
                                if p["kind"] == "land" and oversized_oriented(p["polygon"], cfg))
     st["loose_rim"] = loose_rim_pieces(nonletter, st.get("bulbs", []), panel, cfg)
@@ -2971,7 +3426,10 @@ def main():
     ap.add_argument("--cap-max-mm", type=float, default=None,
                     help="largest outer-letter cap height to try (default 46); lower it to "
                          "give the center disc and its text more room")
-    ap.add_argument("--ornament", default="heart", help="heart | dot | star | none")
+    ap.add_argument("--group-gap-mm", type=float, default=15.0,
+                    help="letterfirst: tab space between rim, outer letters and center words")
+    ap.add_argument("--ornament", default="heart",
+                    help="heart | dot | star | laptop | gradcap | none; comma list = one per word slot")
     ap.add_argument("--font", default=None)
     ap.add_argument(
         "--no-distinct-tabs", action="store_true",
@@ -2985,12 +3443,21 @@ def main():
                     help="loose center text at exactly this cap height; the hub grows "
                          "(ring letters shrink) until it fits (flat style)")
     ap.add_argument("--center-min-gap-mm", type=float, default=None,
-                    help="min wood between adjacent loose center letters (default 5)")
+                    help="min wood between adjacent loose center letters (default 3)")
+    ap.add_argument("--hub-ring-mm", type=float, default=None,
+                    help="min radial depth of the ring band between the outer letters "
+                         "and the center disc (default 4.4 x min_feature_mm)")
+    ap.add_argument("--letter-clearance-mm", type=float, default=None,
+                    help="min wood between a cut and a letter (default min_feature_mm)")
+    ap.add_argument("--border-floor-mm", type=float, default=None,
+                    help="min wood between a tab and the disc edge (default min_feature_mm)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
-        "--center-style", choices=("medallion", "flat", "ring"), default="medallion",
-        help="medallion = fused words + undivided hub (original); flat / ring = "
-        "loose letters cut out of the normal pie-sliced hub",
+        "--center-style", choices=("letterfirst", "hull", "medallion", "flat", "ring"),
+        default="hull",
+        help="hull (default) = loose center letters inside one continuous puzzle grid, "
+        "each word's outline treated like one big letter; flat / ring = loose letters "
+        "in a free-turning pie-sliced hub disc; medallion = fused words + undivided hub",
     )
     ap.add_argument("--center-cap-max-mm", type=float, default=None,
                     help="cap the loose center letters' auto-maximised height (default 30)")
@@ -3014,7 +3481,10 @@ def main():
     ap.add_argument("--notch-edge", choices=("left", "bottom"), default="left",
                     help="stock edge for --frame-notches: left (-X, cut to x=-10) or bottom "
                          "(-Y, cut to y=-10)")
-    ap.add_argument("--material", default="birch3")
+    ap.add_argument("--material", default="ply3",
+                    help="material profile id; its min_feature_mm sets every wood-strength limit")
+    ap.add_argument("--min-feature-mm", type=float, default=None,
+                    help="override the material's min_feature_mm (thinnest wood it survives)")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")
@@ -3033,10 +3503,21 @@ def main():
         "--min-segment-mm", type=float, default=0.3,
         help="drop G1 chords shorter than this (mm) so GRBL never stalls on micro-moves",
     )
+    ap.add_argument("--bridge-mm", type=float, default=0.5,
+                    help="uncut gap (laser centerline, mm) holding each too-thin letter "
+                         "counter in place; ~0.3mm of wood after a ~0.2mm kerf")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     words = [w.upper() for w in a.word.split("+") if w.strip()]
+    from emitter import load_material
+
+    material = load_material(a.material)
+    t_mm = a.min_feature_mm or material.get("min_feature_mm")
+    if t_mm is None:
+        raise SystemExit(f"material {a.material} has no min_feature_mm; pass --min-feature-mm")
     rp = RingParams(
+        min_feature_mm=t_mm,
+        group_gap_mm=a.group_gap_mm,
         diameter_mm=a.diameter_mm,
         shape=a.shape,
         rows=a.rows,
@@ -3048,7 +3529,8 @@ def main():
         keep_seams=a.keep_seams,
         split_mm=a.split_mm,
         variants=a.variants,
-        ornament=None if a.ornament == "none" else a.ornament,
+        ornament=(None if a.ornament == "none" else
+                  a.ornament.split(",") if "," in a.ornament else a.ornament),
         font=a.font,
         distinct_tabs=not a.no_distinct_tabs,
         center_text=tuple(a.center_text.upper().split("+")) if a.center_text else None,
@@ -3057,7 +3539,10 @@ def main():
         **({"center_loose_cap_max_mm": a.center_cap_max_mm} if a.center_cap_max_mm is not None else {}),
         center_word=_center_word_index(a.center_word, words),
         center_cap_target_mm=a.center_cap_mm,
+        **({"hub_ring_min_mm": a.hub_ring_mm} if a.hub_ring_mm is not None else {}),
         **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
+        **({"letter_clearance_mm": a.letter_clearance_mm} if a.letter_clearance_mm is not None else {}),
+        **({"border_floor_mm": a.border_floor_mm} if a.border_floor_mm is not None else {}),
     )
     tag = "-".join(words)
     pieces, cfg, L, st, _panel, _C = generate(words, a.seed, rp)
@@ -3089,9 +3574,6 @@ def main():
               + ", ".join(f"{k} near image ({x / cfg.px_per_mm:.0f},{y / cfg.px_per_mm:.0f})mm"
                           for k, (x, y) in bad))
     if a.gcode:
-        from emitter import load_material
-
-        material = load_material(a.material)
         if a.passes is not None:
             material = {**material, "laser": {**material["laser"], "passes": a.passes}}
         gcode = J._emit_cut_for(
@@ -3099,6 +3581,7 @@ def main():
             feed_override=a.feed, power_percent=100.0,
             min_segment_mm=a.min_segment_mm,
             max_backtrack_ms=a.max_backtrack_ms,
+            bridge_mm=a.bridge_mm,
         )
         _check_xy_envelope(gcode, a.max_xy_mm)
         from emitter import combine_passes
@@ -3144,6 +3627,7 @@ def main():
     print(
         f"{tag}: cap {L['cap_mm']:.1f}mm, min letter gap {L['min_gap_mm']:.1f}mm, "
         f"hub r {L['r_h'] / cfg.px_per_mm:.0f}mm, center cap {L.get('center_cap_mm')}mm, {len(pieces)} pieces, "
+        f"{st.get('bridged_counters', 0)} bridged counters, "
         f"score (QA defects, thin, oversized, sliver, nub, dropped) = {st['score']} -> {out}"
     )
 

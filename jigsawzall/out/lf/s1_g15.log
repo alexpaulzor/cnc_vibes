@@ -1,0 +1,3 @@
+circles mm [79.4, 48.8, 24.4] core 24.4 slices 5
+QA FAILED: 2 breakable feature(s) no variant could repair: bridge near image (178,279)mm, bridge near image (178,279)mm
+BRIAN-GILLIAN: cap 40.2mm, min letter gap 16.0mm, hub r 0mm, center cap 18.8mm, 81 pieces, 0 bridged counters, score (QA defects, thin, oversized, sliver, nub, dropped) = (1, 0, 0, 1, 1, 75) -> out/lf/s1_g15.png

@@ -1,0 +1,3 @@
+QA FAILED: 4 breakable feature(s) no variant could repair: bridge near image (149,176)mm, oversized near image (141,139)mm, bridge near image (149,176)mm, oversized near image (141,139)mm
+-> out/riedels_fix/s3_oldfloors.gcode  (12736 lines), toolpath out/riedels_fix/s3_oldfloors.png
+AIDA-AYANA-CLEM-KAI: cap 23.8mm, min letter gap 14.4mm, hub r 71mm, center cap 16.0mm, 84 pieces, 7 bridged counters, score (QA defects, thin, oversized, sliver, nub, dropped) = (2, 0, 1, 0, 0, 25) -> out/riedels_fix/s3_oldfloors.png
