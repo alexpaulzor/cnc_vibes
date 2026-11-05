@@ -88,7 +88,7 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
 - LaserTree 10 W diode on a CNC. **M3 only** (static power), **exactly one
   `$32=1`** (`emitter.combine_passes` handles it).
 - Reach (puzzle-job frame, disc bbox 0..290, stock −5..295):
-  X −10 .. 295.5; **Y ≤ 293.5**. The Y limit switch tripped at MPos
+  X −10 .. 295.5; **Y ≤ 292.5** (was 293.5; tripped again on the HARVEY top foot). The Y limit switch tripped at MPos
   Y = 294.453 (`stand_feet_sheet.REACH_MAX_Y_MM`). `_check_xy_envelope`
   takes a separate Y max.
 - The laser sits ~80 mm −Y and ~20 mm −X from the spindle, so cut stand
@@ -105,7 +105,7 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
   Past the stock edge (x < −5), slices cut sides only, never across the bed.
 - Stand feet from the same sheet (`--corner-feet`): two keyed 75° feet
   (105 × 23.2 mm) in the right-hand corners, base on the x = 295 edge, the
-  top one held under Y 293.5. Cutting along the stock edge over the bed is
+  top one held under Y 292.5. Cutting along the stock edge over the bed is
   fine.
 - Feet from scrap: `python3 scripts/stand_feet_sheet.py out/final --scrap`
   writes 1× and 2× (stacked head-to-tail).
