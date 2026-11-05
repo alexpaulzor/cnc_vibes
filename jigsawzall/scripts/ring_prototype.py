@@ -136,9 +136,12 @@ class RingParams:
     hub_arc_mm: float = 30.0  # min hub-circle arc per hub-ring piece
     # min radial depth of the band between the outer letters and the center
     # disc. None = 4.4 * min_feature_mm: the largest tab class's bulb
-    # (2 * 1.2t) plus a t wall each side -- as thin as a tabbed seam allows,
-    # so every letter gets the room (was a hand-set 26mm).
-    hub_ring_min_mm: float | None = None
+    # (2 * 1.2t) plus a t wall each side -- as thin as a tabbed seam allows.
+    # Default back to the hand-set 26mm: at 4.4t (13.2mm) the hub grew from
+    # 77 to 90mm on PARKER/MCGUIRE and the band under the outer letters got
+    # too thin for the bottom-cap seams' tabs (27 of 29 tabbed -> 0; Alex:
+    # "way too many edges with no tabs").
+    hub_ring_min_mm: float | None = 26.0
     hub_r_min_mm: float = 22.0
     target_w_mm: float = 46.0  # target arc width of rim / hub-ring pieces
     hub_piece_mm: float = 62.0  # max chord of a hub-disc wedge
@@ -227,7 +230,9 @@ class RingParams:
     # attached only at its ends -- must be at least this wide (Alex: 3mm is
     # fine on the stiff 3-ply veneer stock; was 5mm). Tracking widens until
     # it holds, then cap height shrinks if it can't fit.
-    center_min_gap_mm: float | None = None  # = min_feature_mm
+    # was None (= min_feature_mm, 3mm): tighter centre letters left the
+    # hub's radials and inner arcs no room for tabs (PARKER/MCGUIRE)
+    center_min_gap_mm: float | None = 5.0
     # Split hub for two center words (center_style "ring"): a tabbed divider
     # across the disc between them instead of a pinwheel (_center_split_seams)
     center_split: bool = False
