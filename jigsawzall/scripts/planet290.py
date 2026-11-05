@@ -126,7 +126,7 @@ pf = [f for f in RL.lint_pieces(pieces, cfg, panel, st.get("seams"), st.get("cen
       if f.kind not in ("no_tab",)]
 print("lint_pieces:", ", ".join(f"{f.kind} #{f.serial}" for f in pf) or "clean")
 print("etch coverage:", ", ".join(f"#{f.serial}" for f in RL.lint_etch_coverage(pieces, strokes)) or "clean")
-material = load_material("plywood_veneer_3ply_3mm")
+material = load_material("ply3")
 cut = J._emit_cut_for(pieces, material, cfg, "PLANET", "ring", mode="static",
                       power_percent=100.0, min_segment_mm=0.3, max_backtrack_ms=2000.0)
 etch = emit_etch_gcode(strokes, material, cfg, "PLANET globe + logo art + letter outlines",

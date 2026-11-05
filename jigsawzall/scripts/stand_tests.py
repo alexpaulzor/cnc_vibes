@@ -82,7 +82,7 @@ def fit_comb():
             strip = strip.difference(box(cx - w / 2, y0 - 1.0, cx + w / 2, y0 + depth))
         jobs.append((list(strip.exterior.coords), 350, 100.0, 1))
     return _emit("fit comb: frame-notch widths (top) + MDF-channel widths (bottom)",
-                 "plywood_veneer_3ply_3mm", jobs,
+                 "ply3", jobs,
                  ["top strip: notch widths " + " ".join(f"{w:.1f}" for w in notch)
                   + " (12mm deep), chamfer = narrow end",
                   "bottom strip: MDF channel widths " + " ".join(f"{w:.1f}" for w in chan)

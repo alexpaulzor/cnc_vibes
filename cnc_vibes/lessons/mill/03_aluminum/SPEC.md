@@ -6,7 +6,7 @@
 
 Two pieces:
 
-1. Document that aluminum milling on this machine is mostly "use lesson 4a's spacer generator with `--material aluminum_6061_3mm`." Material profile already exists and gives safe feeds (chipload 0.015, DOC 0.15 × tool_dia).
+1. Document that aluminum milling on this machine is mostly "use lesson 4a's spacer generator with `--material alu3`." Material profile already exists and gives safe feeds (chipload 0.015, DOC 0.15 × tool_dia).
 2. Add a new generator (`trochoidal_slot.py`) demonstrating the low-engagement clearing strategy aluminum needs on a 500W spindle.
 
 ## Why aluminum is special
@@ -38,7 +38,7 @@ python lessons/mill/03_aluminum/trochoidal_slot.py \
     --length 30 --width 6 \
     --depth 3 \
     [--tool flat_3.175mm_2flute] \
-    [--material aluminum_6061_3mm] \
+    [--material alu3] \
     [--spindle-rpm 18000] \
     [--trochoidal-radius-frac 0.4] \
     [--trochoidal-step-frac 0.15]

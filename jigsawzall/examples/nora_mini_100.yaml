@@ -13,7 +13,7 @@
 # leave the machine unattended.
 
 head: laser
-material: cardboard_corrugated_3mm
+material: corrugated3
 gcode: build/cut_mini_nora_seed7.gcode
 
 jigsaw:

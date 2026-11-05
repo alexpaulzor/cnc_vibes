@@ -387,7 +387,7 @@ The imported Solid already has the part's real Z thickness, so Stock can wrap it
    - **Name:** `flat_3.175mm_2flute` (matches the id in `profiles/tools.yaml`)
 2. The Tool Controller appears under the Job. Double-click it and set:
    - **Spindle speed:** `18000` rpm
-   - **Horizontal feed:** `1440` mm/min — from `chipload × flutes × rpm = 0.04 × 2 × 18000` (chipload from `profiles/materials.yaml` for `plywood_baltic_birch_3mm` + this tool)
+   - **Horizontal feed:** `1440` mm/min — from `chipload × flutes × rpm = 0.04 × 2 × 18000` (chipload from `profiles/materials.yaml` for `birch3` + this tool)
    - **Vertical feed (plunge):** `300` mm/min — matches `max_plunge_mm_per_min` in `profiles/tools.yaml`
    - **Spindle direction:** Forward (M3)
 3. Click **OK** to close Job-Edit.

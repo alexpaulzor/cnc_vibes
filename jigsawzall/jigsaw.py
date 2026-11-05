@@ -11,7 +11,7 @@ Validator-clean GRBL laser G-code (static M3 constant power).
 
 Examples:
   jigsaw.py preview --word NORA
-  jigsaw.py cut --size full --word NORA --seed 7 --material mdf_3mm
+  jigsaw.py cut --size full --word NORA --seed 7 --material mdf3
   jigsaw.py cut --size small --word N --seed 7
 """
 
@@ -807,7 +807,7 @@ def main():
     cu = subs.add_parser("cut", help="emit cut GCode")
     cu.add_argument("--word", default="NORA")
     cu.add_argument("--seed", type=int, default=7)
-    cu.add_argument("--material", default="plywood_baltic_birch_3mm")
+    cu.add_argument("--material", default="birch3")
     cu.add_argument(
         "--origin",
         default="corner",

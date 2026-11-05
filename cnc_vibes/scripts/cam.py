@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = REPO_ROOT / "profiles"
 
 DEFAULT_TOOL_ID = "flat_3.175mm_2flute"
-DEFAULT_MATERIAL_ID = "plywood_baltic_birch_3mm"
+DEFAULT_MATERIAL_ID = "birch3"
 DEFAULT_SAFE_Z_MM = 5.0
 DEFAULT_PLUNGE_FACTOR = 0.5  # fraction of cut feed used for Z plunge
 

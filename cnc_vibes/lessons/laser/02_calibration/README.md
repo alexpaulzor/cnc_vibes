@@ -27,7 +27,7 @@ After burning, you inspect which slugs fell out cleanly, which barely held on, a
 
 ```
 python lessons/laser/02_calibration/calibration.py \
-    --material plywood_baltic_birch_3mm \
+    --material birch3 \
     --max-passes 5 \
     --powers 100,75,50,25 \
     --speeds 200,400,600
@@ -37,7 +37,7 @@ All arguments optional; defaults produce a single-panel calibration at the mater
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--material ID` | `plywood_baltic_birch_3mm` | Material id from `profiles/laser_materials.yaml`. |
+| `--material ID` | `birch3` | Material id from `profiles/laser_materials.yaml`. |
 | `--max-passes N` | 5 | X axis: 1 through N pass count. |
 | `--powers LIST` | `100,75,50,25` | Y axis: comma-separated power percentages, top row first. |
 | `--speeds LIST` | (empty — use material default) | Z axis: comma-separated feed rates in mm/min. Each speed becomes a vertically-stacked panel in the same file. |

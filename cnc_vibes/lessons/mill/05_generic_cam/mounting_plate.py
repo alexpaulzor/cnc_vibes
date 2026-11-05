@@ -10,7 +10,7 @@ The part: a 60×40mm rectangular plate with
   - outer profile cut all the way through 6mm plywood
 
 Default tool / material / params are reasonable for the Anolex
-4030 + plywood_baltic_birch_6mm + a 1/8" flat endmill (corner holes
+4030 + birch6 + a 1/8" flat endmill (corner holes
 use a real 3.2mm drill bit). All are CLI-overridable.
 
 Generates lessons/mill/05_generic_cam/build/mounting_plate.gcode.
@@ -53,7 +53,7 @@ def make_mounting_plate_gcode(
     profile_tool_id: str = "flat_3.175mm_2flute",
     pocket_tool_id: str = "flat_3.175mm_2flute",
     drill_tool_id: str = "drill_3.2mm_m4_clearance",
-    material_id: str = "plywood_baltic_birch_6mm",
+    material_id: str = "birch6",
     spindle_rpm: int = 18000,
     strict: bool = False,
 ) -> GcodeOutput:
@@ -148,7 +148,7 @@ def main():
     ap.add_argument("--pocket-w-mm", type=float, default=20.0)
     ap.add_argument("--pocket-h-mm", type=float, default=10.0)
     ap.add_argument("--pocket-depth-mm", type=float, default=3.0)
-    ap.add_argument("--material", default="plywood_baltic_birch_6mm")
+    ap.add_argument("--material", default="birch6")
     ap.add_argument("--drill-tool", default="drill_3.2mm_m4_clearance")
     ap.add_argument("--pocket-tool", default="flat_3.175mm_2flute")
     ap.add_argument("--profile-tool", default="flat_3.175mm_2flute")

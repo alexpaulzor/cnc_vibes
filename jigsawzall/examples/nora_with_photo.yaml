@@ -12,7 +12,7 @@
 #   python cnc.py preflight examples/nora_with_photo.yaml
 
 head: laser
-material: mdf_3mm
+material: mdf3
 gcode: build/full_nora_halftone_full.gcode
 
 jigsaw:

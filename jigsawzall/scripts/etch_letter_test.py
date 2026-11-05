@@ -103,7 +103,7 @@ def main(argv=None):
                     type=lambda s: [float(x) for x in s.split(",")])
     ap.add_argument("--feed", type=int, default=None, help="etch feed (default: profile)")
     ap.add_argument("--outline-mm", type=float, default=1.0)
-    ap.add_argument("--material", default="plywood_veneer_3ply_3mm")
+    ap.add_argument("--material", default="ply3")
     ap.add_argument("--min-segment-mm", type=float, default=0.3)
     ap.add_argument("--out", default=str(HERE.parent / "figs" / "etch_letter_test.gcode"))
     a = ap.parse_args(argv)

@@ -1,0 +1,4 @@
+evdev
+python-socketio[client]==4.6.1   # 4.x client speaks cncjs 1.9's socket.io 2.x
+python-engineio==3.14.2
+pyjwt

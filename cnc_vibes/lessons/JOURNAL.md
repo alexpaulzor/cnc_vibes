@@ -92,7 +92,7 @@ Decision: Int-03's serial-driver section is genuinely complex and I can't valida
 
 ### 2026-05-24 — 4d aluminum landed (commit 02a921e)
 
-- Decision: lesson 4d delivers a trochoidal-slot generator and DOCUMENTS that aluminum spacers can be cut by passing `--material aluminum_6061_3mm` to the existing 4a script. Two genuine deliverables, neither over-engineered.
+- Decision: lesson 4d delivers a trochoidal-slot generator and DOCUMENTS that aluminum spacers can be cut by passing `--material alu3` to the existing 4a script. Two genuine deliverables, neither over-engineered.
 - Trochoidal algorithm is a simplified version of real adaptive clearing — small overlapping circles advancing in +X. Real CAM would do 2D pocket clearing with proper engagement detection.
 - 14 new tests.
 

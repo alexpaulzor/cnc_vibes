@@ -262,7 +262,7 @@ def main():
     ap.add_argument("--tray-t-mm", type=float, default=6.0, help="tray thickness: 3mm frame + 3mm MDF")
     ap.add_argument("--slot-clear-mm", type=float, default=0.2,
                     help="slot width = tray + this (the kerf adds ~0.15mm more)")
-    ap.add_argument("--material", default="plywood_veneer_3ply_3mm")
+    ap.add_argument("--material", default="ply3")
     a = ap.parse_args()
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)

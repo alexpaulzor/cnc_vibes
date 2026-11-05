@@ -8,7 +8,7 @@ M3). This plate etches those exact production strokes (S, C, I: the flat
 inner sliver + 1mm outset, recovered from the MICHELS G-code into
 data/michels_center_SCI_strokes.json) in several variants side by side, each
 through emitter.emit_etch_gcode() -- same simplify/decimate, same linear
-warmup follow-through, same 100% S1000 from the plywood_veneer_3ply_3mm etch
+warmup follow-through, same 100% S1000 from the ply3 etch
 profile -- so the only differences are the ones under test:
 
   row variant  what changes
@@ -124,7 +124,7 @@ def _scaled_dose(res):
     return tot
 
 
-def generate(rows, machine=None, sender=None, material_id="plywood_veneer_3ply_3mm"):
+def generate(rows, machine=None, sender=None, material_id="ply3"):
     machine = machine or grbl_model.MachineProfile()
     sender = sender or grbl_model.SenderProfile()
     material = load_material(material_id)

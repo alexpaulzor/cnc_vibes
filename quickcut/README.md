@@ -20,13 +20,13 @@ SVG of cut paths → validator-clean GRBL laser G-code.
 
 ```bash
 # from ~/src/vibes
-uv run --with pyyaml python quickcut/svg2gcode.py cut.svg -o cut.gcode --material mdf_3mm
+uv run --with pyyaml python quickcut/svg2gcode.py cut.svg -o cut.gcode --material mdf3
 
 # override the recipe, or skip the material profile entirely
 uv run python quickcut/svg2gcode.py cut.svg --feed 350 --power 100 --passes 2 --warmup-ms 1000
 
 # center the work on X0 Y0 instead of the default bottom-left-corner origin
-uv run --with pyyaml python quickcut/svg2gcode.py cut.svg --material mdf_3mm --origin center
+uv run --with pyyaml python quickcut/svg2gcode.py cut.svg --material mdf3 --origin center
 ```
 
 The whole program is four steps (read `svg_to_gcode()` first — everything else

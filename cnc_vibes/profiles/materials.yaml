@@ -9,7 +9,7 @@
 #
 # These are starting points, not gospel. Measure chips, listen, adjust.
 
-- id: plywood_baltic_birch_3mm
+- id: birch3
   family: wood
   thickness_mm: 3.0
   chipload:
@@ -18,7 +18,7 @@
   doc_fraction: 0.5
   doc_fraction_finish: 0.25
 
-- id: plywood_baltic_birch_6mm
+- id: birch6
   family: wood
   thickness_mm: 6.0
   chipload:
@@ -27,7 +27,7 @@
   doc_fraction: 0.5
   doc_fraction_finish: 0.25
 
-- id: mdf_12mm
+- id: mdf12
   family: wood
   thickness_mm: 12.0
   chipload:
@@ -35,7 +35,7 @@
     flat_6mm_2flute: 0.10
   doc_fraction: 1.0
 
-- id: aluminum_6061_3mm
+- id: alu3
   family: aluminum
   thickness_mm: 3.0
   chipload:
@@ -48,7 +48,7 @@
     but unforgiving — use sharp tools, climb mill, and consider trochoidal
     clearing once you've graduated past the basics.
 
-- id: acrylic_3mm
+- id: acrylic3
   family: acrylic
   thickness_mm: 3.0
   chipload:
@@ -64,7 +64,7 @@
     chips before they re-weld. If the edge gums: lower RPM (floor 8000), then
     raise feed / lower DOC. Peck plunges help holes.
 
-- id: petg_3mm
+- id: petg3
   family: petg
   thickness_mm: 3.0
   chipload:

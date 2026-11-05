@@ -3014,7 +3014,7 @@ def main():
     ap.add_argument("--notch-edge", choices=("left", "bottom"), default="left",
                     help="stock edge for --frame-notches: left (-X, cut to x=-10) or bottom "
                          "(-Y, cut to y=-10)")
-    ap.add_argument("--material", default="plywood_baltic_birch_3mm")
+    ap.add_argument("--material", default="birch3")
     ap.add_argument("--feed", type=int, default=None)
     ap.add_argument("--passes", type=int, default=None)
     ap.add_argument("--etch-power", type=float, default=None, help="outline etch power %% (default: material etch profile)")

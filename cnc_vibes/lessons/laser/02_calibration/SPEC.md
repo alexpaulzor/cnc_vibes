@@ -27,7 +27,7 @@ The calibration is **cut-through-oriented**, not engrave-oriented. Each "sample"
 
 ```
 python lessons/laser/02_calibration/calibration.py \
-    --material plywood_baltic_birch_3mm \
+    --material birch3 \
     --max-passes 5 \
     --powers 100,75,50,25 \
     --speeds 200,400,600 \
@@ -38,7 +38,7 @@ All arguments optional; defaults produce a sensible first calibration. **All req
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--material ID` | `plywood_baltic_birch_3mm` | Material id from `profiles/laser_materials.yaml`. Default `feed_mm_per_min` from the profile is used if `--speeds` is empty. |
+| `--material ID` | `birch3` | Material id from `profiles/laser_materials.yaml`. Default `feed_mm_per_min` from the profile is used if `--speeds` is empty. |
 | `--max-passes N` | 5 | X axis of each panel: columns from 1 pass through N passes. |
 | `--powers LIST` | `100,75,50,25` | Y axis of each panel: rows at each power percentage, top-down. |
 | `--speeds LIST` | (empty — use material default) | Z axis: one panel per speed, stacked vertically in the same file. |
@@ -123,7 +123,7 @@ lessons/laser/02_calibration/
 
 ## Validation that the lesson works end-to-end
 
-1. `python lessons/laser/02_calibration/calibration.py --material plywood_baltic_birch_3mm` produces a `.gcode` in `build/`.
+1. `python lessons/laser/02_calibration/calibration.py --material birch3` produces a `.gcode` in `build/`.
 2. `python cnc.py validate <gcode>` passes with laser-aware rules.
 3. `python cnc.py preflight <gcode>` walks the laser checklist.
 4. Run on the machine. The result is a labeled matrix of cut squares plus engraved labels around the edges.

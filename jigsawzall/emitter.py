@@ -1390,7 +1390,9 @@ def emit_raster_gcode(
                 s_val = int(round((255 - val) / 255 * max_s))
                 if s_val <= 0:
                     continue
-            lines.append(f"G0 X{x_start:.3f} Y{machine_y:.3f}")
+            # S0 on the travel: with laser mode off ($32=0 / $GCode/LaserMode=Off, as on the
+            # AnoleX) Grbl keeps the last S during G0, so the laser would fire on every travel.
+            lines.append(f"G0 X{x_start:.3f} Y{machine_y:.3f} S0")
             lines.append(f"G1 X{x_end:.3f} Y{machine_y:.3f} S{s_val}")
     lines.append("M5  ; raster done")
     return lines

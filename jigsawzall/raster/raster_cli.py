@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--size", default="small", choices=("small", "full"))
     p.add_argument("--word", default="N")
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--material", default="mdf_3mm")
+    p.add_argument("--material", default="mdf3")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--image", type=Path)
     src.add_argument("--test-pattern", action="store_true")

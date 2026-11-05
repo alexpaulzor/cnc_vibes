@@ -29,7 +29,7 @@ The artifact is a flat ring of laser-cuttable material with OD/ID tuned for PCB-
 python lessons/laser/01_spacer/spacer.py \
     --od 6.0 \
     --id 3.2 \
-    --material plywood_baltic_birch_3mm \
+    --material birch3 \
     --out lessons/laser/01_spacer/build/spacer_od6_id3.2.gcode
 ```
 
@@ -37,7 +37,7 @@ python lessons/laser/01_spacer/spacer.py \
 |---|---|---|
 | `--od FLOAT` | 6.0 | Outer diameter, mm. Tight footprint that fits most through-hole component layouts. |
 | `--id FLOAT` | 3.2 | Inner diameter, mm. M3 screw clearance. Common alternatives: 4.2 (M4), 5.2 (M5 or T-slot M5). |
-| `--material ID` | `plywood_baltic_birch_3mm` | Material id from `profiles/laser_materials.yaml`. |
+| `--material ID` | `birch3` | Material id from `profiles/laser_materials.yaml`. |
 | `--out PATH` | derived from params | Output `.gcode` path. |
 
 ## Outputs
@@ -91,7 +91,7 @@ lessons/laser/01_spacer/
 ## profiles/laser_materials.yaml shape
 
 ```yaml
-- id: plywood_baltic_birch_3mm
+- id: birch3
   family: wood
   thickness_mm: 3.0
   laser:
@@ -99,21 +99,21 @@ lessons/laser/01_spacer/
     feed_mm_per_min: 400      # cut speed
     passes: 2                 # passes to cut through
     focus_height_mm: 0.0      # Z offset to apply (0 if already focused)
-- id: plywood_baltic_birch_6mm
+- id: birch6
   family: wood
   thickness_mm: 6.0
   laser:
     power_percent: 100
     feed_mm_per_min: 200
     passes: 4
-- id: mdf_3mm
+- id: mdf3
   family: wood
   thickness_mm: 3.0
   laser:
     power_percent: 100
     feed_mm_per_min: 350
     passes: 2
-- id: cast_acrylic_3mm_clear
+- id: acrylic3clear
   family: acrylic
   thickness_mm: 3.0
   laser:

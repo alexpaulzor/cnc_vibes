@@ -57,8 +57,8 @@ def test_load_tool_unknown_exits():
 
 
 def test_load_material_known_id():
-    m = load_material("plywood_baltic_birch_3mm")
-    assert m.id == "plywood_baltic_birch_3mm"
+    m = load_material("birch3")
+    assert m.id == "birch3"
     assert m.family == "wood"
     assert m.chipload_for("flat_3.175mm_2flute") == pytest.approx(0.04)
 
@@ -75,7 +75,7 @@ def test_load_material_unknown_exits():
 
 def test_derive_feed_uses_chipload():
     t = load_tool("flat_3.175mm_2flute")
-    m = load_material("plywood_baltic_birch_3mm")
+    m = load_material("birch3")
     cfg = CamConfig(spindle_rpm=18000)
     # chipload 0.04 * flutes 2 * rpm 18000 = 1440
     assert _derive_feed(t, m, cfg) == 1440
@@ -104,14 +104,14 @@ def test_plunge_feed_floor_at_50():
 
 def test_derive_step_down_from_doc_fraction():
     t = load_tool("flat_3.175mm_2flute")  # diameter 3.175
-    m = load_material("plywood_baltic_birch_3mm")  # doc_fraction 0.5
+    m = load_material("birch3")  # doc_fraction 0.5
     cfg = CamConfig()
     assert _derive_step_down(t, m, cfg) == pytest.approx(0.5 * 3.175)
 
 
 def test_derive_step_down_explicit_override():
     t = load_tool("flat_3.175mm_2flute")
-    m = load_material("plywood_baltic_birch_3mm")
+    m = load_material("birch3")
     cfg = CamConfig(step_down_mm=1.0)
     assert _derive_step_down(t, m, cfg) == 1.0
 
@@ -129,7 +129,7 @@ def test_profile_cut_validator_headers():
     out = profile_cut(_square(), depth_mm=3.0)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
     assert "$32=0" in text  # spindle mode, not laser
 
@@ -285,7 +285,7 @@ def test_pocket_mill_validator_headers():
     out = pocket_mill(_square(), depth_mm=2.0)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
 
 
@@ -374,7 +374,7 @@ def _holes_2x2():
 
 def test_drill_array_validator_headers():
     t = load_tool("drill_3.2mm_m4_clearance")
-    m = load_material("plywood_baltic_birch_6mm")
+    m = load_material("birch6")
     out = drill_array(_holes_2x2(), depth_mm=6, tool=t, material=m)
     text = out.text
     assert ";HEAD: spindle" in text
@@ -383,7 +383,7 @@ def test_drill_array_validator_headers():
 
 def test_drill_array_uses_m3():
     t = load_tool("drill_3.2mm_m4_clearance")
-    m = load_material("plywood_baltic_birch_6mm")
+    m = load_material("birch6")
     out = drill_array(_holes_2x2(), depth_mm=6, tool=t, material=m)
     assert re.search(r"^M3 S\d+", out.text, re.MULTILINE)
     assert not re.search(r"^M4\b", out.text, re.MULTILINE)
@@ -391,7 +391,7 @@ def test_drill_array_uses_m3():
 
 def test_drill_array_one_section_per_hole():
     t = load_tool("drill_3.2mm_m4_clearance")
-    m = load_material("plywood_baltic_birch_6mm")
+    m = load_material("birch6")
     out = drill_array(_holes_2x2(), depth_mm=6, tool=t, material=m)
     # One "; --- hole N/M ---" comment per hole
     n_holes = sum(1 for l in out.lines if l.startswith("; --- hole"))
@@ -498,7 +498,7 @@ def test_engrave_text_validator_headers():
     out = engrave_text("HELLO", position=(10, 10), height_mm=10, depth_mm=0.5)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
     assert "$32=0" in text  # spindle mode, not laser
 
@@ -667,7 +667,7 @@ def test_chamfer_edge_validator_headers():
     out = chamfer_edge(_square(), chamfer_depth_mm=1.0, tool=t)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: vbit_60deg_6mm" in text
     assert "$32=0" in text
 
@@ -768,7 +768,7 @@ def test_profile_cut_with_tabs_validator_headers():
     out = profile_cut_with_tabs(_square(), depth_mm=3.0, tool=t)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
 
 
@@ -870,7 +870,7 @@ def test_slot_mill_validator_headers():
     out = slot_mill((10, 10), (40, 10), width_mm=6.0, depth_mm=2.0, tool=t)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
 
 
@@ -965,7 +965,7 @@ def test_face_mill_validator_headers():
     out = face_mill(_square(), depth_mm=0.5, tool=t)
     text = out.text
     assert ";HEAD: spindle" in text
-    assert ";MATERIAL: plywood_baltic_birch_3mm" in text
+    assert ";MATERIAL: birch3" in text
     assert ";TOOL: flat_3.175mm_2flute" in text
 
 

@@ -28,18 +28,24 @@
 #                      cut-through control (slower = deeper)
 #     passes           cut-through passes (1 = single pass; more = deeper)
 #     notes            free-form safety / quality / technique notes
+#   fit (optional):    measured fit data for slot/tab and hole work:
+#     kerf_mm          kerf to compensate (kept wood grows kerf/2 per edge,
+#                      holes shrink kerf/2)
+#     slot_extra_mm    extra slot width over thickness_mm for a tab fit
+#                      (0 = slot drawn exactly at thickness_mm)
+#     verified         what was cut and how it fit
 #   etch (optional):   a SHALLOW, non-cutting score pass (e.g. an orientation
 #                      mark or decorative line design) -- much lower power
 #                      and/or higher feed than `laser`, same static-M3 /
 #                      single-pass conventions. Verify on a fresh material
 #                      with scripts/etch_calibration.py (a self-labeled
 #                      power x feed grid) before trusting an entry's
-#                      numbers on a real part -- plywood_baltic_birch_3mm's
+#                      numbers on a real part -- birch3's
 #                      is calibrated this way; any other material's etch:
 #                      block is still an unverified starting guess until
 #                      it gets the same treatment (jigsawzall/RING_SPEC.md).
 
-- id: plywood_baltic_birch_3mm
+- id: birch3
   family: wood
   thickness_mm: 3.0
   laser:
@@ -70,9 +76,9 @@
       at 25% that's a ~250ms / ~2mm lead-in, not the full 1s/8.3mm a 100%
       cut needs.
 
-- id: plywood_veneer_3ply_3mm
+- id: ply3
   family: wood
-  thickness_mm: 3.0
+  thickness_mm: 2.63   # measured by Alex; sold as 3mm (id kept for existing references)
   laser:
     power_percent: 100
     feed_mm_per_min: 350
@@ -100,7 +106,7 @@
       0.1mm segments + 83mm warmup stalled and burned through -- fixed by
       0.05mm simplify + 0.3mm min segment + 3mm fixed lead-in (emit_etch_gcode).
 
-- id: plywood_baltic_birch_6mm
+- id: birch6
   family: wood
   thickness_mm: 6.0
   laser:
@@ -111,7 +117,7 @@
       Pushing the 10W diode's depth limit. Watch for charred edges.
       If cuts aren't going through, slow feed before adding passes.
 
-- id: bamboo_plywood_3mm
+- id: bamboo3
   family: wood
   thickness_mm: 3.0
   laser:
@@ -122,9 +128,39 @@
       Density varies layer-to-layer more than baltic birch.
       Expect occasional uncut spots; second pass usually finishes them.
 
-- id: mdf_3mm
+- id: mdf3
   family: wood
-  thickness_mm: 3.0
+  thickness_mm: 2.82  # NEW SUPPLIER batch (2026-11-04), measured 2.82 by Alex; much better quality than mdf3old
+  fit:
+    kerf_mm: 0.10
+    slot_extra_mm: 0.0
+    verified: |
+      NOT YET for this batch. Kerf 0.10 and slot = thickness are carried over
+      from mdf3old (verified there). Cut a tab-fit coupon in the new stock
+      and update this block.
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 700
+    passes: 3
+    notes: |
+      2026-11-04: F500 x2 (carried over from mdf3old) scorched badly on this
+      batch, and every cut needed knife cleanup after the parts were punched out.
+      Now 3 lighter passes: less heat per pass, and about 7% more total dwell
+      (3/700 = 0.00429 vs 2/500 = 0.00400 min per mm) so it severs fully.
+      UNVERIFIED: cut the fit coupon first. Still scorched: try F800 x3. Still
+      needs the knife: try F600 x3. Smoke is heavy; air assist mandatory.
+
+- id: mdf3old
+  family: wood
+  thickness_mm: 3.1   # previous supplier, sold as 1/8"; measured 3.10 pressed firmly in the calipers, up to ~3.2 relaxed / humid
+  fit:
+    kerf_mm: 0.10
+    slot_extra_mm: 0.0
+    verified: |
+      2026-11-03, marbles wheel box (scads marbles/clock/wheel_box_gcode.py):
+      10 mm tabs into slots drawn at exactly 3.1 mm, kerf-compensated with
+      0.10 mm, cut at 100% F500 x2. Tabs fit tight and snug with no
+      deforming. Use these values for slot/tab work in THIS (old) stock.
   laser:
     power_percent: 100
     feed_mm_per_min: 500
@@ -136,7 +172,21 @@
       long thin part (e.g. the orpot spiral ribbon) keep it tabbed to the sheet
       or support it so it doesn't shift on the second pass.
 
-- id: balsa_3mm
+- id: mdf6
+  family: wood
+  thickness_mm: 6.35   # sold as 1/4"; NOT measured yet
+  laser:
+    power_percent: 100
+    feed_mm_per_min: 250
+    passes: 4
+    notes: |
+      UNVERIFIED STARTING GUESS (2026-11-04), not cut yet. mdf3 severs at
+      F500 x2 here; this doubles the passes at half that feed for twice the
+      depth. That's a guess, not a calibration, and may be past what the diode
+      can cut cleanly (heavy char, wide kerf). Measure the thickness, then run
+      the warmup ring test (cnc.py cal-laser) before cutting a real part.
+
+- id: balsa3
   family: wood
   thickness_mm: 3.0
   laser:
@@ -147,7 +197,7 @@
       Very soft. Cuts fast and clean. Watch for fire — low density
       means flames can take hold. Air assist mandatory.
 
-- id: cast_acrylic_3mm_clear
+- id: acrylic3clear
   family: acrylic
   thickness_mm: 3.0
   laser:
@@ -160,7 +210,7 @@
       masking tape or painting it (any color). Cast (not extruded);
       extruded acrylic gums up and burns instead of cutting cleanly.
 
-- id: cast_acrylic_3mm_colored
+- id: acrylic3color
   family: acrylic
   thickness_mm: 3.0
   laser:
@@ -170,8 +220,11 @@
     notes: |
       Colored cast acrylic absorbs the diode's wavelength much better
       than clear. Cuts cleanly with polished edges. Cast only.
+      ALEX, 2026-11-04: FAILED on his translucent coloured acrylic on the AnoleX
+      diode (the vendor only claims black works). Treat this recipe as unproven;
+      route clear/coloured acrylic on the CNC spindle instead.
 
-- id: cast_acrylic_3mm_black
+- id: acrylic3
   family: acrylic
   thickness_mm: 3.0
   laser:
@@ -181,8 +234,10 @@
     notes: |
       Best diode-laser acrylic — maximum absorption. Edges come out
       glossy with no flame polishing needed.
+      UNTESTED on the AnoleX (Alex has black sheet, not yet cut, 2026-11-04).
+      Cut a small test square first.
 
-- id: cardboard_2mm
+- id: card2
   family: paper
   thickness_mm: 2.0
   laser:
@@ -193,7 +248,7 @@
       Single-wall corrugated. FIRE RISK — air assist non-negotiable;
       do not dwell. Cuts at very low power; bump only if not through.
 
-- id: cardboard_corrugated_3mm
+- id: corrugated3
   family: paper
   thickness_mm: 3.0
   laser:
@@ -210,7 +265,7 @@
       tests and first spiral flex-test / fit mockups. Verify
       dwell/min-power with cnc.py cal-laser before a real cut.
 
-- id: cardstock_0.3mm
+- id: cardstock03
   family: paper
   thickness_mm: 0.3
   laser:
@@ -221,7 +276,7 @@
       Watch for ignition. Air assist mandatory. Useful for stencils
       and quick calibration tests.
 
-- id: cardboard_thin_1mm
+- id: card1
   family: paper
   thickness_mm: 1.0
   laser:

@@ -31,9 +31,9 @@ Input is an SVG of cut paths; an OpenSCAD 2D export is ideal. Straight segments
 (M/L/H/V/Z) are exact; curves (C/S/Q/T/A) are flattened to short segments.
 
 Examples:
-    svg2gcode.py cut.svg -o cut.gcode --material mdf_3mm
+    svg2gcode.py cut.svg -o cut.gcode --material mdf3
     svg2gcode.py cut.svg --feed 350 --power 100 --passes 2 --warmup-ms 1000
-    svg2gcode.py cut.svg --material mdf_3mm --origin center --s-full-power 1000
+    svg2gcode.py cut.svg --material mdf3 --origin center --s-full-power 1000
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def emit_gcode(cuts: list[Polyline], job: CutJob) -> str:
     lines = _preamble(job)
     for index, cut in enumerate(cuts, start=1):
         lines += _emit_cut(cut, index, len(cuts), job)
-    lines += _footer()
+    lines += _footer(lines)
     return "\n".join(lines)
 
 
@@ -271,8 +271,32 @@ def _preamble(job: CutJob) -> list[str]:
     ]
 
 
-def _footer() -> list[str]:
-    return ["G0 X0 Y0", ""]
+def _footer(lines: list[str] | None = None) -> list[str]:
+    """End-of-job move. Given the job's lines, park clear of the part: laser off, then X0 at the
+    part's max Y (the highest Y of any G1 cut move). Without lines, the old return to X0 Y0."""
+    if lines is None:
+        return ["G0 X0 Y0", ""]
+    return park(max_cut_y(lines))
+
+
+_Y_RE = re.compile(r"\bY(-?[0-9.]+)")
+
+
+def max_cut_y(lines: list[str]) -> float:
+    """highest Y reached by a G1 move (comments ignored); 0 if there are none"""
+    ys = [float(m.group(1)) for ln in lines
+          if ln.split(";")[0].strip().startswith("G1") and (m := _Y_RE.search(ln.split(";")[0]))]
+    return max(ys, default=0.0)
+
+
+def park(y_max: float) -> list[str]:
+    """laser off, then X0 at the part's max Y: out of the way for unloading"""
+    return ["; park: laser off, X0 at the part's max Y", "M5", f"G0 X0 Y{y_max:.3f}", ""]
+
+
+def gcode_name(base: str, w: float, h: float, material: str) -> str:
+    """standard file stem: <part>_<variant>_<W>x<H>_<material>, W x H rounded up to whole mm"""
+    return f"{base}_{math.ceil(w - 1e-9)}x{math.ceil(h - 1e-9)}_{material}"
 
 
 # ---------------------------------------------------------------------------

@@ -93,7 +93,7 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
   takes a separate Y max.
 - The laser sits ~80 mm −Y and ~20 mm −X from the spindle, so cut stand
   notches on the **left (−X) edge**.
-- Material: `plywood_veneer_3ply_3mm`, cut F350 × 1 pass at 100% (S1000).
+- Material: `ply3`, cut F350 × 1 pass at 100% (S1000).
 - Letter outline etch: `--outline-etch-mm 1.0 --etch-smooth-mm 0.10
   --etch-feed 2000 --etch-power 60` (Alex: "more like 60% at F2000";
   it was 40).
@@ -179,7 +179,7 @@ Seed-1 one-variant run: `(0,0,0,0,0,72)`, 100 pieces. Disc r 28.3mm (24.3mm
 would be exactly R-centre to W-centre). Preview:
 `out/final/brown_spoke_s1_preview.png`. **Awaiting Alex's OK**, then
 seeds 1–4 and let him pick. G-code then uses `--material
-plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+ply3 --outline-etch-mm 1.0 --etch-smooth-mm 0.10
 --etch-feed 2000 --etch-power 60 --frame-notches --notch-edge left
 --corner-feet`.
 

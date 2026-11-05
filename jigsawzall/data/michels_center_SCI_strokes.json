@@ -1,5 +1,5 @@
 {
-"source": "jigsawzall/out/final/michels_s1.gcode etch strokes (ring_prototype.py ERIC+MARIA+JULIAN --seed 1 --font round --center-text THE+MICHELS --center-style flat --outline-etch-mm 1.0 --material plywood_veneer_3ply_3mm): closed base loops (pts[0]==pts[-1]) in machine mm, after the emitter's 0.05mm simplify + 0.3mm decimate, before warmup follow-through. The S and C over-burned at 100%/F5000 M3; the I did not.",
+"source": "jigsawzall/out/final/michels_s1.gcode etch strokes (ring_prototype.py ERIC+MARIA+JULIAN --seed 1 --font round --center-text THE+MICHELS --center-style flat --outline-etch-mm 1.0 --material ply3): closed base loops (pts[0]==pts[-1]) in machine mm, after the emitter's 0.05mm simplify + 0.3mm decimate, before warmup follow-through. The S and C over-burned at 100%/F5000 M3; the I did not.",
 "letters": {
 "S": {
 "stroke_20": [

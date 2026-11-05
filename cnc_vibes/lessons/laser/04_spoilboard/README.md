@@ -25,7 +25,7 @@ python lessons/laser/04_spoilboard/spoilboard.py \
     --panel-w 300 --panel-h 200 --hole-cols 6 --hole-rows 4 --hole-spacing 50
 
 # Different material
-python lessons/laser/04_spoilboard/spoilboard.py --material plywood_baltic_birch_3mm
+python lessons/laser/04_spoilboard/spoilboard.py --material birch3
 
 # Layout image only, skip GCode
 python lessons/laser/04_spoilboard/spoilboard.py --no-gcode
@@ -42,7 +42,7 @@ python cnc.py validate lessons/laser/04_spoilboard/build/spoilboard_tile_1.gcode
 | `--hole-dia` | 6.5 | Nominal hole diameter; kerf widens by ~0.2mm |
 | `--margin-x` / `--margin-y` | auto | Distance from panel edge to first hole; defaults centered |
 | `--stock-w` / `--stock-h` | 300, 300 | Available stock size; binds tile size |
-| `--material` | `mdf_3mm` | Material profile id from `profiles/laser_materials.yaml` |
+| `--material` | `mdf3` | Material profile id from `profiles/laser_materials.yaml` |
 | `--no-gcode` | off | Render layout image only (preview without committing) |
 
 ## Output

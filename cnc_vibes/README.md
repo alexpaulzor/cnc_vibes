@@ -15,7 +15,7 @@ You want CNC parts to be **scripts**, not click-trails. You're OK reading Python
 ```bash
 # Photo-engraved jigsaw puzzles moved to their own repo: ~/src/vibes/jigsawzall
 # This repo (cnc_vibes) is the core toolchain + spindle/laser lessons. Example:
-python cnc.py cam profile --head laser --shape circle --diameter 30 --material cardboard_thin_1mm
+python cnc.py cam profile --head laser --shape circle --diameter 30 --material card1
 python cnc.py preview  build/cam_cli/<generated>.gcode   # CAMotics 3D toolpath sim
 python cnc.py validate build/cam_cli/<generated>.gcode   # machine-envelope safety
 # ...load in your sender, cut...
@@ -174,7 +174,7 @@ part = Polygon([(0, 0), (80, 0), (80, 40), (0, 40)])  # 80x40mm rectangle
 gcode = profile_cut(
     part, depth_mm=6.0,
     tool=load_tool("flat_6mm_2flute"),
-    material=load_material("plywood_baltic_birch_6mm"),
+    material=load_material("birch6"),
     cfg=CamConfig(spindle_rpm=18000, safe_z_mm=5.0),
 )
 print(gcode.text)
@@ -189,7 +189,7 @@ from cam import profile_cut, load_tool, load_material
 polys = openscad_to_polygons("my_part.scad")
 gcode = profile_cut(polys[0], depth_mm=6.0,
                     tool=load_tool("flat_6mm_2flute"),
-                    material=load_material("plywood_baltic_birch_6mm"))
+                    material=load_material("birch6"))
 ```
 
 Then `python my_script.py > build/my_part.gcode`, validate, preview, preflight, cut. Same downstream pipeline as any lesson.

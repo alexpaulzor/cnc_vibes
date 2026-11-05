@@ -5,7 +5,7 @@ One ring per gcode file. Two concentric circles cut from sheet material.
 
 Usage:
   python spacer.py --od 6.0 --id 3.2 \\
-                   --material plywood_baltic_birch_3mm \\
+                   --material birch3 \\
                    --out build/spacer_od6_id3.2.gcode
 
 Toolpath dimensions are NOT kerf-compensated. The finished hole will be
@@ -126,7 +126,7 @@ def main() -> None:
     )
     p.add_argument(
         "--material",
-        default="plywood_baltic_birch_3mm",
+        default="birch3",
         help="material id from material_profiles/laser_materials.yaml",
     )
     p.add_argument(

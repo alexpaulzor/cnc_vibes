@@ -278,7 +278,7 @@ def generate(
         ";  lap's line -- that's the darkness of a single-pass etch.",
         ";",
         ";HEAD: laser",
-        ";MATERIAL: plywood_baltic_birch_3mm (scrap)",
+        ";MATERIAL: birch3 (scrap)",
         ";LASER_MODE: static",
         "",
         "$32=1   ; GRBL laser mode",

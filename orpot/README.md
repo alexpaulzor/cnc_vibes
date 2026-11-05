@@ -63,7 +63,7 @@ anchored to the sheet.
 ### One command: `orpot_gcode.py`
 
 ```bash
-python orpot_gcode.py --material mdf_3mm          # -> build/orpot.gcode
+python orpot_gcode.py --material mdf3          # -> build/orpot.gcode
 ```
 
 This drives everything from `orpot.scad`: it exports the **frame** (disc without
@@ -86,7 +86,7 @@ curves/arcs flattened. Reads feed/power/passes from
 
 ```bash
 openscad -o build/cut.svg -D 'MODE="cut"' orpot.scad   # (double-cuts the spirals)
-python svg2laser.py build/cut.svg --material mdf_3mm    # any SVG works
+python svg2laser.py build/cut.svg --material mdf3    # any SVG works
 ```
 
 ## The parts
@@ -107,7 +107,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python orpot.py preview --part disc
 
 # Emit GRBL laser G-code (build/*.gcode) + PNGs. "all" = disc + ribs.
-.venv/bin/python orpot.py cut --part all --material mdf_3mm
+.venv/bin/python orpot.py cut --part all --material mdf3
 
 # 3D sketch / OpenSCAD of the assembled pot.
 .venv/bin/python orpot.py view
@@ -127,7 +127,7 @@ G-code is the deliverable. Conventions match the sibling `jigsawzall` tool and
 this machine: GRBL laser mode (`$32=1`), **static M3** constant power at 100%
 (the weak diode under-fires on M4 dynamic), a ~1s out-and-back **warmup wiggle**
 at the start of every cut to cover the diode cold-start ramp, and per-material
-feed/passes from `profiles/laser_materials.yaml` (`mdf_3mm`: 350 mm/min ×
+feed/passes from `profiles/laser_materials.yaml` (`mdf3`: 350 mm/min ×
 2 passes). Interior holes (slots, openings) are cut before each outer profile so
 parts stay anchored. The G-code assumes Z is already at focal height in your WCS.
 

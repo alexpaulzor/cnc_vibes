@@ -7,7 +7,7 @@
 #   python cnc.py validate build/cut_small_n_seed7.gcode
 
 head: laser
-material: mdf_3mm
+material: mdf3
 gcode: build/cut_small_n_seed7.gcode
 
 jigsaw:

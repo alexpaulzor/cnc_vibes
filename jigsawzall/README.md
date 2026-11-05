@@ -16,8 +16,8 @@ python jigsaw.py preview --size full --word NORA --seed 7
 python jigsaw.py preview --size small --word N
 
 # Cut GCode
-python jigsaw.py cut --size full --word NORA --material mdf_3mm
-python jigsaw.py cut --size small --word N --material mdf_3mm
+python jigsaw.py cut --size full --word NORA --material mdf3
+python jigsaw.py cut --size small --word N --material mdf3
 
 # Photo raster + cut (three output files: raster, cut, combined)
 python jigsaw.py raster --image kitten.jpg --size small --mode halftone

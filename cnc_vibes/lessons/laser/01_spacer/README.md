@@ -30,7 +30,7 @@ Generate ready-to-cut GCode for a stackable laser-cut PCB spacer ring. Two conce
 python lessons/laser/01_spacer/spacer.py \
     --od 6.0 \
     --id 3.2 \
-    --material plywood_baltic_birch_3mm \
+    --material birch3 \
     --out lessons/laser/01_spacer/build/spacer.gcode
 ```
 
@@ -40,7 +40,7 @@ All arguments are optional and default to the values above. The default produces
 |---|---|---|
 | `--od FLOAT` | 6.0 | Outer diameter (toolpath), mm. |
 | `--id FLOAT` | 3.2 | Inner diameter (toolpath), mm. M3 clearance. |
-| `--material ID` | `plywood_baltic_birch_3mm` | Material id from `profiles/laser_materials.yaml` (see `cnc.py help laser-materials`). |
+| `--material ID` | `birch3` | Material id from `profiles/laser_materials.yaml` (see `cnc.py help laser-materials`). |
 | `--out PATH` | derived from params | Output `.gcode` path. |
 
 Common alternatives for `--id`: `4.2` (M4 clearance), `5.2` (M5 / T-slot M5 clearance).

@@ -409,7 +409,7 @@ def main():
     ap.add_argument("--stance", type=float, default=200.0, help="foot spacing along the tray edge")
     ap.add_argument("--mdf-clear", type=float, default=0.2, help="slot = MDF 3mm + this")
     ap.add_argument("--no-hole", action="store_true")
-    ap.add_argument("--material", default="plywood_veneer_3ply_3mm")
+    ap.add_argument("--material", default="ply3")
     ap.add_argument("--scrap", action="store_true",
                     help="instead of the sheet: 1 foot and 2 feet (stacked head-to-tail) on the "
                          "smallest footprint, origin at a scrap's corner -> stand_feet_1x/2x.gcode")

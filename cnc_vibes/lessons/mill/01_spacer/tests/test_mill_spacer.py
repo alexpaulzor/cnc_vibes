@@ -31,7 +31,7 @@ def machine():
 @pytest.fixture(scope="module")
 def material():
     mats = load_yaml(PROFILES / "materials.yaml")
-    return next(m for m in mats if m["id"] == "plywood_baltic_birch_6mm")
+    return next(m for m in mats if m["id"] == "birch6")
 
 
 @pytest.fixture(scope="module")

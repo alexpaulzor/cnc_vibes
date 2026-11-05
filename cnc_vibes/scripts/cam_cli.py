@@ -4,13 +4,13 @@ Two modes:
 
   Non-interactive (shell):
     cnc.py cam profile  --shape rrect --width 60 --height 40 --radius 5 \\
-        --depth 6 --material mdf_12mm --tool flat_6mm_2flute --side outside
+        --depth 6 --material mdf12 --tool flat_6mm_2flute --side outside
     cnc.py cam drill    --pattern grid --cols 3 --rows 3 --spacing 25 \\
-        --depth 5 --material mdf_12mm --tool drill_3.2mm_m4_clearance
+        --depth 5 --material mdf12 --tool drill_3.2mm_m4_clearance
     cnc.py cam engrave  --text "BIN A" --x 10 --y 10 --height 6 \\
-        --depth 0.3 --material mdf_12mm --tool vbit_60deg_6mm
+        --depth 0.3 --material mdf12 --tool vbit_60deg_6mm
     cnc.py cam profile  --head laser --shape circle --diameter 30 \\
-        --material cardboard_thin_1mm
+        --material card1
 
   Interactive (TUI):
     cnc.py cam
