@@ -24,6 +24,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(SCRIPT_DIR.parent / "quickcut"))
+import gcode as qc  # noqa: E402  (G-code core: gcode.write validates before writing)
 
 from emit import (  # noqa: E402
     emit_cut_gcode,
@@ -263,7 +265,7 @@ def cmd_cut(args) -> int:
             power_percent=args.power,
         )
         out = BUILD_DIR / f"cut_disc_{args.material}.gcode"
-        out.write_text(gcode)
+        qc.write(out, gcode)
         laser_on = gcode.count("\nM3 ")
         print(f"-> {out}  ({len(gcode.splitlines())} lines, {laser_on} cut(s))")
         png, _ = render_disc(
@@ -283,7 +285,7 @@ def cmd_cut(args) -> int:
             power_percent=args.power,
         )
         out = BUILD_DIR / f"cut_ribs_{args.material}.gcode"
-        out.write_text(gcode)
+        qc.write(out, gcode)
         laser_on = gcode.count("\nM3 ")
         print(f"-> {out}  ({len(gcode.splitlines())} lines, {laser_on} cut(s))")
         png, _ = render_preview(

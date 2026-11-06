@@ -20,8 +20,8 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
-from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
+import gcode  # noqa: E402  (THE G-code core: preamble, cut, frame, park, validation)
 
 import numpy as np
 import yaml
@@ -108,6 +108,15 @@ def _ring_coords(ring) -> list[tuple[float, float]]:
     return [(float(x), float(y)) for x, y in ring.coords]
 
 
+def _job(material: dict, cfg, feed_override=None, power_percent=None):
+    over = {"min_segment_mm": cfg.min_segment_mm}
+    if feed_override is not None:
+        over["feed_mm_per_min"] = feed_override
+    if power_percent is not None:
+        over["power_percent"] = power_percent
+    return gcode.job(material["id"], **over)
+
+
 def emit_cut_gcode(
     parts: list[tuple[str, Polygon]],
     material: dict,
@@ -116,60 +125,22 @@ def emit_cut_gcode(
     feed_override: int | None = None,
     power_percent: float | None = None,
 ) -> str:
-    """Emit static-M3 cut GCode for one or more parts.
-
-    For each part, interior holes (slots) are cut FIRST, then the outer profile
-    last, so the piece stays anchored to the sheet while its internal features
-    are cut. Every ring gets a front-loaded warmup wiggle and `passes` repeats;
-    points are decimated to cfg.min_segment_mm. Coordinates are already machine
-    mm."""
-    laser = material["laser"]
-    pct = power_percent if power_percent is not None else laser["power_percent"]
-    power_s = int(round(pct * 10))
-    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
-    passes = laser["passes"]
-
-    warmup_mm = WARMUP_MS / 60000.0 * feed  # mm covered during the ramp at this feed
-
-    extra = [
+    """Cut G-code for one or more parts through quickcut.gcode: each part's interior holes (slots)
+    first, its outer profile last (so the piece stays anchored), the shop's standard cut (warmup on
+    every path, recipe passes, loop overlap), frame + park. Coordinates are already machine mm.
+    Not validated here (callers may pass centred test geometry): orpot.py writes with gcode.write."""
+    j = _job(material, cfg, feed_override, power_percent)
+    lines = gcode.preamble(j, title=title, notes=[
         "orpot: two flat spiral ramps + radial ribs; assemble then lift/coil",
         "holes (slots) cut first, outer profile last; kerf becomes clearance",
-        "ASSUMES Z already at focal height in your WCS",
-        f"warmup: {WARMUP_MS:.0f}ms = {warmup_mm:.1f}mm out-and-back at F{feed}",
-    ]
-    lines = _header(title=title, material_id=material["id"], extra=extra)
-
-    def cut_ring(pts, label):
-        pts = decimate(pts, cfg.min_segment_mm)
-        if len(pts) < 3:
-            return
-        x0, y0 = pts[0]
-        lines.append(f"; --- {label} ---")
-        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-        lines.append(f"M3 S{power_s}")
-        lines.append(f"F{feed}")
-        for wx, wy in warmup_wiggle(pts, warmup_mm):
-            lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
-        # Multi-pass ping-pong: forward, then reverse over the same points,
-        # alternating — never a laser-on move back to the start.
-        for pass_n in range(passes):
-            if passes > 1:
-                dirn = "forward" if pass_n % 2 == 0 else "reverse"
-                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
-            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-        lines.append("M5")
-        lines.append("")
-
+        "ASSUMES Z already at focal height in your WCS"])
+    rings = []
     for name, poly in parts:
-        for i, interior in enumerate(poly.interiors):  # slots first
-            cut_ring(_ring_coords(interior), f"{name} slot {i + 1}")
-        cut_ring(_exterior_coords(poly), f"{name} profile")  # outer last
-        lines.append("")
-
-    lines += ["G0 X0 Y0", ""]
-    return "\n".join(add_frame(lines))
+        rings += [(f"{name} slot {i + 1}", _ring_coords(r)) for i, r in enumerate(poly.interiors)]
+        rings.append((f"{name} profile", _exterior_coords(poly)))
+    for k, (label, pts) in enumerate(rings, 1):
+        lines += gcode.cut(gcode.Polyline(pts, True), j, k, len(rings), label=f"{label}:")
+    return gcode.render(lines, validate=False)
 
 
 def emit_disc_gcode(
@@ -181,57 +152,20 @@ def emit_disc_gcode(
     feed_override: int | None = None,
     power_percent: float | None = None,
 ) -> str:
-    """Emit cut GCode for the SINGLE-PIECE disc: rib-slot holes first, then the
-    open spiral cut paths, then the outer profile last (so the piece stays
-    anchored to the sheet until the final cut). `cuts` are open LineStrings."""
-    laser = material["laser"]
-    pct = power_percent if power_percent is not None else laser["power_percent"]
-    power_s = int(round(pct * 10))
-    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
-    passes = laser["passes"]
-    warmup_mm = WARMUP_MS / 60000.0 * feed
-
-    extra = [
+    """The SINGLE-PIECE disc through quickcut.gcode: rib-slot holes first, then the open spiral cut
+    paths, then the outer profile last (the piece stays anchored until the final cut)."""
+    j = _job(material, cfg, feed_override, power_percent)
+    lines = gcode.preamble(j, title=title, notes=[
         "orpot single-piece disc: 2 interleaved spiral cuts, expands into a pot",
         "order: rib slots, then spiral cuts, then outer profile last",
         "spiral cuts are OPEN paths (kerf gap); the disc stays one piece",
-        "ASSUMES Z already at focal height in your WCS",
-        f"warmup: {WARMUP_MS:.0f}ms = {warmup_mm:.1f}mm out-and-back at F{feed}",
-    ]
-    lines = _header(title=title, material_id=material["id"], extra=extra)
-
-    def cut_path(pts, label, closed):
-        pts = decimate(pts, cfg.min_segment_mm)
-        if len(pts) < (3 if closed else 2):
-            return
-        x0, y0 = pts[0]
-        lines.append(f"; --- {label} ---")
-        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-        lines.append(f"M3 S{power_s}")
-        lines.append(f"F{feed}")
-        for wx, wy in warmup_wiggle(pts, warmup_mm):
-            lines.append(f"G1 X{wx:.3f} Y{wy:.3f}")
-        # Multi-pass ping-pong: forward, then reverse over the same points,
-        # alternating — never a laser-on move back to the start.
-        for pass_n in range(passes):
-            if passes > 1:
-                dirn = "forward" if pass_n % 2 == 0 else "reverse"
-                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
-            seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-        lines.append("M5")
-        lines.append("")
-
-    for i, interior in enumerate(profile.interiors):  # rib slots first
-        cut_path(_ring_coords(interior), f"rib slot {i + 1}", closed=True)
-    for i, ln in enumerate(cuts):  # open spiral cuts
-        pts = [(float(x), float(y)) for x, y in ln.coords]
-        cut_path(pts, f"spiral cut {i + 1}", closed=False)
-    cut_path(_exterior_coords(profile), "disc profile", closed=True)  # outer last
-
-    lines += ["G0 X0 Y0", ""]
-    return "\n".join(add_frame(lines))
+        "ASSUMES Z already at focal height in your WCS"])
+    paths = [(f"rib slot {i + 1}", _ring_coords(r), True) for i, r in enumerate(profile.interiors)]
+    paths += [(f"spiral cut {i + 1}", [(float(x), float(y)) for x, y in ln.coords], False) for i, ln in enumerate(cuts)]
+    paths.append(("disc profile", _exterior_coords(profile), True))
+    for k, (label, pts, closed) in enumerate(paths, 1):
+        lines += gcode.cut(gcode.Polyline(pts, closed), j, k, len(paths), label=f"{label}:")
+    return gcode.render(lines, validate=False)
 
 
 # ---------------------------------------------------------------------------

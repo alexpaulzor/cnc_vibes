@@ -266,14 +266,17 @@ def check(text: str, profile: Path | None = None) -> list:
     return validate(text, yaml.safe_load(prof.read_text()), tools)
 
 
-def render(lines) -> str:
-    """finished text (frame + park), checked: raises GcodeError on a long line or any violation"""
+def render(lines, validate: bool = True) -> str:
+    """finished text (frame + park), checked: raises GcodeError on a long line or (validate=True)
+    any validator violation. Accepts a line list or text."""
+    if isinstance(lines, str):
+        lines = lines.split("\n")
     lines = finish(lines)
     long = [(i, len(l)) for i, l in enumerate(lines, 1) if len(l) >= MAX_LINE]
     if long:
         raise GcodeError(f"lines of {MAX_LINE}+ characters end a Grbl_ESP32 SD job silently: {long[:5]}")
     text = "\n".join(lines)
-    bad = check(text)
+    bad = check(text) if validate else []
     if bad:
         raise GcodeError("G-code fails validation:\n  " + "\n  ".join(str(v) for v in bad[:20])
                          + (f"\n  ... {len(bad) - 20} more" if len(bad) > 20 else ""))
@@ -282,7 +285,7 @@ def render(lines) -> str:
 
 def write(path, lines, validate: bool = True) -> Path:
     """the one way to write laser G-code: finish, check, write"""
-    text = render(lines) if validate else "\n".join(finish(lines))
+    text = render(lines, validate)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
