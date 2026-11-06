@@ -28,6 +28,8 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 from typing import Literal
 
 import yaml
@@ -137,7 +139,9 @@ class GcodeOutput:
 
     @property
     def text(self) -> str:
-        return "\n".join(self.lines) + "\n"
+        # laser jobs get the laser-off frame trace first (gcode_frame); router jobs are left alone
+        lines = add_frame(self.lines) if any(l.strip() == ";HEAD: laser" for l in self.lines) else self.lines
+        return "\n".join(lines) + "\n"
 
 
 def _warn_or_fail(msg: str, cfg: CamConfig, warnings: list[str]) -> None:

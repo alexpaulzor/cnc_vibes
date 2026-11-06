@@ -143,7 +143,9 @@ def test_ribs_gcode_conventions():
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
     assert "\nM4 " not in g
-    assert g.count("; pass 2 of 2") >= cfg.n_ribs  # 2 passes each
+    n = material["laser"]["passes"]
+    assert n >= 2
+    assert g.count(f"; pass {n} of {n}") >= cfg.n_ribs  # every pass of each rib
     assert f"F{material['laser']['feed_mm_per_min']}" in g
 
 
@@ -152,10 +154,12 @@ def test_multipass_pingpongs_no_laseron_jump():
     A later pass never repositions to the start, so there is no G0 between passes
     and no long laser-on chord back across the part (the bug that ruined a cut)."""
     cfg = SpiralConfig()
-    material = load_material("mdf3")  # 2 passes
+    material = load_material("mdf3")  # multi-pass (the recipe sets how many)
+    n = material["laser"]["passes"]
+    assert n >= 2
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
-    assert "pass 2 of 2 (reverse)" in g
+    assert f"pass 2 of {n} (reverse)" in g
     lines = g.splitlines()
 
     def _xy(l):
@@ -164,7 +168,7 @@ def test_multipass_pingpongs_no_laseron_jump():
 
     checked = 0
     for i, l in enumerate(lines):
-        if "pass 2 of 2" not in l:
+        if f"pass 2 of {n}" not in l:
             continue
         prev = next(_xy(lines[j]) for j in range(i - 1, 0, -1) if _xy(lines[j]))
         nxt_i = next(j for j in range(i + 1, len(lines)) if _xy(lines[j]))

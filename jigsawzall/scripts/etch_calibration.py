@@ -13,6 +13,8 @@ directly rather than going through cfg/img_to_machine_mm.
 """
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "quickcut"))
@@ -147,7 +149,7 @@ def build():
             lines.append("")
 
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 if __name__ == "__main__":

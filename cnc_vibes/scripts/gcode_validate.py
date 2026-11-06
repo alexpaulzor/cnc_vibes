@@ -26,6 +26,9 @@ Spindle rules (default):
                      an M3 with S > 0
 
 Laser rules:
+  * laser_frame    — a "; frame:" block (gcode_frame.add_frame: rapid laser-off trace of the job's
+                     extent) comes before the first M3/M4, so a job that won't fit hits an endstop
+                     before the laser has marked anything
   * bounds         — same as spindle
   * max_feed       — same as spindle (XY cap; laser jobs have no Z motion)
   * laser_mode     — $32=1 must appear somewhere in the file
@@ -152,6 +155,13 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
                 0, "laser_mode", "laser job is missing $32=1 (GRBL laser-mode setting)"
             )
         )
+
+    if head == "laser":
+        first_on = re.search(r"^\s*M[34]\b", gcode_text, re.MULTILINE)
+        frame = gcode_text.find("; frame:")
+        if first_on and (frame < 0 or frame > first_on.start()):
+            violations.append(Violation(0, "laser_frame", "no '; frame:' laser-off trace before the first M3/M4 "
+                                        "(gcode_frame.add_frame)"))
 
     for line_no, raw in enumerate(gcode_text.splitlines(), start=1):
         if len(raw) >= MAX_LINE:

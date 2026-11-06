@@ -29,6 +29,8 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 import yaml
 from PIL import Image, ImageDraw, ImageFont
@@ -359,7 +361,7 @@ def emit_tile_gcode(tile: Tile, hole_dia: float, material: dict) -> str:
     emit_closed_path("perimeter", perim)
 
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 # ---------------------------------------------------------------------------

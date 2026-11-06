@@ -20,6 +20,8 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 import numpy as np
 import yaml
@@ -167,7 +169,7 @@ def emit_cut_gcode(
         lines.append("")
 
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 def emit_disc_gcode(
@@ -229,7 +231,7 @@ def emit_disc_gcode(
     cut_path(_exterior_coords(profile), "disc profile", closed=True)  # outer last
 
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 # ---------------------------------------------------------------------------
