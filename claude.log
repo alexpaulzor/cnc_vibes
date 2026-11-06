@@ -1,0 +1,9 @@
+# claude.log -- milestones, decisions, discoveries (newest at the bottom)
+# Format: date | GOAL / START / DONE / LEARNED / NEED / DECISION | text
+
+2026-11-06 | GOAL | Consolidate all laser G-code generation into quickcut (single entry point); clean up branches. Plan: cnc_vibes/HANDOFF_quickcut_consolidation.md.
+2026-11-06 | DONE | scads: master fast-forwarded to claude/wire-marble-track (6fc7507). Alex authorised merges; no other agents running.
+2026-11-06 | LEARNED | cnc_vibes main is an ancestor of claude/funny-mccarthy-gh3t8s (fast-forward); circular-text-puzzle branch is fully contained in funny.
+2026-11-06 | LEARNED | Test baseline on funny-mccarthy alone: cnc_vibes 32 failed/533 passed, quickcut 9 passed, orpot 2 failed/9 passed, jigsawzall 51 failed + 8 errors/101 passed, cnc_calibrate 51 passed. The jigsawzall + cnc_vibes failures pre-date this work.
+2026-11-06 | DONE | cnc_vibes: merged claude/wire-marble-track into funny-mccarthy's tip (0 conflicts there); re-ran tools/rename_material_ids.py on the jigsaw branch's newer files (it now skips itself, HANDOFF docs and out/ logs). Tests: no new failures vs the funny baseline (orpot now 11/11).
+2026-11-06 | LEARNED | Laser emitters still without the frame after the merge: cnc_vibes/scripts/laser_cam.py, jigsawzall/scripts/ring_lint.py (+ interactive_cal, live streaming, by design). They get folded into quickcut in the consolidation.

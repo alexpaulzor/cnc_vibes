@@ -100,7 +100,7 @@ def mdf_grid():
             sq = (_chamfered(x0, y0, x0 + 12, y0 + 12) if (r, c) == (0, 0)
                   else box(x0, y0, x0 + 12, y0 + 12))
             jobs.append((list(sq.exterior.coords), f, 100.0, p))
-    return _emit("MDF cut-through grid: feed (rows) x passes (columns)", "mdf_3mm", jobs,
+    return _emit("MDF cut-through grid: feed (rows) x passes (columns)", "mdf3", jobs,
                  ["rows bottom->top: F" + "/".join(map(str, feeds)),
                   "columns left->right: passes " + "/".join(map(str, passes)),
                   "chamfered square = F200 x1; a square that drops out cut through",
@@ -111,7 +111,7 @@ def focus_ramp():
     jobs = []
     for y, f, pct in ((15.0, 300, 100.0), (30.0, 500, 100.0), (45.0, 800, 100.0), (60.0, 3000, 20.0)):
         jobs.append(([(10.0, y), (190.0, y)], f, pct, 1))
-    return _emit("focus ramp: tilt the scrap, far end (x=190) up 10mm", "mdf_3mm", jobs,
+    return _emit("focus ramp: tilt the scrap, far end (x=190) up 10mm", "mdf3", jobs,
                  ["lines along X at y=15 F300, y=30 F500, y=45 F800 (100%), y=60 F3000 20% mark",
                   "focal offset runs 0 -> 10mm along each line: thinnest mark = focus,",
                   "how far the F300 line still cuts through = usable beam depth"])

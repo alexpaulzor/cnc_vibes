@@ -21,6 +21,8 @@ for root in sys.argv[1:]:
     files = subprocess.run(["git", "-C", root, "ls-files"], capture_output=True, text=True).stdout.split()
     for f in files:
         p = Path(root) / f
+        if p.resolve() == Path(__file__).resolve() or p.name.startswith("HANDOFF") or "/out/" in str(p):
+            continue                      # itself, handoff docs that quote the old ids, generated logs
         if "/gcode/" in str(p) or p.suffix in (".png", ".jpg", ".pyc", ".pdf", ".stl", ".gcode", ".nc"): continue
         try: s = p.read_text()
         except Exception: continue

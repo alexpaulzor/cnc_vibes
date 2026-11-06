@@ -1420,7 +1420,7 @@ current veneered 3-ply stock is untested; scrap-test first.
 
 **Delivered:** `ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font
 round --center-text PARKER+MCGUIRE --center-style ring --center-split
---pack-words --keep-seams --material plywood_veneer_3ply_3mm
+--pack-words --keep-seams --material ply3
 --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40
 --frame-notches --gcode out/final/parker_mcguire_s1.gcode` -- 290mm disc,
 106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
@@ -1501,7 +1501,7 @@ scrap-test it.
 **Delivered:** `ring_prototype.py BRIAN+GILLIAN+LUCY+MAIA --seed 2 --font
 round --center-text CAVAGNOLO --center-style ring --center-split
 --center-cap-max-mm 18 --pack-words --keep-seams --material
-plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+ply3 --outline-etch-mm 1.0 --etch-smooth-mm 0.10
 --etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left
 --corner-feet --gcode out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
 This replaces an earlier cut with "THE CAVAGNOLOS" as two flat lines.
