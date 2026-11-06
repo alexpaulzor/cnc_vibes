@@ -45,8 +45,8 @@ import json
 import math
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # cnc_vibes root: gcode_frame
-from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 from types import SimpleNamespace
 
 DIR = Path(__file__).resolve().parent
@@ -203,7 +203,7 @@ def generate(rows, machine=None, sender=None, material_id="ply3"):
         ";   letter looks alike. Photo it straight down next to a ruler.",
         ";",
     ]
-    gcode = "\n".join(add_frame(legend + body + tail))
+    gcode = _qc.render(legend + body + tail, validate=False)
     xs_ys = [float(v) for ln in gcode.splitlines() if not ln.startswith(";")
              for v in __import__("re").findall(r"[XY](-?[\d.]+)", ln)]
     assert all(0.0 <= v <= 290.0 for v in xs_ys), "plate outside 0..290mm"

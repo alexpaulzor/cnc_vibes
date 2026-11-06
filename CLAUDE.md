@@ -19,11 +19,15 @@ This matters most for anything that drives a physical action (laser
 power/feed/timing, cut depth, tolerances, dimensions) where a wrong
 figure by even a small factor can produce a bad or unsafe cut.
 
-## Laser G-code always starts with a frame pass (non-negotiable)
+## Laser G-code goes through quickcut only (non-negotiable)
 
-Every laser G-code file any tool here (or in scads/marbles) generates must call
-`gcode_frame.add_frame(lines)` (repo root) before writing: it inserts a rapid, laser-off
-trace of the job's full X/Y extent ahead of the first move, so a job that won't fit
-from the chosen zero hits an endstop before the laser has marked anything. The
-validator enforces it (`laser_frame` rule: a `; frame:` block before the first M3/M4).
-New emitters: route the final line list through `add_frame` (idempotent).
+`quickcut/gcode.py` is the single point of entry for laser G-code in this repo and in
+scads/marbles. Every file is finished by `gcode.render()` / written by `gcode.write()`,
+which add the frame pass (rapid laser-off trace of the job's full X/Y extent before the
+first move, so a job that won't fit hits an endstop before the laser marks anything) and
+the park (laser off, X0 at the highest cut Y), refuse lines of 255+ characters (they end a
+Grbl_ESP32 SD job silently), and run `gcode_validate`. Standard cuts use `gcode.cut()`
+(static M3, warmup wiggle on every path, recipe passes, loop overlap) and `gcode.order()`
+(middle-out: contents before their container, with short travel). Materials: `gcode.job()`
+/ `gcode.fit()` with the short ids (mdf3, ply3, birch3 ...). New rules go in quickcut,
+once. `quickcut/tests/test_single_entry.py` fails any emitter that bypasses it.

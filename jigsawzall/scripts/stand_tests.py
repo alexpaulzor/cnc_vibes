@@ -37,6 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
 from shapely.geometry import Polygon, box  # noqa: E402
 
@@ -64,7 +66,7 @@ def _emit(title, material_id, jobs, extra=()):
         L = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
         total_s += (L * passes + lead) / (feed / 60)
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines), total_s
+    return _qc.render(lines, validate=False), total_s
 
 
 def _chamfered(x0, y0, x1, y1, c=3.0):

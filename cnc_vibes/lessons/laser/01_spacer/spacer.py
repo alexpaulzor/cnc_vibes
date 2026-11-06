@@ -22,8 +22,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # cnc_vibes root: gcode_frame
-from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
 import yaml
 
@@ -112,7 +112,7 @@ def generate_gcode(od_mm: float, id_mm: float, material: dict) -> str:
         "",
         "G0 X0 Y0  ; park at WCS origin",
     ]
-    return "\n".join(add_frame(lines)) + "\n"
+    return _qc.render(lines, validate=False) + "\n"
 
 
 def main() -> None:

@@ -1,5 +1,13 @@
 # Handoff: make quickcut the single point of entry for laser G-code (+ clean up branches)
 
+> **Status 2026-11-06 (see claude.log):** branches merged (main = jigsaw branch + this work;
+> scads master fast-forwarded). Core built (`quickcut/gcode.py`, `order.py`, `frame.py`). scads/marbles,
+> orpot, svg2gcode emit through it; cnc_calibrate, lessons, cam/laser_cam and jigsawzall finish every file
+> through `gcode.render()`. A drift-guard test enforces it. **Remaining:** move jigsawzall's own cut/etch
+> motion onto `gcode.cut()/etch()` (triage its 51 failing + 8 erroring tests first); give the calibration
+> grids a validator exemption or fix their F5000 cells; delete the merged remote branches
+> (funny-mccarthy, circular-text) in the GitHub UI; optional OR-tools backend for `order.py`.
+
 Written 2026-11-06. ROADMAP items C108 (cut-order optimizer) and C109 (consolidation) live in
 `scads/marbles/clock/ROADMAP.md`. Read `CLAUDE.md` first: two rules there are non-negotiable
 (stated-figure accuracy; every laser file starts with a frame pass).

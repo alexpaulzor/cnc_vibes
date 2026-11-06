@@ -33,8 +33,8 @@ import argparse
 import math
 from pathlib import Path
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
-from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -679,7 +679,7 @@ def main(argv=None) -> int:
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "cal_laser.gcode"
-    out.write_text("\n".join(add_frame(lines)))
+    out.write_text(_qc.render(lines, validate=False))
     key_path = _render_key(b, feeds, T, meta)
     png_path = _render_gcode_png(lines, BUILD_DIR / "cal_laser.png")
     print(

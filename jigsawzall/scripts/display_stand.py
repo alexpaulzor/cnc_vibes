@@ -40,6 +40,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
 from shapely import affinity  # noqa: E402
 from shapely.geometry import LineString, MultiLineString, Point, Polygon, box  # noqa: E402
@@ -192,7 +194,7 @@ def emit_gcode(paths, material, title, notes=None):
             pts = pts[::-1]
         lines += ["M5", ""]
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return _qc.render(lines, validate=False)
 
 
 def render(out_dir, foot, info, feet, frame_out, stock, paths, stab):
