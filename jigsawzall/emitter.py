@@ -26,6 +26,8 @@ import math
 import sys
 from itertools import groupby
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 import yaml
 from PIL import Image
@@ -272,7 +274,7 @@ def emit_cut_gcode_simple(
             lines.append("M5")
             lines.append("")
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +490,7 @@ def emit_etch_gcode(
                      "(quickcut/arcfit.py)")
     if motion_report:
         _insert_motion_report(lines, machine, sender)
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 def _insert_motion_report(lines, machine=None, sender=None):
@@ -1341,7 +1343,7 @@ def emit_cut_gcode_full(
         lines.append("M5")
         lines.append("")
     lines += ["G0 X0 Y0", ""]
-    return "\n".join(lines)
+    return "\n".join(add_frame(lines))
 
 
 class _CutIndex:
@@ -1476,7 +1478,7 @@ def combined_raster_and_cut(
             break
     cut_body = cut_lines[body_start:]
     return (
-        "\n".join(head + raster_lines + [""] + ["; --- cut phase ---"] + cut_body)
+        "\n".join(add_frame(head + raster_lines + [""] + ["; --- cut phase ---"] + cut_body))
         + "\n"
     )
 
@@ -1494,4 +1496,4 @@ def raster_only_gcode(
             "Run this file FIRST, verify, then run the _cut file.",
         ],
     )
-    return "\n".join(head + raster_lines + ["", "G0 X0 Y0", ""]) + "\n"
+    return "\n".join(add_frame(head + raster_lines + ["", "G0 X0 Y0", ""])) + "\n"

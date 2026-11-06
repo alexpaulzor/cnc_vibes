@@ -11,6 +11,9 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from gcode_validate import validate  # noqa: E402
 
+sys.path.insert(0, str(REPO.parent))
+from gcode_frame import add_frame  # noqa: E402
+
 
 PROFILE = {
     "name": "test",
@@ -127,8 +130,17 @@ LASER_HEADER = ";HEAD: laser\n$32=1\nG21\nG90\nM5\n"
 
 def test_laser_job_with_m3_static_is_clean():
     # A weak diode wants static M3 constant power — the default, no declaration.
-    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\nG0 X0 Y0\n"
+    gcode = add_frame(LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\nG0 X0 Y0\n")
     assert validate(gcode, PROFILE, TOOLS) == []
+
+
+def test_laser_job_without_frame_flagged():
+    # the laser-off frame trace must come before the laser first fires
+    gcode = LASER_HEADER + "G0 X10 Y10\nM3 S1000\nF400\nG1 X20 Y10\nM5\nG0 X0 Y0\n"
+    assert "laser_frame" in _rules(validate(gcode, PROFILE, TOOLS))
+    framed = add_frame(gcode)
+    assert framed.index("; frame:") < framed.index("M3 S1000")
+    assert "G0 X0.000 Y0.000" in framed and "G0 X20.000 Y10.000" in framed   # the job's extent corners
 
 
 def test_laser_job_missing_dollar_32_flagged():
@@ -194,3 +206,11 @@ def test_spindle_default_when_no_head_marker():
     # And no laser rules should fire.
     assert "laser_mode" not in rules
     assert "laser_dynamic_power" not in rules
+
+
+def test_long_line_flagged():
+    # Grbl_ESP32's SD runner reads lines into a 255-byte buffer; a longer line silently ends the job
+    ok = "; " + "x" * 252 + "\nG90\n"          # 254 characters: fine
+    bad = "; " + "x" * 253 + "\nG90\n"         # 255 characters: stops the SD job
+    assert "line_length" not in _rules(validate(ok, PROFILE, TOOLS))
+    assert "line_length" in _rules(validate(bad, PROFILE, TOOLS))

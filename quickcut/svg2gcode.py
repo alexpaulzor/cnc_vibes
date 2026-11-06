@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 from materials import SHARED_MATERIALS, load_material  # noqa: E402
 from motion import (  # noqa: E402
@@ -276,6 +278,7 @@ def _footer(lines: list[str] | None = None) -> list[str]:
     part's max Y (the highest Y of any G1 cut move). Without lines, the old return to X0 Y0."""
     if lines is None:
         return ["G0 X0 Y0", ""]
+    lines[:] = add_frame(lines)          # frame pass first: in place, so every caller's file gets it
     return park(max_cut_y(lines))
 
 

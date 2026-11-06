@@ -10,6 +10,11 @@ The validator detects the target head from a comment in the first 20 lines:
     ;HEAD: laser     -> apply laser-mode rules
     (no marker)      -> apply spindle rules (default)
 
+All files:
+  * line_length    — every line (comments included) is under 255 characters. Grbl_ESP32's SD
+                     runner reads lines into a 255-byte buffer (SDCard.cpp readFileLine(line, 255));
+                     a longer line ends the job there silently, without an error.
+
 Spindle rules (default):
   * bounds         — every coordinate is inside the machine envelope
   * max_feed       — every F value is <= machine max feed (XY or Z plunge)
@@ -21,6 +26,9 @@ Spindle rules (default):
                      an M3 with S > 0
 
 Laser rules:
+  * laser_frame    — a "; frame:" block (gcode_frame.add_frame: rapid laser-off trace of the job's
+                     extent) comes before the first M3/M4, so a job that won't fit hits an endstop
+                     before the laser has marked anything
   * bounds         — same as spindle
   * max_feed       — same as spindle (XY cap; laser jobs have no Z motion)
   * laser_mode     — $32=1 must appear somewhere in the file
@@ -120,6 +128,9 @@ def _tool_by_id(tools: list[dict], tool_id: str) -> dict | None:
     return next((t for t in tools if t.get("id") == tool_id), None)
 
 
+MAX_LINE = 255   # Grbl_ESP32 SDCard.cpp: readFileLine(fileLine, 255) fails on len >= 255
+
+
 def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violation]:
     head = detect_head(gcode_text)
     laser_mode = detect_laser_mode(gcode_text) if head == "laser" else "static"
@@ -145,7 +156,18 @@ def validate(gcode_text: str, profile: dict, tools: list[dict]) -> list[Violatio
             )
         )
 
+    if head == "laser":
+        first_on = re.search(r"^\s*M[34]\b", gcode_text, re.MULTILINE)
+        frame = gcode_text.find("; frame:")
+        if first_on and (frame < 0 or frame > first_on.start()):
+            violations.append(Violation(0, "laser_frame", "no '; frame:' laser-off trace before the first M3/M4 "
+                                        "(gcode_frame.add_frame)"))
+
     for line_no, raw in enumerate(gcode_text.splitlines(), start=1):
+        if len(raw) >= MAX_LINE:
+            violations.append(Violation(line_no, "line_length",
+                                        f"{len(raw)} characters; Grbl_ESP32's SD runner stops at a line of "
+                                        f"{MAX_LINE} or more (shorten or split the comment)"))
         if tool_id := _extract_tool_decl(raw):
             state.declared_tool_id = tool_id
 

@@ -38,6 +38,8 @@ import math
 import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -398,7 +400,7 @@ def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
         L.append("M5")
         L.append("")
     L += ["G0 X0 Y0", ""]
-    return "\n".join(L)
+    return "\n".join(add_frame(L))
 
 
 def main() -> int:
