@@ -105,18 +105,18 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
 - Letter outline etch: `--outline-etch-mm 1.0 --etch-smooth-mm 0.10
   --etch-feed 2000 --etch-power 60` (Alex: "more like 60% at F2000";
   it was 40).
-- Job order: etch → puzzle cut → corner feet → frame notches **LAST**.
+- Job order: etch → puzzle cut → frame notches **LAST**.
 - Frame notches (`--frame-notches --notch-edge left`): 3.2 mm wide, 12 mm
-  deep, 200 mm apart. Each slot is one U from the slot end down to x = 0,
-  then 2 mm slices alternating slot A / slot B from x < 0 out to x = −10. An
-  end-stop abort near the edge then only leaves slot ends, finished by hand.
-  Past the stock edge (x < −5), slices cut sides only, never across the bed.
-- Stand feet from the same sheet (`--corner-feet`): two keyed 75° feet
-  (105 × 23.2 mm) in the right-hand corners, base on the x = 295 edge, the
-  top one held under Y 292.5. Cutting along the stock edge over the bed is
-  fine.
+  deep, 200 mm apart. Each slot is ONE U, from X −1 (1 mm past the stock
+  edge, `NOTCH_OVERRUN_MM`) to the slot end and back. No more 2 mm slices
+  (Alex, Nov 2026: X −1 is well inside the machine's X travel from the
+  work zero).
+- **Feet are NOT part of the puzzle job any more** (Alex: a nicer product;
+  the bottom corner foot sat right on the stock edge, not symmetric with
+  the top one). Don't pass `--corner-feet` (the flag still works).
 - Feet from scrap: `python3 scripts/stand_feet_sheet.py out/final --scrap`
-  writes 1× and 2× (stacked head-to-tail).
+  writes 1× and 2× (stacked head-to-tail): `out/final/stand_feet_2x.gcode`
+  cuts both feet from a 109 × 41.3 mm scrap, X0 Y0 at the scrap's corner.
 - Check every file: extents, one `$32=1`, no M4, F/S values, cut-pass
   `ring_lint.lint_gcode` clean, `lint_motion` flagged count.
 
@@ -188,8 +188,7 @@ would be exactly R-centre to W-centre). Preview:
 `out/final/brown_spoke_s1_preview.png`. **Awaiting Alex's OK**, then
 seeds 1–4 and let him pick. G-code then uses `--material
 ply3 --outline-etch-mm 1.0 --etch-smooth-mm 0.10
---etch-feed 2000 --etch-power 60 --frame-notches --notch-edge left
---corner-feet`.
+--etch-feed 2000 --etch-power 60 --frame-notches --notch-edge left`.
 
 Open items:
 - Some fan-to-fan pieces are long-ish, and the W–N column above the text has

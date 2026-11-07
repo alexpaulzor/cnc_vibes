@@ -3796,21 +3796,21 @@ def corner_feet_pass(material):
 
 
 def frame_notch_pass(material, notch_edge="left"):
-    """G-code for the keyed stand feet's frame notches, to append LAST
-    (stand_feet_sheet.frame_notch_sections): a U per slot inside safe travel,
-    then 2mm slices alternating between the slots past the axis zero."""
+    """G-code for the keyed stand feet's frame notches, to append LAST: one U
+    per slot from the slot end out to NOTCH_OVERRUN_MM past the stock edge
+    (stand_feet_sheet.frame_notch_paths). The 2mm alternating slices toward
+    the end stop are gone (Alex: X-1 is well inside the machine's travel)."""
     import display_stand as DS
     import stand_feet_sheet as SF
 
     axis = "x" if notch_edge == "left" else "y"
+    paths, _band = SF.frame_notch_paths(overrun_mm=SF.NOTCH_OVERRUN_MM,
+                                        edges=(3 if notch_edge == "left" else 0,))
     return DS.emit_gcode(
-        SF.frame_notch_sections(edge=3 if notch_edge == "left" else 0), material,
-        "frame notches for the keyed stand feet (LAST)",
+        paths, material, "frame notches for the keyed stand feet (LAST)",
         notes=[f"{notch_edge} stock edge ({axis}=0, X0 Y0 = the stock's bottom-left corner), 2 slots: "
-               f"one U each from the slot end to {axis}={SF.STOCK_ORIGIN_SHIFT_MM:g}, then 2mm slices "
-               f"alternating slot A / slot B out to {axis}={SF.REACH_MIN_MM + SF.STOCK_ORIGIN_SHIFT_MM:g}",
-               "if the head hits an end stop and aborts here, the puzzle is done: "
-               "finish the remaining slot ends with a file, saw or knife",
+               f"one U each, from {SF.NOTCH_OVERRUN_MM:g}mm past the edge ({axis}=-{SF.NOTCH_OVERRUN_MM:g}) "
+               "to the slot end and back",
                "SAME machine frame as the puzzle cut: run it on the same sheet "
                "without moving it"])
 

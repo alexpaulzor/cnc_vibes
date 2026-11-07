@@ -312,6 +312,10 @@ REACH_MIN_MM, REACH_MAX_MM = -10.0, 295.5
 # It tripped again on the HARVEY top foot at 293.5 (MPos Y=298.219); Alex:
 # "move the foot in by 1mm".
 REACH_MAX_Y_MM = 292.5
+# Frame notches end this far past the stock edge (Alex: the work zero sits
+# well inside the machine's X travel, so a single U to X-1 is safe -- no more
+# 2mm slices out to the limit)
+NOTCH_OVERRUN_MM = 1.0
 # Job origin (Alex, after dialing the origin in): from now on X0 Y0 is the
 # material's actual bottom-left corner, not the disc's bounding box 5mm
 # inside it. Everything here is still laid out in the disc frame above
