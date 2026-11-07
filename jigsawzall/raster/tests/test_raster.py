@@ -31,7 +31,6 @@ from emitter import (  # noqa: E402
     combined_raster_and_cut,
     emit_raster_gcode,
     raster_only_gcode,
-    runs_in_row,
 )
 from geometry import small_puzzle_config  # noqa: E402
 
@@ -87,18 +86,6 @@ def test_load_and_preprocess_crops_rectangle_to_square(tmp_path):
 # ---------------------------------------------------------------------------
 # Emitter: raster
 # ---------------------------------------------------------------------------
-
-
-def test_runs_in_row_groups_equal_values():
-    assert runs_in_row([0, 0, 255, 255, 0]) == [
-        (0, 1, 0),
-        (2, 3, 255),
-        (4, 4, 0),
-    ]
-
-
-def test_runs_in_row_empty():
-    assert runs_in_row([]) == []
 
 
 def test_raster_uses_m4_not_m3():

@@ -1,5 +1,13 @@
 # Ring layout: circular name puzzle (implementation spec)
 
+> **2026-11-07: the emitter helpers named below now live in quickcut** (the one laser G-code core):
+> `_order_chains_min_travel` → `gcode.nearest_chains`, `_fuse_touching_chains` → `gcode.fuse_touching`,
+> `_order_chains_nearest_safe` → `gcode.nearest_safe`, `combine_passes` → `gcode.combine`,
+> `cut_bridges` → `gcode.bridge_chains`, `_collapse_shuttles` → `motion.collapse_shuttles`,
+> `_loop_follow_through` → `motion.follow_through(laps=True)`, `_CutIndex` / `_trim_recut_ends` →
+> `gcode.CutIndex` / `gcode.trim_recut_ends`, per-path emission → `gcode.cut` / `gcode.etch`.
+> The behaviour described here is unchanged except: closed cut chains now get quickcut's loop overlap.
+
 Handoff from a cloud prototyping session to the workstation Claude that owns
 this repo. **Goal:** add a circular variant of the wave-grid name plate where
 the name wraps around a ring instead of running in a row, so long names
@@ -1420,7 +1428,7 @@ current veneered 3-ply stock is untested; scrap-test first.
 
 **Delivered:** `ring_prototype.py MELODY+SHANE+LUCA+AURELIA --seed 1 --font
 round --center-text PARKER+MCGUIRE --center-style ring --center-split
---pack-words --keep-seams --material plywood_veneer_3ply_3mm
+--pack-words --keep-seams --material ply3
 --outline-etch-mm 1.0 --etch-smooth-mm 0.10 --etch-feed 2000 --etch-power 40
 --frame-notches --gcode out/final/parker_mcguire_s1.gcode` -- 290mm disc,
 106 pieces, score (QA defects, thin, oversized, sliver, nub, dropped) =
@@ -1501,7 +1509,7 @@ scrap-test it.
 **Delivered:** `ring_prototype.py BRIAN+GILLIAN+LUCY+MAIA --seed 2 --font
 round --center-text CAVAGNOLO --center-style ring --center-split
 --center-cap-max-mm 18 --pack-words --keep-seams --material
-plywood_veneer_3ply_3mm --outline-etch-mm 1.0 --etch-smooth-mm 0.10
+ply3 --outline-etch-mm 1.0 --etch-smooth-mm 0.10
 --etch-feed 2000 --etch-power 40 --frame-notches --notch-edge left
 --corner-feet --gcode out/final/cavagnolo_s2.gcode` -- 106 pieces, score (0, 0, 0, 0, 0, 35).
 This replaces an earlier cut with "THE CAVAGNOLOS" as two flat lines.

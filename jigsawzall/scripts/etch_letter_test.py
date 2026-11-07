@@ -30,7 +30,8 @@ from shapely.geometry import box  # noqa: E402
 
 import geometry as G  # noqa: E402
 import jigsaw as J  # noqa: E402
-from emitter import combine_passes, emit_etch_gcode, load_material  # noqa: E402
+from emitter import emit_etch_gcode, load_material  # noqa: E402
+import gcode as _qc  # noqa: E402  (quickcut, on the path via emitter)
 from letter_outline_etch import draw_strokes, letter_outline_strokes  # noqa: E402
 from ring_prototype import _check_xy_envelope, glyph_local  # noqa: E402
 from spiral_cal import _label_strokes  # noqa: E402
@@ -91,7 +92,7 @@ def build(letters, cap_mm, powers, outline_mm, material_id, min_segment_mm,
     cut = J._emit_cut_for(pieces, material, cfg, "letter etch test", "full",
                           mode="static", power_percent=100.0,
                           min_segment_mm=min_segment_mm, max_backtrack_ms=2000.0)
-    gcode = combine_passes(*etches, cut)
+    gcode = _qc.combine(*etches, cut)
     return gcode, cfg, pieces, all_strokes, warns, (W, H)
 
 

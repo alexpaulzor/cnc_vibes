@@ -72,6 +72,8 @@ import argparse
 import math
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
 DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIR))
@@ -527,7 +529,7 @@ def main(argv=None) -> int:
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "etch_matrix_cal.gcode"
-    out.write_text("\n".join(lines))
+    out.write_text(_qc.render(lines, validate=False))
     png_path = _render_gcode_png(lines, BUILD_DIR / "etch_matrix_cal.png")
     print(f"ring pairs (mode, feed), inner->outer: {meta['combos']}")
     print(f"annotated laser starts: {meta['n_starts']}")

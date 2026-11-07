@@ -22,27 +22,23 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
-import yaml
 
 LESSON_DIR = Path(__file__).resolve().parent
 REPO_ROOT = LESSON_DIR.parent.parent.parent
 
 
 def load_material(material_id: str) -> dict:
-    """Load a material from the shared material_profiles/laser_materials.yaml or exit."""
-    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
-        materials = yaml.safe_load(f)
-    for m in materials:
-        if m.get("id") == material_id:
-            if "laser" not in m:
-                sys.exit(
-                    f"error: material '{material_id}' has no laser params "
-                    f"in material_profiles/laser_materials.yaml"
-                )
-            return m
-    available = ", ".join(sorted(m.get("id", "?") for m in materials))
-    sys.exit(f"error: unknown material '{material_id}'. Available: {available}")
+    """the full material record (quickcut.gcode.material); exits with a message if unknown or no laser recipe"""
+    try:
+        m = _qc.material(material_id)
+    except _qc.GcodeError as e:
+        sys.exit(f"error: {e}")
+    if "laser" not in m:
+        sys.exit(f"error: material '{material_id}' has no laser params in material_profiles/laser_materials.yaml")
+    return m
 
 
 def generate_gcode(od_mm: float, id_mm: float, material: dict) -> str:
@@ -110,7 +106,7 @@ def generate_gcode(od_mm: float, id_mm: float, material: dict) -> str:
         "",
         "G0 X0 Y0  ; park at WCS origin",
     ]
-    return "\n".join(lines) + "\n"
+    return _qc.render(lines, validate=False) + "\n"
 
 
 def main() -> None:

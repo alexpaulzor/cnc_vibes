@@ -56,13 +56,13 @@ def _moves_between(gcode: str, start_marker: str, end_marker: str) -> list[str]:
 
 
 def _has_follow_through(gcode: str) -> bool:
-    return any(line.startswith("; follow-through") for line in gcode.splitlines())
+    return any(line.startswith("; overlap") for line in gcode.splitlines())
 
 
 def test_closed_loop_passes_go_same_direction():
     gcode = emit_gcode([Polyline(SQUARE, closed=True)], _job(passes=2))
     lap1 = _moves_between(gcode, "pass 1/2", "pass 2/2")
-    lap2 = _moves_between(gcode, "pass 2/2", "follow-through")
+    lap2 = _moves_between(gcode, "pass 2/2", "overlap")
     # both laps trace identical points in the same order (no reversal / ping-pong)
     assert lap1 == lap2
     assert "reverse" not in gcode
@@ -112,7 +112,8 @@ def test_interior_loops_cut_before_boundary():
     boundary = Polyline([(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)], closed=True)
     hole = Polyline([(40, 40), (60, 40), (60, 60), (40, 60), (40, 40)], closed=True)
     ordered = order_cuts([boundary, hole])
-    assert ordered[0] is hole and ordered[-1] is boundary
+    # the optimiser may re-enter a loop at a different vertex: compare shapes, not objects
+    assert set(ordered[0].points) == set(hole.points) and set(ordered[-1].points) == set(boundary.points)
 
 
 # --- SVG parsing + bed placement --------------------------------------------

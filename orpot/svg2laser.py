@@ -38,6 +38,9 @@ import math
 import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
+import gcode  # noqa: E402  (THE G-code core)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -328,77 +331,13 @@ def svg_subpaths(svg: str) -> tuple[list, float]:
 
 
 def emit(loops, feed, power_pct, passes, warmup_ms, min_seg, material_id):
-    power_s = int(round(power_pct * 10))
-    warmup_mm = warmup_ms / 60000.0 * feed
-    L = [
-        "; svg2laser: GRBL diode-laser cut (static M3 + warmup lead-in)",
-        f"; feed={feed}mm/min power={power_pct}% passes={passes} "
-        f"warmup={warmup_ms:.0f}ms ({warmup_mm:.1f}mm at F{feed})",
-        "; closed loops: cut the loop then follow through {:.1f}mm past the start".format(
-            warmup_mm
-        ),
-        "; open paths: out-and-back warmup wiggle over the start",
-        "; order: interior loops first, outer boundary last",
-        ";",
-        ";HEAD: laser",
-        f";MATERIAL: {material_id}",
-        ";LASER_MODE: static  (M3 — constant power; assumes Z already at focus)",
-        "",
-        "$32=1   ; GRBL laser mode",
-        "G21     ; mm",
-        "G90     ; absolute",
-        "M5      ; laser off",
-        "G0 X0 Y0",
-        "",
-    ]
-    for name, closed, pts in loops:
-        pts = decimate(pts, min_seg)
-        if len(pts) < 2:
-            continue
-        x0, y0 = pts[0]
-        L.append(f"; --- {name} ---")
-        L.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-        L.append(f"M3 S{power_s}")
-        L.append(f"F{feed}")
-        if closed:
-            # Closed loop: trace it `passes` times in ONE direction — no ping-pong.
-            # A loop ends where the next pass begins (its own start), so there's no
-            # laser-on return chord to avoid; the head just keeps circling. After
-            # the final pass returns to the start, follow through past it for
-            # warmup_mm so the start region (cut cold on lap 1) is re-cut at full
-            # power and the beam turns off in already-severed material — no snag.
-            for p in range(passes):
-                if passes > 1:
-                    L.append(f"; pass {p + 1} of {passes}")
-                for x, y in pts[1:]:
-                    L.append(f"G1 X{x:.3f} Y{y:.3f}")
-            if warmup_mm > 0:
-                lead = follow_through(pts, warmup_mm)
-                if lead:
-                    L.append(
-                        f"; follow-through {warmup_mm:.1f}mm past start (clean separation)"
-                    )
-                    for x, y in lead:
-                        L.append(f"G1 X{x:.3f} Y{y:.3f}")
-        else:
-            # Open path: can't loop back through its own start, so (1) warm up with
-            # an out-and-back wiggle over the start, then (2) ping-pong the passes —
-            # cut forward, reverse back over the SAME path, alternating. The head is
-            # already at the far end after each pass, so we never do a laser-on move
-            # back to the start (which would slice a chord across the workpiece).
-            for wx, wy in warmup_wiggle(pts, warmup_mm):
-                L.append(f"G1 X{wx:.3f} Y{wy:.3f}")
-            for p in range(passes):
-                if passes > 1:
-                    direction = "forward" if p % 2 == 0 else "reverse"
-                    L.append(f"; pass {p + 1} of {passes} ({direction})")
-                seq = pts[1:] if p % 2 == 0 else pts[-2::-1]
-                for x, y in seq:
-                    L.append(f"G1 X{x:.3f} Y{y:.3f}")
-        L.append("M5")
-        L.append("")
-    L += ["G0 X0 Y0", ""]
-    return "\n".join(L)
+    """loops = [(name, closed, points)] in cut order -> G-code text through quickcut.gcode"""
+    j = gcode.CutJob(feed_mm_per_min=feed, power_percent=power_pct, passes=passes,
+                     warmup_ms=warmup_ms, min_segment_mm=min_seg, material_id=material_id)
+    L = gcode.preamble(j, title="svg2laser: GRBL diode-laser cut")
+    for k, (name, closed, pts) in enumerate(loops, 1):
+        L += gcode.cut(gcode.Polyline(pts, closed), j, k, len(loops), label=f"{name}:")
+    return gcode.render(L, validate=False)
 
 
 def main() -> int:
@@ -505,13 +444,13 @@ def main() -> int:
         for i, (a, c, p, _) in enumerate(loops)
     ]
 
-    gcode = emit(named, feed, power, passes, args.warmup_ms, args.min_seg, mat_id)
+    text = emit(named, feed, power, passes, args.warmup_ms, args.min_seg, mat_id)
     out = args.out or args.svg.with_suffix(".gcode")
-    out.write_text(gcode)
+    gcode.write(out, text)
     total = sum(path_length(p) for _, _, p in named)
     print(f"-> {out}")
     print(
-        f"   {len(named)} paths, {len(gcode.splitlines())} lines, "
+        f"   {len(named)} paths, {len(text.splitlines())} lines, "
         f"~{total / 1000:.1f}m cut, feed F{feed} x{passes} pass(es), "
         f"warmup {args.warmup_ms:.0f}ms"
     )

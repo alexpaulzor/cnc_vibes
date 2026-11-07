@@ -86,7 +86,7 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
 ## Machine / G-code rules
 
 - LaserTree 10 W diode on a CNC. **M3 only** (static power), **exactly one
-  `$32=1`** (`emitter.combine_passes` handles it).
+  `$32=1`** (`quickcut gcode.combine` handles it).
 - Reach (puzzle-job frame, disc bbox 0..290, stock −5..295):
   X −10 .. 295.5; **Y ≤ 292.5** (was 293.5; tripped again on the HARVEY top foot). The Y limit switch tripped at MPos
   Y = 294.453 (`stand_feet_sheet.REACH_MAX_Y_MM`). `_check_xy_envelope`

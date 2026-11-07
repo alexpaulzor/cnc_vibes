@@ -34,8 +34,9 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
-import yaml
 
 LESSON_DIR = Path(__file__).resolve().parent
 REPO_ROOT = LESSON_DIR.parent.parent.parent
@@ -62,15 +63,14 @@ LABEL_DIGIT_SPACING = 1.0
 
 
 def load_material(material_id: str) -> dict:
-    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
-        materials = yaml.safe_load(f)
-    for m in materials:
-        if m.get("id") == material_id:
-            if "laser" not in m:
-                sys.exit(f"error: material '{material_id}' has no laser params")
-            return m
-    available = ", ".join(sorted(m.get("id", "?") for m in materials))
-    sys.exit(f"error: unknown material '{material_id}'. Available: {available}")
+    """the full material record (quickcut.gcode.material); exits with a message if unknown or no laser recipe"""
+    try:
+        m = _qc.material(material_id)
+    except _qc.GcodeError as e:
+        sys.exit(f"error: {e}")
+    if "laser" not in m:
+        sys.exit(f"error: material '{material_id}' has no laser params in material_profiles/laser_materials.yaml")
+    return m
 
 
 def _parse_csv_floats(s: str) -> list[float]:
@@ -274,7 +274,7 @@ def generate_gcode(
         )
 
     footer = ["", "M5", "G0 X0 Y0  ; park"]
-    return "\n".join(header + body + footer) + "\n"
+    return _qc.render(header + body + footer, validate=False) + "\n"
 
 
 def main() -> None:

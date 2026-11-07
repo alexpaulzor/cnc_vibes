@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-11-06:** Alex dropped the Raspberry Pi + Xbox controller for a proper pendant. Kept for reference only.
+
 # cncctl: handoff for a fresh session
 
 **Goal:** one small Python program on the Raspberry Pi. It reads Alex's USB Xbox controller and talks to

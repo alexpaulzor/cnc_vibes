@@ -17,11 +17,11 @@ PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
 
 from emit import (  # noqa: E402
-    decimate,
     emit_cut_gcode,
     emit_disc_gcode,
     load_material,
 )
+from motion import decimate  # noqa: E402  (quickcut, on the path via emit)
 from ribs import (  # noqa: E402
     build_all_ribs,
     build_rib,
@@ -143,38 +143,43 @@ def test_ribs_gcode_conventions():
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
     assert "\nM4 " not in g
-    assert g.count("; pass 2 of 2") >= cfg.n_ribs  # 2 passes each
+    n = material["laser"]["passes"]
+    assert n >= 2
+    assert g.count(f"; pass {n}/{n}") >= cfg.n_ribs  # every pass of each rib (quickcut.gcode markers)
     assert f"F{material['laser']['feed_mm_per_min']}" in g
 
 
-def test_multipass_pingpongs_no_laseron_jump():
-    """Multi-pass cuts must ping-pong: forward, then reverse over the SAME points.
-    A later pass never repositions to the start, so there is no G0 between passes
-    and no long laser-on chord back across the part (the bug that ruined a cut)."""
+def test_multipass_no_laseron_jump():
+    """Multi-pass cuts never reposition between passes and never fire a long chord back across the
+    part (the bug that once ruined a cut): closed rib loops repeat the same way round (a loop ends at
+    its own start), open spiral cuts ping-pong back over the same points."""
     cfg = SpiralConfig()
-    material = load_material("mdf3")  # 2 passes
+    material = load_material("mdf3")  # multi-pass (the recipe sets how many)
+    n = material["laser"]["passes"]
+    assert n >= 2
     parts = [(f"rib{i}", r) for i, r in enumerate(build_all_ribs(cfg))]
     g = emit_cut_gcode(parts, material, "test", cfg)
-    assert "pass 2 of 2 (reverse)" in g
-    lines = g.splitlines()
+    profile, cuts = build_disc(cfg)
+    d = emit_disc_gcode(profile, cuts, material, "test", cfg)
+    assert f"pass 2/{n} (reverse)" in d          # open spiral cuts ping-pong
 
     def _xy(l):
         m = re.match(r"G1 X([-\d.]+) Y([-\d.]+)", l)
         return (float(m.group(1)), float(m.group(2))) if m else None
 
     checked = 0
-    for i, l in enumerate(lines):
-        if "pass 2 of 2" not in l:
-            continue
-        prev = next(_xy(lines[j]) for j in range(i - 1, 0, -1) if _xy(lines[j]))
-        nxt_i = next(j for j in range(i + 1, len(lines)) if _xy(lines[j]))
-        nxt = _xy(lines[nxt_i])
-        # no reposition (G0) between the pass marker and the first reverse move
-        assert not any(lines[j].startswith("G0") for j in range(i + 1, nxt_i))
-        # reverse continues from the far end: a short on-path step, not a chord
-        step = math.hypot(nxt[0] - prev[0], nxt[1] - prev[1])
-        assert step < 20.0, f"reverse pass jumps {step:.1f}mm instead of retracing"
-        checked += 1
+    for text in (g, d):
+        lines = text.splitlines()
+        for i, l in enumerate(lines):
+            if not l.startswith(f"; pass 2/{n}"):
+                continue
+            prev = next(_xy(lines[j]) for j in range(i - 1, 0, -1) if _xy(lines[j]))
+            nxt_i = next(j for j in range(i + 1, len(lines)) if _xy(lines[j]))
+            nxt = _xy(lines[nxt_i])
+            assert not any(lines[j].startswith("G0") for j in range(i + 1, nxt_i))
+            step = math.hypot(nxt[0] - prev[0], nxt[1] - prev[1])
+            assert step < 20.0, f"pass 2 jumps {step:.1f}mm instead of continuing along the path"
+            checked += 1
     assert checked >= cfg.n_ribs
 
 

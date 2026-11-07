@@ -28,6 +28,8 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 from typing import Literal
 
 import yaml
@@ -137,6 +139,9 @@ class GcodeOutput:
 
     @property
     def text(self) -> str:
+        # laser jobs get the laser-off frame trace first (gcode_frame); router jobs are left alone
+        if any(l.strip() == ";HEAD: laser" for l in self.lines):
+            return _qc.render(self.lines, validate=False) + "\n"
         return "\n".join(self.lines) + "\n"
 
 

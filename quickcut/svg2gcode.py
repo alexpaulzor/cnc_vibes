@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cnc_vibes root: gcode_frame
+from gcode_frame import add_frame  # noqa: E402  (laser-off frame trace before anything fires)
 
 from materials import SHARED_MATERIALS, load_material  # noqa: E402
 from motion import (  # noqa: E402
@@ -66,39 +68,9 @@ DEFAULT_WARMUP_MS = 1000.0
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class Polyline:
-    """A single cut path: a list of (x, y) points, and whether it is a closed
-    loop (last point joins back to the first) or an open path."""
-
-    points: list[tuple[float, float]]
-    closed: bool
-
-
-@dataclass
-class CutJob:
-    """Everything the emitter needs that is NOT geometry: the cutting recipe."""
-
-    feed_mm_per_min: int
-    power_percent: float
-    passes: int
-    warmup_ms: float = DEFAULT_WARMUP_MS
-    min_segment_mm: float = 0.3
-    material_id: str = "custom"
-    # The S value that means 100% power. Must equal your controller's GRBL $30
-    # (S range 0..$30). Most GRBL laser setups use 1000, so S1000 = full power.
-    s_full_power: int = 1000
-
-    @property
-    def power_s(self) -> int:
-        """The S word to command, scaled from percent to the full-power ceiling."""
-        return round(self.power_percent / 100.0 * self.s_full_power)
-
-    @property
-    def warmup_mm(self) -> float:
-        """Warmup expressed as travel distance (the beam ramps over time, and the
-        head is moving at the feedrate, so time * feed = distance)."""
-        return self.warmup_ms / 60_000.0 * self.feed_mm_per_min
+# Polyline / CutJob live in gcode.py (the single G-code core); re-exported here for old callers.
+from gcode import CutJob, Polyline  # noqa: E402,F401
+import gcode as _g  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -166,137 +138,40 @@ def place_on_bed(
 
 
 def order_cuts(polylines: list[Polyline]) -> list[Polyline]:
-    """Interior loops (smallest area) first, outer boundary last, so the part
-    stays attached to the sheet until the very end. Open paths (area 0) lead.
-    Sort is stable, so equal-area paths keep their original SVG order."""
-    return sorted(polylines, key=loop_area)
+    """Middle-out (every cut before the loops that contain it, so parts stay attached until
+    their last cut) with short laser-off travel: gcode.order / order.py."""
+    return _g.order(polylines)
 
 
 def emit_gcode(cuts: list[Polyline], job: CutJob) -> str:
-    """Assemble the full G-code file: one preamble, one motion block per cut,
-    one footer."""
+    """Assemble the full G-code file through the core: preamble, one block per cut, then
+    gcode.render() (frame pass, park, line-length + validation)."""
     lines = _preamble(job)
     for index, cut in enumerate(cuts, start=1):
         lines += _emit_cut(cut, index, len(cuts), job)
-    lines += _footer(lines)
-    return "\n".join(lines)
+    return _g.render(lines)
 
 
-# ---------------------------------------------------------------------------
-# Emitting one cut
-# ---------------------------------------------------------------------------
-
-
+# Old names, kept for callers not yet moved to gcode.py.
 def _emit_cut(cut: Polyline, index: int, total: int, job: CutJob) -> list[str]:
-    """Move to the start, turn the beam on, cut (closed vs open differ), turn off."""
-    points = decimate(cut.points, job.min_segment_mm)
-    if len(points) < 2:
-        return []
-    start_x, start_y = points[0]
-    kind = "loop" if cut.closed else "open path"
-    motion = (
-        _closed_loop_motion(points, job)
-        if cut.closed
-        else _open_path_motion(points, job)
-    )
-    return [
-        f"; --- cut {index}/{total} ({kind}, {len(points)} pts) ---",
-        f"G0 X{start_x:.3f} Y{start_y:.3f}",
-        f"M3 S{job.power_s}",
-        f"F{job.feed_mm_per_min}",
-        *motion,
-        "M5",
-        "",
-    ]
-
-
-def _closed_loop_motion(points: list[tuple[float, float]], job: CutJob) -> list[str]:
-    """Trace the loop `passes` times in ONE direction (a loop returns to its own
-    start, so there is no laser-on return chord to avoid — no ping-pong needed),
-    then follow through past the start to re-cut the cold-start region hot."""
-    lines: list[str] = []
-    for pass_number in range(1, job.passes + 1):
-        if job.passes > 1:
-            lines.append(f"; pass {pass_number}/{job.passes}")
-        lines += _cut_through(points[1:])
-    lead = follow_through(points, job.warmup_mm)
-    if lead:
-        lines.append(
-            f"; follow-through {job.warmup_mm:.1f}mm past start (clean release)"
-        )
-        lines += _cut_through(lead)
-    return lines
-
-
-def _open_path_motion(points: list[tuple[float, float]], job: CutJob) -> list[str]:
-    """Warm the beam up with an out-and-back wiggle over the start (an open path
-    can't loop back through it), then ping-pong the passes so we never fire the
-    laser on a move back to the start."""
-    lines = _cut_through(warmup_wiggle(points, job.warmup_mm))
-    for pass_number in range(1, job.passes + 1):
-        going_forward = pass_number % 2 == 1
-        if job.passes > 1:
-            direction = "forward" if going_forward else "reverse"
-            lines.append(f"; pass {pass_number}/{job.passes} ({direction})")
-        sequence = points[1:] if going_forward else points[-2::-1]
-        lines += _cut_through(sequence)
-    return lines
-
-
-def _cut_through(points: list[tuple[float, float]]) -> list[str]:
-    """Beam-on linear moves through a sequence of points."""
-    return [f"G1 X{x:.3f} Y{y:.3f}" for x, y in points]
+    return _g.cut(cut, job, index, total)
 
 
 def _preamble(job: CutJob) -> list[str]:
-    return [
-        "; svg2gcode: GRBL diode-laser cut (static M3 + warmup lead-in)",
-        f"; feed={job.feed_mm_per_min}mm/min power={job.power_percent}% "
-        f"(S{job.power_s} of {job.s_full_power}) passes={job.passes}",
-        f"; warmup={job.warmup_ms:.0f}ms = {job.warmup_mm:.1f}mm at this feed",
-        "; closed loops: N same-direction laps, then follow-through past the start",
-        "; open paths: out-and-back warmup wiggle, then ping-pong passes",
-        "; order: interior loops first, outer boundary last",
-        ";",
-        ";HEAD: laser",
-        f";MATERIAL: {job.material_id}",
-        ";LASER_MODE: static  (M3 — constant power; assumes Z already at focus)",
-        "",
-        f"$32=1   ; GRBL laser mode (assumes firmware $30={job.s_full_power}; set once, not here)",
-        "G21     ; mm",
-        "G90     ; absolute",
-        "M5      ; laser off",
-        "G0 X0 Y0",
-        "",
-    ]
+    return _g.preamble(job, title="svg2gcode: GRBL diode-laser cut")
 
 
 def _footer(lines: list[str] | None = None) -> list[str]:
-    """End-of-job move. Given the job's lines, park clear of the part: laser off, then X0 at the
-    part's max Y (the highest Y of any G1 cut move). Without lines, the old return to X0 Y0."""
+    """With the job's lines: frame them in place (gcode_frame) and return the park block."""
     if lines is None:
         return ["G0 X0 Y0", ""]
-    return park(max_cut_y(lines))
+    lines[:] = add_frame(lines)
+    return _g.park(_g.max_cut_y(lines))
 
 
-_Y_RE = re.compile(r"\bY(-?[0-9.]+)")
-
-
-def max_cut_y(lines: list[str]) -> float:
-    """highest Y reached by a G1 move (comments ignored); 0 if there are none"""
-    ys = [float(m.group(1)) for ln in lines
-          if ln.split(";")[0].strip().startswith("G1") and (m := _Y_RE.search(ln.split(";")[0]))]
-    return max(ys, default=0.0)
-
-
-def park(y_max: float) -> list[str]:
-    """laser off, then X0 at the part's max Y: out of the way for unloading"""
-    return ["; park: laser off, X0 at the part's max Y", "M5", f"G0 X0 Y{y_max:.3f}", ""]
-
-
-def gcode_name(base: str, w: float, h: float, material: str) -> str:
-    """standard file stem: <part>_<variant>_<W>x<H>_<material>, W x H rounded up to whole mm"""
-    return f"{base}_{math.ceil(w - 1e-9)}x{math.ceil(h - 1e-9)}_{material}"
+max_cut_y = _g.max_cut_y
+park = _g.park
+gcode_name = _g.name
 
 
 # ---------------------------------------------------------------------------

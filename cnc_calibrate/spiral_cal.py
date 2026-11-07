@@ -32,11 +32,15 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
+import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
+from motion import warmup_wiggle  # noqa: E402
 
 from PIL import Image, ImageDraw, ImageFont
 
 # This diode ramps to full optical power in ~1s cold. Static M3 at 100%.
-WARMUP_MS = 1000.0
+WARMUP_MS = _qc.DEFAULT_WARMUP_MS
 # Label engraving (surface mark, NOT a cut). Overridable via CLI.
 ENGRAVE_POWER_PCT = 15.0
 ENGRAVE_FEED = 3000
@@ -153,22 +157,9 @@ def _order_strokes(strokes, start=(0.0, 0.0)):
 
 
 def _warmup_points(pts, warmup_mm):
-    """Out-and-back over the START of the path covering ~warmup_mm total, ending
-    back at pts[0] (the standard diode warmup wiggle)."""
-    if warmup_mm <= 0 or len(pts) < 2:
-        return []
-    half = warmup_mm / 2.0
-    fwd = [pts[0]]
-    acc = 0.0
-    for a, b in zip(pts, pts[1:]):
-        d = math.hypot(b[0] - a[0], b[1] - a[1])
-        if acc + d >= half:
-            t = (half - acc) / d if d else 0.0
-            fwd.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
-            break
-        acc += d
-        fwd.append(b)
-    return fwd[1:] + list(reversed(fwd))[1:]  # out to the half point, back to start
+    """the standard diode warmup wiggle (quickcut motion.warmup_wiggle): out over the start for
+    half of warmup_mm and back to pts[0]; a shorter path gets one out-and-back"""
+    return warmup_wiggle(pts, warmup_mm, one_trip=True)
 
 
 def _emit_engrave(lines, strokes, engrave_s, engrave_feed, warmup_mm, label=""):
@@ -676,7 +667,7 @@ def main(argv=None) -> int:
     )
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     out = BUILD_DIR / "cal_laser.gcode"
-    out.write_text("\n".join(lines))
+    out.write_text(_qc.render(lines, validate=False))
     key_path = _render_key(b, feeds, T, meta)
     png_path = _render_gcode_png(lines, BUILD_DIR / "cal_laser.png")
     print(

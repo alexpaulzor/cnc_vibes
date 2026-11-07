@@ -1,0 +1,36 @@
+# claude.log -- milestones, decisions, discoveries (newest at the bottom)
+# Format: date | GOAL / START / DONE / LEARNED / NEED / DECISION | text
+
+2026-11-06 | GOAL | Consolidate all laser G-code generation into quickcut (single entry point); clean up branches. Plan: cnc_vibes/HANDOFF_quickcut_consolidation.md.
+2026-11-06 | DONE | scads: master fast-forwarded to claude/wire-marble-track (6fc7507). Alex authorised merges; no other agents running.
+2026-11-06 | LEARNED | cnc_vibes main is an ancestor of claude/funny-mccarthy-gh3t8s (fast-forward); circular-text-puzzle branch is fully contained in funny.
+2026-11-06 | LEARNED | Test baseline on funny-mccarthy alone: cnc_vibes 32 failed/533 passed, quickcut 9 passed, orpot 2 failed/9 passed, jigsawzall 51 failed + 8 errors/101 passed, cnc_calibrate 51 passed. The jigsawzall + cnc_vibes failures pre-date this work.
+2026-11-06 | DONE | cnc_vibes: merged claude/wire-marble-track into funny-mccarthy's tip (0 conflicts there); re-ran tools/rename_material_ids.py on the jigsaw branch's newer files (it now skips itself, HANDOFF docs and out/ logs). Tests: no new failures vs the funny baseline (orpot now 11/11).
+2026-11-06 | LEARNED | Laser emitters still without the frame after the merge: cnc_vibes/scripts/laser_cam.py, jigsawzall/scripts/ring_lint.py (+ interactive_cal, live streaming, by design). They get folded into quickcut in the consolidation.
+2026-11-06 | DONE | main pushed (4e8b92d, fast-forward over the jigsaw branch + this branch); claude/wire-marble-track reset to main.
+2026-11-06 | NEED | Remote branch deletion is refused by this session's git proxy (push limited to its own branch). funny-mccarthy and circular-text are fully contained in main: Alex to delete them in the GitHub UI.
+2026-11-06 | GOAL | Phase A: quickcut core module (preamble, cut, etch, park, frame, bridged paths, materials, ordering, write() that frames + validates).
+2026-11-06 | DECISION | Canonical cut = the scads marbles variant (warmup wiggle on EVERY path, closed loops overlap past their start, open paths ping-pong): it is what Alex has been running on the machine. quickcut's old closed-loop variant (no wiggle) retires.
+2026-11-06 | DONE | Phase A core: quickcut/gcode.py (job/material/fit, preamble, cut, etch, bridged, order, finish/render/write with frame + park + line-length + gcode_validate), quickcut/order.py (middle-out precedence from containment + greedy nearest-entry + precedence-safe or-opt), quickcut/frame.py (moved from repo-root gcode_frame.py, which stays as a shim). svg2gcode now emits through gcode. quickcut tests 17/17 (3 updated for label/identity only).
+2026-11-06 | START | Phase B: scads/marbles: laser_parts.py becomes a shim over quickcut.gcode; every script writes through gcode.write() (validated) and orders with gcode.order().
+2026-11-06 | DONE | Phase B (scads/marbles): laser_parts.py is a shim over quickcut.gcode; all 16 G-code scripts write through gcode.write() (frame + park + line length + validation); regenerated 51 files: 0 cut-move differences vs before (only the $32 comment and the dropped preamble G0 X0 Y0). Multi-part sheets now ordered by quickcut/order.py: feeder sheet travel 13.86 -> 4.24 m, wheel box set 3.44 -> 1.32 m, cutting unchanged. Old 3-layer ring jig + viewer deleted (validator-refused F5000 etch; superseded). scads master fast-forwarded.
+2026-11-06 | START | Phase C: port orpot, cnc_calibrate, lessons, cam.py/laser_cam.py laser paths, jigsawzall onto quickcut.gcode.
+2026-11-06 | DONE | orpot on quickcut.gcode (emit.py + svg2laser.py emit through gcode.cut/preamble/render; orpot.py + svg2laser write with gcode.write = validated). Rib loops now cut the shop-standard way (same direction + overlap) instead of ping-pong; tests updated to the standard markers. orpot 11/11; real `orpot.py cut` output validates.
+2026-11-06 | DECISION | Bespoke motion builders (calibration grids/spirals, raster engrave, lessons' M4 demos) keep their own moves; the invariant is that EVERY file's final text goes through quickcut.gcode.render()/write() (frame + park + line length, validation where the file is a real job). Standard cuts use gcode.cut().
+2026-11-06 | DONE | Phase C: cnc_calibrate (spiral, etch matrix), lessons (spacer, calibration, spoilboard), cam.py/laser_cam.py laser output, jigsawzall (emitter + etch_calibration, motion_test_plate, stand_tests, display_stand) all finish every file through quickcut.gcode.render (frame + park + line length). Their bespoke motion stays (calibration grids, rasters, M4 demos). No new test failures in any suite.
+2026-11-06 | DONE | Drift guard quickcut/tests/test_single_entry.py: fails any .py in cnc_vibes or scads/marbles that emits M3/M4 without finishing through quickcut. CLAUDE.md rule rewritten: quickcut is the single entry point.
+2026-11-06 | NEED | Next workitems: (1) jigsawzall cut/etch motion -> gcode.cut/etch after triaging its pre-existing 51 failed + 8 errors; (2) calibration grids at F5000 exceed the validator's XY cap 3000 (Grbl clamps anyway): exempt or cap; (3) Alex deletes merged remote branches in the GitHub UI; (4) optional OR-tools backend for order.py.
+
+## 2026-11-07 lift guard rails (scads)
+- GOAL: steel balls bend keepers K_F/K_M -> replace with 2020/2040 guard rails, V-wheels redesigned onto the fixed side.
+- DONE: lift_full.scad show_rails mockup + animation; collision check (CGAL intersection) clean at both stroke ends; NOTES section 4 updated.
+- DECISION: back guard is a fixed 2040 tied to F (keeps M bare) rather than a 2020 on M.
+- NEED: Alex confirm wheel layout and visibility trade-off before any cut parts.
+
+## 2026-11-07 jigsawzall -> quickcut (task #26)
+- GOAL: port jigsawzall laser features into quickcut and remove competing implementations repo-wide.
+- LEARNED: the 51 failed + 8 errors were all a missing cv2; with opencv-python-headless 5 geometry tests fail (pre-existing, unrelated).
+- DONE: quickcut gained mode (M3/M4), moves() arcs, prepare(), linear-warmup etch(), raster(), combine(), motion_report(), paths.py (fuse, bridge_chains, CutIndex), order.nearest_chains/nearest_safe, motion follow_through(laps) / collapse_shuttles / warmup_wiggle(one_trip). jigsawzall emitter 1499 -> ~850 lines; its scripts, orpot, laser lessons, spiral_cal and scads feeder knock-outs use the shared code.
+- VERIFIED: every suite matches its baseline; scads feeder files identical cut geometry; spiral_cal / etch_matrix_cal byte-identical; NORA puzzle same 21 laser-on events (+33 mm loop overlap).
+- DECISION: closed puzzle chains now get the shop loop overlap; combine() re-frames the union and parks once (old combine kept the first program frame and parked mid-file).
+- FIXED: frame.job_extent counted every G2/G3 arc as its full circle; a near-straight biarc (huge radius) pushed the frame to X -445..540 (the laser-off frame would have hit the endstops). Now the arc's actual sweep. Found via motion_test_plate (its own 0..290 assert failed before this port too).

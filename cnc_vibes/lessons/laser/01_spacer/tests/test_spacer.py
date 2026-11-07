@@ -90,8 +90,9 @@ def test_no_z_motion_anywhere():
 def test_laser_off_m5_before_and_after():
     out = generate_gcode(6.0, 3.2, MATERIAL)
     m5_count = len(re.findall(r"^M5\b", out, flags=re.MULTILINE))
-    # M5 appears at: header, between inner and outer, at end => 3
-    assert m5_count == 3
+    # M5 appears at: header, the frame trace, between inner and outer, at the end, and in the
+    # park block (quickcut.gcode.render adds frame + park) => 5
+    assert m5_count == 5
 
 
 def test_feed_rate_matches_material_profile():
