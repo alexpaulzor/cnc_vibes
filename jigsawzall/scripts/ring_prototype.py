@@ -253,6 +253,11 @@ class RingParams:
     # instead of stopping at center_text_cap_mm (the medallion's fixed start).
     center_loose_cap_max_mm: float = 30.0
     center_match_ring_cap: bool = True  # center letters at the ring's cap height
+    # A third tier (DEVOS): one word set straight across the inner disc of a
+    # two-word ring-style split hub (the parents round the hub, the surname in
+    # the middle), cut like the flat spoked centre (_center_flat_spoke_seams)
+    center_core_text: str | None = None
+    center_core_gap_mm: float = 8.0  # core word's ends -> the hub's inner circle
     # Loose center text (flat) at EXACTLY this cap height: the hub disc grows
     # (outer ring letters shrink) until the center text fits at this size.
     # None = old behaviour (hub sized by the ring; center fills what's left).
@@ -710,12 +715,30 @@ def _center_layout(rp, ppm, r_h, C, cap_mm, track):
                 if flip:
                     g = affinity.rotate(g, 180, origin=(0, 0))
                 out.append(place(g, th0 + x / r_m, r_base, C))
-        return out if ok and r_m - cap / 2 > 0 else None
+        if not (ok and r_m - cap / 2 > 0):
+            return None
+        if rp.center_core_text:
+            # the core word, straight across the middle, inside the inner
+            # circle (center_band_gap inside the ring words) with room left
+            # for its own ring of pieces
+            gc, xc, _tc = _word_advances(rp.center_core_text, font, track)
+            core = [affinity.translate(g, C[0] + x, C[1] + cap / 2) for g, x in zip(gc, xc)]
+            r_in = min(math.hypot(px - C[0], py - C[1]) for g in out for px, py in g.exterior.coords)
+            r_core = max(math.hypot(px - C[0], py - C[1])
+                         for g in core for px, py in g.convex_hull.exterior.coords)
+            if r_core > r_in - (rp.center_band_gap_mm + rp.center_core_gap_mm) * ppm:
+                return None
+            out += core
+        return out
 
 
 def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
     """Seams for a split hub (see build_ring); appends to `seams`, returns
     the hub-circle landing angles (the hub arcs split there)."""
+    core = []
+    if rp.center_core_text:  # _center_layout appends the core word's letters last
+        k_core = len(rp.center_core_text)
+        letters, core = letters[:-k_core], letters[-k_core:]
     pts = [p for g in letters for p in g.exterior.coords]
     r_in = min(math.hypot(x - C[0], y - C[1]) for x, y in pts)
     r_i = r_in - rp.center_band_gap_mm * ppm  # inner circle, band_gap inside the letters
@@ -795,7 +818,7 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
     # (the band radials themselves are mostly too short, broken by letters):
     # keep every arc long enough for a tab clear of both 7mm junction zones
     arc_min = rp.center_arc_min_mm * ppm
-    cross = 2 * r_i > 64 * ppm
+    cross = 2 * r_i > 64 * ppm and not core
     fixed = [phR, phL]
     cross_at = []
 
@@ -863,9 +886,13 @@ def _center_split_seams(letters, C, r_h, ppm, rp, seams, rng):
         else:
             seams.append(sm)
     # divider through the inner disc (via the centre), plus the cross seam
-    # square to it when the inner disc's halves would be oversized
+    # square to it when the inner disc's halves would be oversized -- or,
+    # with a core word across the middle, the flat spoked centre inside the
+    # inner circle (its radials land on the inner circle)
     inner_marks = list(radials)
-    for phi in (phR, phL):
+    if core:
+        inner_marks += _center_flat_spoke_seams(core, C, r_i, ppm, rp, seams, rng)
+    for phi in ((phR, phL) if not core else ()):
         a = at(r_i, phi)
         n = max(4, int(r_i / (2 * ppm)))
         seams.append(dict(pts=[(a[0] + (C[0] - a[0]) * t / n, a[1] + (C[1] - a[1]) * t / n)
@@ -3428,6 +3455,9 @@ def main():
     ap.add_argument("--hub-r-min-mm", type=float, default=None,
                     help="smallest center-disc radius (default 22); raise it for bigger center text "
                          "when there are few outer names")
+    ap.add_argument("--cap-min-mm", type=float, default=None,
+                    help="smallest outer-letter cap height to try (default 18); lower it when "
+                         "many long names leave the letters closer than the tab gap")
     ap.add_argument("--cap-max-mm", type=float, default=None,
                     help="largest outer-letter cap height to try (default 46); lower it to "
                          "give the center disc and its text more room")
@@ -3456,6 +3486,9 @@ def main():
                     help="min wood between a cut and a letter (default min_feature_mm)")
     ap.add_argument("--border-floor-mm", type=float, default=None,
                     help="min wood between a tab and the disc edge (default min_feature_mm)")
+    ap.add_argument("--center-core-text", default=None,
+                    help="with a two-word ring-style --center-split hub: one more word set "
+                         "straight across the inner disc (e.g. the surname inside the parents)")
     ap.add_argument("--debug", action="store_true", help="overlay seam status")
     ap.add_argument(
         "--center-style", choices=("letterfirst", "hull", "medallion", "flat", "ring"),
@@ -3527,6 +3560,7 @@ def main():
         shape=a.shape,
         rows=a.rows,
         **({"cap_h_max_mm": a.cap_max_mm} if a.cap_max_mm is not None else {}),
+        **({"cap_h_min_mm": a.cap_min_mm} if a.cap_min_mm is not None else {}),
         **({"hub_r_min_mm": a.hub_r_min_mm} if a.hub_r_min_mm is not None else {}),
         **({"target_w_mm": a.target_w_mm} if a.target_w_mm is not None else {}),
         pack_words=a.pack_words,
@@ -3544,6 +3578,7 @@ def main():
         **({"center_loose_cap_max_mm": a.center_cap_max_mm} if a.center_cap_max_mm is not None else {}),
         center_word=_center_word_index(a.center_word, words),
         center_cap_target_mm=a.center_cap_mm,
+        center_core_text=a.center_core_text.upper() if a.center_core_text else None,
         **({"hub_ring_min_mm": a.hub_ring_mm} if a.hub_ring_mm is not None else {}),
         **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
         **({"letter_clearance_mm": a.letter_clearance_mm} if a.letter_clearance_mm is not None else {}),
