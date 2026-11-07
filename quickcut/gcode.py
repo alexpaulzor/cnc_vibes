@@ -330,9 +330,13 @@ def motion_report(lines, machine=None, sender=None, hotspots: int = 5) -> list[s
 def translate(program, dx: float = 0.0, dy: float = 0.0):
     """the same program moved by (dx, dy) mm: every absolute X / Y word on a motion line
     (G0-G3, or a modal continuation line) shifts; I / J arc offsets are relative and stay.
-    Comments are kept as they are. Returns text for text, a list for a list."""
+    Comments are kept as they are; an existing frame pass and park are dropped (render() adds
+    them again for the new extent). Returns text for text, a list for a list."""
     as_text = isinstance(program, str)
     lines = program.split("\n") if as_text else list(program)
+    # a frame or park computed before the move would be stale (its comment
+    # quotes the old extent): drop both, render()/finish() adds them anew
+    lines = strip_frame(_strip_park(lines))
     out = []
     for line in lines:
         code, sep, comment = line.partition(";")
