@@ -327,6 +327,26 @@ def motion_report(lines, machine=None, sender=None, hotspots: int = 5) -> list[s
     return insert_notes(lines, grbl_model.report_lines(res, hotspots=hotspots))
 
 
+def translate(program, dx: float = 0.0, dy: float = 0.0):
+    """the same program moved by (dx, dy) mm: every absolute X / Y word on a motion line
+    (G0-G3, or a modal continuation line) shifts; I / J arc offsets are relative and stay.
+    Comments are kept as they are. Returns text for text, a list for a list."""
+    as_text = isinstance(program, str)
+    lines = program.split("\n") if as_text else list(program)
+    out = []
+    for line in lines:
+        code, sep, comment = line.partition(";")
+        if not re.search(r"\b[XY]-?[0-9.]", code) or re.match(r"\s*(G9[12]|\$)", code) \
+                or not (re.match(r"\s*G0?[0-3]\b", code) or re.match(r"\s*[XY]", code)):
+            out.append(line)
+            continue
+        code = re.sub(r"\b([XY])(-?[0-9.]+)",
+                      lambda m: f"{m.group(1)}{float(m.group(2)) + (dx if m.group(1) == 'X' else dy):.3f}",
+                      code)
+        out.append(code + sep + comment)
+    return "\n".join(out) if as_text else out
+
+
 def combine(*programs, validate: bool = False) -> str:
     """several programs (texts or line lists, finished or not) as ONE: the first keeps its
     preamble; later ones lose their $-settings writes (a $32=1 mid-stream stopped a real sender

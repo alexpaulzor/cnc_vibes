@@ -312,6 +312,18 @@ REACH_MIN_MM, REACH_MAX_MM = -10.0, 295.5
 # It tripped again on the HARVEY top foot at 293.5 (MPos Y=298.219); Alex:
 # "move the foot in by 1mm".
 REACH_MAX_Y_MM = 292.5
+# Job origin (Alex, after dialing the origin in): from now on X0 Y0 is the
+# material's actual bottom-left corner, not the disc's bounding box 5mm
+# inside it. Everything here is still laid out in the disc frame above
+# (disc 0..290, stock -5..295); finished G-code is moved by this much
+# (quickcut gcode.translate), so in the file the stock spans 0..300.
+STOCK_ORIGIN_SHIFT_MM = (STOCK_MM - DISC_MM) / 2  # 5.0
+
+
+def reach_in_stock_frame():
+    """(x min, x max, y max) of the reach above, in the file's stock-corner frame"""
+    d = STOCK_ORIGIN_SHIFT_MM
+    return REACH_MIN_MM + d, REACH_MAX_MM + d, REACH_MAX_Y_MM + d
 
 
 def frame_notch_paths(depth_mm=12.0, width_mm=3.2, stance_mm=200.0, overrun_mm=5.0,

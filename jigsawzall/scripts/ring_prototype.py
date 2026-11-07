@@ -3708,18 +3708,25 @@ def main():
         _check_xy_envelope(gcode, a.max_xy_mm)
 
         import gcode as _qc  # quickcut: combine = one preamble, one frame, one park
+        import stand_feet_sheet as SF
+
+        # X0 Y0 = the material's bottom-left corner (the disc's bbox sits
+        # STOCK_ORIGIN_SHIFT_MM inside it): every pass moves before combining,
+        # so the frame trace and park are computed in the stock frame
+        sh = SF.STOCK_ORIGIN_SHIFT_MM
+        gcode = _qc.translate(gcode, sh, sh)
 
         passes = []
         if strokes:
             from emitter import emit_etch_gcode
 
-            passes.append(emit_etch_gcode(  # etch first, while still in the stock
+            passes.append(_qc.translate(emit_etch_gcode(  # etch first, while still in the stock
                 strokes, material, cfg, f"{tag} letter outlines",
                 feed_override=a.etch_feed, power_percent=a.etch_power,
                 min_segment_mm=a.min_segment_mm,
                 arc_tolerance_mm=a.etch_arc_tol,
                 smooth_mm=a.etch_smooth_mm,
-            ))
+            ), sh, sh))
         if passes:
             gcode = _qc.combine(*passes, gcode)
         if a.frame_notches:
@@ -3727,14 +3734,14 @@ def main():
             # §13.18), cut LAST, deepest slice first, alternating between the
             # two slots: if the head hits an end stop near the stock edge and
             # the job aborts, everything else is already cut (§16.2)
-            import stand_feet_sheet as SF
-
             if a.corner_feet:
-                gcode = _qc.combine(gcode, corner_feet_pass(material))
-            gcode = _qc.combine(gcode, frame_notch_pass(material, a.notch_edge))
-            _check_xy_envelope(gcode, SF.REACH_MAX_MM, SF.REACH_MIN_MM, SF.REACH_MAX_Y_MM)
+                gcode = _qc.combine(gcode, _qc.translate(corner_feet_pass(material), sh, sh))
+            gcode = _qc.combine(gcode, _qc.translate(frame_notch_pass(material, a.notch_edge), sh, sh))
+            xlo, xhi, yhi = SF.reach_in_stock_frame()
+            _check_xy_envelope(gcode, xhi, xlo, yhi)
         else:
-            _check_xy_envelope(gcode, a.max_xy_mm)
+            gcode = _qc.render(gcode)  # frame + park on a lone cut pass too
+            _check_xy_envelope(gcode, a.max_xy_mm + sh)
         Path(a.gcode).write_text(gcode)
         from ring_lint import lint_motion
 
@@ -3781,7 +3788,7 @@ def corner_feet_pass(material):
     gap = min(f.distance(Point(145.0, 145.0).buffer(145.0, quad_segs=128).exterior)
               for f in feet)
     return DS.emit_gcode(paths, material, "stand feet from the sheet's right-hand corners", notes=[
-        "2 keyed stand feet, base along the right stock edge x=295, nose in the "
+        f"2 keyed stand feet, base along the right stock edge x={SF.STOCK_MM:g}, nose in the "
         "top-right / bottom-right corner",
         f"{gap:.1f}mm of frame between each foot and the disc cut; the base cut runs "
         "along the stock edge (may mark the bed)",
@@ -3799,8 +3806,9 @@ def frame_notch_pass(material, notch_edge="left"):
     return DS.emit_gcode(
         SF.frame_notch_sections(edge=3 if notch_edge == "left" else 0), material,
         "frame notches for the keyed stand feet (LAST)",
-        notes=[f"{notch_edge} stock edge, 2 slots: one U each from the slot end to {axis}=0, "
-               f"then {axis}<0 in 2mm slices alternating slot A / slot B out to {axis}=-10",
+        notes=[f"{notch_edge} stock edge ({axis}=0, X0 Y0 = the stock's bottom-left corner), 2 slots: "
+               f"one U each from the slot end to {axis}={SF.STOCK_ORIGIN_SHIFT_MM:g}, then 2mm slices "
+               f"alternating slot A / slot B out to {axis}={SF.REACH_MIN_MM + SF.STOCK_ORIGIN_SHIFT_MM:g}",
                "if the head hits an end stop and aborts here, the puzzle is done: "
                "finish the remaining slot ends with a file, saw or knife",
                "SAME machine frame as the puzzle cut: run it on the same sheet "

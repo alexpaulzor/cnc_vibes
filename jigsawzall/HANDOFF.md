@@ -87,10 +87,18 @@ and push on `claude/funny-mccarthy-gh3t8s`. Outputs Alex cuts go in
 
 - LaserTree 10 W diode on a CNC. **M3 only** (static power), **exactly one
   `$32=1`** (`quickcut gcode.combine` handles it).
-- Reach (puzzle-job frame, disc bbox 0..290, stock −5..295):
-  X −10 .. 295.5; **Y ≤ 292.5** (was 293.5; tripped again on the HARVEY top foot). The Y limit switch tripped at MPos
-  Y = 294.453 (`stand_feet_sheet.REACH_MAX_Y_MM`). `_check_xy_envelope`
-  takes a separate Y max.
+- **Origin: X0 Y0 = the material's actual bottom-left corner** (Alex, Nov
+  2026, after dialing the origin in; no more 5mm inset). Files span the
+  stock 0..300; the 290mm disc sits at 5..295. The code still lays out in
+  the old disc frame (disc 0..290) and `ring_prototype` moves every pass by
+  `stand_feet_sheet.STOCK_ORIGIN_SHIFT_MM` (5) with `quickcut gcode.translate`
+  before combining, so the frame trace and park are in the stock frame.
+- Reach, in the file's (stock) frame: X −5 .. 300.5, **Y ≤ 297.5**
+  (`reach_in_stock_frame()`; = the old disc-frame −10 .. 295.5, Y ≤ 292.5).
+  The Y switch tripped at the old disc-frame 294.45, and again on the
+  HARVEY top foot at 293.5. `_check_xy_envelope` takes a separate Y max.
+- Every file starts with quickcut's frame pass (rapid laser-off trace of
+  the job's whole extent) and ends with its park (X0 at the max cut Y).
 - The laser sits ~80 mm −Y and ~20 mm −X from the spindle, so cut stand
   notches on the **left (−X) edge**.
 - Material: `ply3`, cut F350 × 1 pass at 100% (S1000).
