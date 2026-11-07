@@ -225,6 +225,15 @@ class RingParams:
     # cut so the assembled centre disc turns freely: nobody's name is favoured
     # as "up". The disc's own spokes keep their tabs and hold it together.
     hub_rotates: bool = True
+    # A second ring of names inside the first (DEVOS: the kids outside, the
+    # parents inside, the surname in the middle; Alex: "abandon the rotating
+    # disc ... two layers of first names, each using the rules for outer
+    # letters"). The inner ring is built by build_ring itself on a disc the
+    # size of the outer hub (center_text goes in ITS middle) and its seams are
+    # merged into the outer layout, joined by a tabbed hub circle.
+    inner_words: tuple | None = None
+    inner_rim_mm: float = 14.0  # inner letters' tops -> the circle between the rings
+    _capture: bool = False  # internal: build_ring returns its raw seams (inner ring)
     center_track_mm: float = 2.0  # starting extra spacing between loose center letters
     # Wood between two adjacent loose center letters is a short finger
     # attached only at its ends -- must be at least this wide (Alex: 3mm is
@@ -1879,7 +1888,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
     center_words = []
     hull_mode = bool(rp.center_text) and rp.center_style == "hull"
     L["center_cap_mm"] = None
-    if rp.center_text and rp.center_style in ("flat", "ring", "hull"):
+    if rp.inner_words:
+        pass  # the centre text goes inside the inner ring (built below)
+    elif rp.center_text and rp.center_style in ("flat", "ring", "hull"):
         # Loose letters cut straight out of the ordinary pinwheel hub: no
         # medallion, no exemption, spokes stay. They join letter_union (so
         # they become pockets/pieces like any letter) but NOT the outer
@@ -1916,6 +1927,25 @@ def build_ring(words, seed, rp: RingParams, cfg):
             world_block = affinity.translate(found, C[0], C[1])
             world.append(world_block)
             _center_medallion = (C[0], C[1], r_h)
+    inner = None
+    if rp.inner_words:
+        # the inner ring: a whole ring puzzle on the hub disc, letters at the
+        # outer ring's cap height, its own centre text in the middle
+        rp_in = replace(rp, diameter_mm=2 * r_h / ppm, rim_mm=rp.inner_rim_mm, frame_mm=0.0,
+                        cap_h_max_mm=L["cap_mm"], cap_h_min_mm=L["cap_mm"], inner_words=None,
+                        hub_rotates=False, _capture=True, shape="disc")
+        inner = build_ring(list(rp.inner_words), seed, rp_in, cfg)
+        dx, dy = C[0] - inner["C"][0], C[1] - inner["C"][1]
+        inner["world"] = [affinity.translate(g, dx, dy) for g in inner["world"]]
+        for sl in inner["variants"]:
+            for sm in sl:
+                sm["pts"] = [(x + dx, y + dy) for x, y in sm["pts"]]
+        world.extend(inner["world"])
+        inner["solids"] = [solid_of(g) for g in inner["world"]]
+        center_solids = center_solids + inner["solids"]
+        L["inner_cap_mm"] = inner["L"]["cap_mm"]
+        L["center_cap_mm"] = inner["L"].get("center_cap_mm")
+        _center_medallion = None
     letter_union = unary_union(world)
     solids_l = [solid_of(g) for g in locs]
     solids = [solid_of(w) for w in world[:n]]
@@ -1982,6 +2012,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
         return pts
 
     best = None
+    captured = []  # rp._capture: each variant's raw seams
     import time as _time
 
     _t_start = _time.time()
@@ -2199,6 +2230,44 @@ def build_ring(words, seed, rp: RingParams, cfg):
         split = []
         if hull_mode:
             pass  # no spokes, no hub circle
+        elif inner is not None:
+            # the inner ring's own seams fill the hub -- all but the ones out
+            # to its disc's edge (its top caps / rim subdivisions): there is
+            # no circle between the rings. Instead the outer ring's bottom
+            # caps and hub subdivisions run on inward until they meet an inner
+            # letter (or an inner seam, between letters), so the band between
+            # the rings is cut letter to letter with seams long enough for tabs
+            # (Alex: "edges connect the letters").
+            kept = [dict(sm) for sm in inner["variants"][variant % len(inner["variants"])]
+                    if "B" not in sm["ends"]]
+            obst_lines = unary_union([LineString(sm["pts"]) for sm in kept])
+            obst_letters = unary_union(inner["solids"])
+            r_stop = r_h - (rp.inner_rim_mm + L["cap_mm"]) * ppm
+            for sm in seams:
+                if sm["kind"] not in ("botcap", "hubsub"):
+                    continue
+                q = sm["pts"][-1]
+                if abs(math.hypot(q[0] - C[0], q[1] - C[1]) - r_h) > 2 * ppm:
+                    continue
+                phi = ang_of(q, C)
+                end = (C[0] + r_stop * math.sin(phi), C[1] - r_stop * math.cos(phi))
+                ray = LineString([q, end])
+                best_hit, best_kind = None, None
+                for geom, kind in ((obst_letters, "L"), (obst_lines, "T")):
+                    x = ray.intersection(geom)
+                    if x.is_empty:
+                        continue
+                    d = ray.project(nearest_points(Point(q), x)[1])
+                    if best_hit is None or d < best_hit:
+                        best_hit, best_kind = d, kind
+                if best_hit is None:
+                    best_hit, best_kind = ray.length, "T"
+                hit = ray.interpolate(best_hit)
+                k_ = max(1, int(best_hit / (2 * ppm)))
+                sm["pts"] = list(sm["pts"]) + [tuple(ray.interpolate(best_hit * t / k_).coords[0])
+                                               for t in range(1, k_ + 1)]
+                sm["ends"] = (sm["ends"][0], best_kind)
+            seams.extend(kept)
         elif center_polys and rp.center_split:
             # Split hub for two center words (center_style "ring"): a tabbed
             # DIVIDER across the disc between the words, an inner circle just
@@ -2281,7 +2350,7 @@ def build_ring(words, seed, rp: RingParams, cfg):
                     dict(pts=curved([a, b]), kind="cornersub", ends=("T", "B"))
                 )
         # --- hub circle: arcs between spoke landings (caps T onto it) ---------
-        hs = sorted(split) if not hull_mode else []
+        hs = sorted(split) if not (hull_mode or inner is not None) else []
         for q in range(len(hs)):
             b0, b1 = hs[q], hs[(q + 1) % len(hs)]
             seams.insert(
@@ -2308,6 +2377,9 @@ def build_ring(words, seed, rp: RingParams, cfg):
             for sm in seams:
                 sm["keep"] = True
                 sm["plain_ok"] = True
+        if rp._capture:
+            captured.append([dict(sm) for sm in seams])
+            continue
         # split long cells on the raw (untabbed) seam lines, so split ends
         # land exactly on the seams they meet; repeat until nothing is long.
         # Splits go first so they get first pick of tab positions.
@@ -2354,6 +2426,8 @@ def build_ring(words, seed, rp: RingParams, cfg):
             )
         if best is None or sc < best[0]:
             best = (sc, surround, counters, st, seams)
+    if rp._capture:
+        return dict(variants=captured, world=world, C=C, L=L)
     sc, surround, counters, st, seams = best
     st["score"] = sc
     pieces = {(k, 0): p for k, p in enumerate(surround + counters)}
@@ -3486,6 +3560,11 @@ def main():
                     help="min wood between a cut and a letter (default min_feature_mm)")
     ap.add_argument("--border-floor-mm", type=float, default=None,
                     help="min wood between a tab and the disc edge (default min_feature_mm)")
+    ap.add_argument("--inner-words", default=None,
+                    help="a second ring of names inside the first, e.g. JULIANNE+BRAD "
+                         "(no rotating hub; --center-text then goes inside the inner ring)")
+    ap.add_argument("--inner-rim-mm", type=float, default=None,
+                    help="inner ring: letter tops -> the circle between the rings (default 14)")
     ap.add_argument("--center-core-text", default=None,
                     help="with a two-word ring-style --center-split hub: one more word set "
                          "straight across the inner disc (e.g. the surname inside the parents)")
@@ -3579,6 +3658,9 @@ def main():
         center_word=_center_word_index(a.center_word, words),
         center_cap_target_mm=a.center_cap_mm,
         center_core_text=a.center_core_text.upper() if a.center_core_text else None,
+        **({"inner_words": tuple(w.upper() for w in a.inner_words.split("+") if w.strip()),
+            "hub_rotates": False} if a.inner_words else {}),
+        **({"inner_rim_mm": a.inner_rim_mm} if a.inner_rim_mm is not None else {}),
         **({"hub_ring_min_mm": a.hub_ring_mm} if a.hub_ring_mm is not None else {}),
         **({"center_min_gap_mm": a.center_min_gap_mm} if a.center_min_gap_mm is not None else {}),
         **({"letter_clearance_mm": a.letter_clearance_mm} if a.letter_clearance_mm is not None else {}),
