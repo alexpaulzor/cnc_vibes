@@ -26,3 +26,11 @@
 - DONE: lift_full.scad show_rails mockup + animation; collision check (CGAL intersection) clean at both stroke ends; NOTES section 4 updated.
 - DECISION: back guard is a fixed 2040 tied to F (keeps M bare) rather than a 2020 on M.
 - NEED: Alex confirm wheel layout and visibility trade-off before any cut parts.
+
+## 2026-11-07 jigsawzall -> quickcut (task #26)
+- GOAL: port jigsawzall laser features into quickcut and remove competing implementations repo-wide.
+- LEARNED: the 51 failed + 8 errors were all a missing cv2; with opencv-python-headless 5 geometry tests fail (pre-existing, unrelated).
+- DONE: quickcut gained mode (M3/M4), moves() arcs, prepare(), linear-warmup etch(), raster(), combine(), motion_report(), paths.py (fuse, bridge_chains, CutIndex), order.nearest_chains/nearest_safe, motion follow_through(laps) / collapse_shuttles / warmup_wiggle(one_trip). jigsawzall emitter 1499 -> ~850 lines; its scripts, orpot, laser lessons, spiral_cal and scads feeder knock-outs use the shared code.
+- VERIFIED: every suite matches its baseline; scads feeder files identical cut geometry; spiral_cal / etch_matrix_cal byte-identical; NORA puzzle same 21 laser-on events (+33 mm loop overlap).
+- DECISION: closed puzzle chains now get the shop loop overlap; combine() re-frames the union and parks once (old combine kept the first program frame and parked mid-file).
+- FIXED: frame.job_extent counted every G2/G3 arc as its full circle; a near-straight biarc (huge radius) pushed the frame to X -445..540 (the laser-off frame would have hit the endstops). Now the arc's actual sweep. Found via motion_test_plate (its own 0..290 assert failed before this port too).

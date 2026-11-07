@@ -15,6 +15,7 @@ Within that rule, cuts are chained to keep travel short:
     cuts = order_middle_out(cuts, start=(0, 0))       # list[Polyline] -> list[Polyline]
 
 `order_by_area` keeps the old rule (smallest area first): also middle-out, but travel-blind.
+`nearest_chains` / `nearest_safe` order open point-list chains (jigsawzall edge routes, etch strokes).
 """
 from __future__ import annotations
 
@@ -141,3 +142,35 @@ def _or_opt(seq, before, start, rounds=3):
         if not improved:
             break
     return seq
+
+
+# ---------------------------------------------------------------- open chains (point lists)
+class _Chain:
+    def __init__(self, points, closed=False):
+        self.points, self.closed = list(points), closed
+
+
+def nearest_chains(chains, start=(0.0, 0.0)):
+    """greedy nearest-next order of open chains (lists of points), each entered from its nearer end
+    (reversed if needed): the greedy step of order_middle_out, with no containment and no or-opt"""
+    if not chains:
+        return []
+    return [pl.points for pl in order_middle_out([_Chain(c) for c in chains], start, improve=False)]
+
+
+def nearest_safe(chains, start, min_sep_of):
+    """nearest-next order with a thermal floor: jump to the closest remaining chain whose entry is
+    farther than min_sep_of(candidate) from the last chain's entry, so the heat of the laser-off/on
+    event just finished has room to dissipate; once none clears the floor, plain closest. Chains
+    keep their direction (entry = first point)."""
+    remaining, out, cur = list(chains), [], start
+    while remaining:
+        def dist2(ch):
+            p = ch[0]
+            return (p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2
+        safe = [ch for ch in remaining if dist2(ch) > min_sep_of(ch) ** 2]
+        best = min(safe or remaining, key=dist2)
+        out.append(best)
+        cur = best[0]
+        remaining.remove(best)
+    return out

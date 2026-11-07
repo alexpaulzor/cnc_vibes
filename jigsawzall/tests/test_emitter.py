@@ -30,7 +30,6 @@ from emitter import (  # noqa: E402
     extract_unique_edges,
     greedy_order,
     img_to_machine_mm,
-    order_inside_out,
 )
 from motion import decimate  # noqa: E402
 from geometry import (  # noqa: E402
@@ -91,15 +90,20 @@ def _tiny_pieces(cfg):
     ]
 
 
-def test_order_inside_out_letters_first():
+def test_simple_cut_letters_before_their_cell():
+    """middle-out (quickcut.order): a letter inside its cell's pocket is cut before the cell"""
+    cfg = small_puzzle_config()
+    m = cfg.margin_px
     pieces = [
-        {"kind": "cell", "polygon": "a"},
-        {"kind": "letter", "polygon": "b"},
-        {"kind": "cell", "polygon": "c"},
-        {"kind": "letter", "polygon": "d"},
+        {"kind": "cell", "polygon": Polygon([(m, m), (m + 90, m), (m + 90, m + 90), (m, m + 90)],
+                                           [[(m + 30, m + 30), (m + 60, m + 30), (m + 60, m + 60), (m + 30, m + 60)]])},
+        {"kind": "letter", "polygon": Polygon([(m + 30, m + 30), (m + 60, m + 30), (m + 60, m + 60), (m + 30, m + 60)])},
     ]
-    kinds = [p["kind"] for p in order_inside_out(pieces)]
-    assert kinds == ["letter", "letter", "cell", "cell"]
+    g = emit_cut_gcode_simple(pieces, _tiny_material(), cfg, "X")
+    starts = [ln for ln in g.splitlines() if ln.startswith("G0 ") and "; " not in ln][5:]   # skip the frame
+    xs = [float(re.search(r"X(-?[0-9.]+)", ln).group(1)) for ln in starts]
+    inner = (30 / cfg.px_per_mm - 1e-6, 60 / cfg.px_per_mm + 1e-6)
+    assert inner[0] <= xs[0] <= inner[1], "first cut should be inside the pocket"
 
 
 def test_simple_cut_validator_headers():
@@ -127,9 +131,9 @@ def test_simple_cut_defaults_to_static_m3():
 def test_simple_cut_pass_count_matches_material():
     cfg = small_puzzle_config()
     g = emit_cut_gcode_simple(_tiny_pieces(cfg), _tiny_material(), cfg, "X")
-    # 2 passes per polygon * 2 polygons = 2 "pass 1 of 2" + 2 "pass 2 of 2"
-    assert g.count("pass 1 of 2") == 2
-    assert g.count("pass 2 of 2") == 2
+    # 2 passes per polygon * 2 polygons (quickcut.cut labels them "; pass k/n")
+    assert g.count("; pass 1/2") == 2
+    assert g.count("; pass 2/2") == 2
 
 
 def test_simple_cut_never_emits_dwell():
@@ -515,35 +519,6 @@ def test_render_gcode_previews_writes_png_and_svg(tmp_path):
     assert "<polyline" in body  # at least one cut path drawn
 
 
-def test_trim_recut_ends_strips_dead_end_recut_only():
-    """Re-cut line at a path's start/end connects to nothing and is dropped;
-    a re-cut stretch BETWEEN two new cuts (a useful backtrack) is kept."""
-    from emitter import _CutIndex, _trim_recut_ends
-
-    cut = _CutIndex()
-    cut.add([(0.0, 0.0), (10.0, 0.0)])  # already cut by an earlier path
-    # starts on old line, then new cut
-    assert _trim_recut_ends([(0.0, 0.0), (5.0, 0.0), (5.0, 5.0)], cut) == [(5.0, 0.0), (5.0, 5.0)]
-    # new cut, then dead-ends back along old line
-    assert _trim_recut_ends([(5.0, 5.0), (5.0, 0.0), (0.0, 0.0)], cut) == [(5.0, 5.0), (5.0, 0.0)]
-    # new -> old connector -> new: kept whole
-    p = [(2.0, 5.0), (2.0, 0.0), (8.0, 0.0), (8.0, 5.0)]
-    assert _trim_recut_ends(p, cut) == p
-    # entirely old: nothing left to cut
-    assert len(_trim_recut_ends([(0.0, 0.0), (10.0, 0.0)], cut)) < 2
-
-
-def test_loop_follow_through_wraps_until_lead_covered():
-    from emitter import _loop_follow_through
-
-    sq = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]  # 40mm loop
-    tail = _loop_follow_through(sq, 15.0)
-    assert tail[-1] == pytest.approx((10.0, 5.0))  # 10 along x, 5 up: 15mm past start
-    long_tail = _loop_follow_through(sq, 100.0)  # 2.5 laps: no one-lap cap
-    walked = sum(math.dist(a, b) for a, b in zip([sq[0]] + long_tail, long_tail))
-    assert walked == pytest.approx(100.0)
-
-
 def test_reconcile_letter_pockets_makes_shared_edge_single():
     from shapely.geometry import box
 
@@ -560,29 +535,3 @@ def test_reconcile_letter_pockets_makes_shared_edge_single():
     once = sum(e.length for e in extract_unique_edges(fixed))
     assert once == pytest.approx(400 + 80)  # panel + pocket, each cut once
     assert raw > once + 70  # before: the letter ring was cut as a second line
-
-
-def test_cut_bridges_gaps_closed_loop_once():
-    from emitter import cut_bridges
-
-    sq = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
-    out = cut_bridges([sq], [(5.0, 0.0)], 0.5)
-    assert len(out) == 1  # loop opened at the gap, not split in two
-    length = sum(math.dist(a, b) for a, b in zip(out[0], out[0][1:]))
-    assert abs(length - 39.5) < 1e-6
-    assert math.dist(out[0][0], (5.25, 0)) < 1e-6 and math.dist(out[0][-1], (4.75, 0)) < 1e-6
-
-
-def test_cut_bridges_three_faces_and_untouched_chain():
-    from emitter import cut_bridges
-
-    tri = [(0, 0), (10, 0), (5, 8), (0, 0)]
-    other = [(20, 0), (30, 0)]
-    mids = [(5, 0), (7.5, 4), (2.5, 4)]
-    out = cut_bridges([tri, other], mids, 0.5)
-    assert other in [list(map(tuple, c)) for c in out]
-    tri_parts = [c for c in out if c != other]
-    assert len(tri_parts) == 3
-    total = sum(math.dist(a, b) for c in tri_parts for a, b in zip(c, c[1:]))
-    perim = 10 + 2 * math.dist((0, 0), (5, 8))
-    assert abs(total - (perim - 3 * 0.5)) < 1e-6

@@ -17,11 +17,11 @@ PKG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG_DIR))
 
 from emit import (  # noqa: E402
-    decimate,
     emit_cut_gcode,
     emit_disc_gcode,
     load_material,
 )
+from motion import decimate  # noqa: E402  (quickcut, on the path via emit)
 from ribs import (  # noqa: E402
     build_all_ribs,
     build_rib,

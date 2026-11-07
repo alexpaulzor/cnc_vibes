@@ -3,10 +3,15 @@
 > **Status 2026-11-06 (see claude.log):** branches merged (main = jigsaw branch + this work;
 > scads master fast-forwarded). Core built (`quickcut/gcode.py`, `order.py`, `frame.py`). scads/marbles,
 > orpot, svg2gcode emit through it; cnc_calibrate, lessons, cam/laser_cam and jigsawzall finish every file
-> through `gcode.render()`. A drift-guard test enforces it. **Remaining:** move jigsawzall's own cut/etch
-> motion onto `gcode.cut()/etch()` (triage its 51 failing + 8 erroring tests first); give the calibration
-> grids a validator exemption or fix their F5000 cells; delete the merged remote branches
-> (funny-mccarthy, circular-text) in the GitHub UI; optional OR-tools backend for `order.py`.
+> through `gcode.render()`. A drift-guard test enforces it.
+> **2026-11-07:** jigsawzall ported. Its generic features moved into quickcut (M4 `mode`, arc-fitted
+> `moves()`, `prepare()`, the linear-warmup `etch()`, `raster()`, `combine()`, `motion_report()`,
+> `paths.py` fuse / bridges / re-cut trimming, `order.nearest_chains` / `nearest_safe`) and jigsawzall,
+> its scripts, orpot, the laser lessons and spiral_cal call them instead of their own copies. Its
+> "51 failing + 8 erroring" tests were a missing `cv2` (opencv-python-headless): 5 geometry tests fail
+> before and after. **Remaining:** calibration grids' F5000 cells vs the validator; delete the merged
+> remote branches (funny-mccarthy, circular-text, consolidate) in the GitHub UI; optional OR-tools
+> backend for `order.py`; `cnc_vibes/scripts/cam.py`'s laser path still has its own material loader.
 
 Written 2026-11-06. ROADMAP items C108 (cut-order optimizer) and C109 (consolidation) live in
 `scads/marbles/clock/ROADMAP.md`. Read `CLAUDE.md` first: two rules there are non-negotiable

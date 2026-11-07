@@ -1,5 +1,13 @@
 # Ring layout: circular name puzzle (implementation spec)
 
+> **2026-11-07: the emitter helpers named below now live in quickcut** (the one laser G-code core):
+> `_order_chains_min_travel` → `gcode.nearest_chains`, `_fuse_touching_chains` → `gcode.fuse_touching`,
+> `_order_chains_nearest_safe` → `gcode.nearest_safe`, `combine_passes` → `gcode.combine`,
+> `cut_bridges` → `gcode.bridge_chains`, `_collapse_shuttles` → `motion.collapse_shuttles`,
+> `_loop_follow_through` → `motion.follow_through(laps=True)`, `_CutIndex` / `_trim_recut_ends` →
+> `gcode.CutIndex` / `gcode.trim_recut_ends`, per-path emission → `gcode.cut` / `gcode.etch`.
+> The behaviour described here is unchanged except: closed cut chains now get quickcut's loop overlap.
+
 Handoff from a cloud prototyping session to the workstation Claude that owns
 this repo. **Goal:** add a circular variant of the wave-grid name plate where
 the name wraps around a ring instead of running in a row, so long names

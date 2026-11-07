@@ -169,31 +169,18 @@ def cut_paths(feet, frame_out, stock):
 
 
 def emit_gcode(paths, material, title, notes=None):
-    from emitter import WARMUP_MS, _header
-    from motion import decimate, warmup_wiggle
+    """the stand's paths as quickcut cuts (warmup, passes, loop overlap) in the given order"""
+    from emitter import _header, cut_job
 
-    laser = material["laser"]
-    feed = laser["feed_mm_per_min"]
-    s = int(round(laser["power_percent"] * 10))
-    lead = WARMUP_MS / 1000 * feed / 60
-    lines = _header(title=title, material_id=material["id"], extra=(notes or [
+    job = cut_job(material, min_segment_mm=0.3)
+    lines = _header(title, job, (notes or [
         "display stand: 4 feet from the corner offcuts, then the frame outline (last)",
         "SAME machine frame as the puzzle cut (disc bbox 0..290): run it on the same "
         "sheet without moving it -- coordinates reach -5.5 / 295.5 (the stock edges)",
-    ]) + [f"warmup: {WARMUP_MS:.0f}ms = {lead:.1f}mm fwd half / back to start"])
+    ]))
     for i, pts in enumerate(paths, 1):
-        pts = decimate(pts, 0.3)
-        if len(pts) < 2:
-            continue
-        warm = warmup_wiggle(pts, lead)
-        lines += [f"; --- stand path {i}/{len(paths)} ---", f"G0 X{pts[0][0]:.3f} Y{pts[0][1]:.3f}",
-                  f"M3 S{s}", f"F{feed}"]
-        for _p in range(laser["passes"]):
-            lines += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in warm + pts[1:]]
-            warm = []
-            pts = pts[::-1]
-        lines += ["M5", ""]
-    lines += ["G0 X0 Y0", ""]
+        closed = len(pts) > 3 and math.dist(pts[0], pts[-1]) < 1e-6
+        lines += _qc.cut(_qc.Polyline(list(pts), closed), job, i, len(paths), label="stand path")
     return _qc.render(lines, validate=False)
 
 

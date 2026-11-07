@@ -32,7 +32,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "quickcut"))
 import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
 
-import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -276,12 +275,14 @@ def render_layout(
 
 
 def load_material(material_id: str) -> dict:
-    with (REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml").open() as f:
-        materials = yaml.safe_load(f)
-    for m in materials:
-        if m.get("id") == material_id:
-            return m
-    raise SystemExit(f"unknown material: {material_id}")
+    """the full material record (quickcut.gcode.material); exits with a message if unknown or no laser recipe"""
+    try:
+        m = _qc.material(material_id)
+    except _qc.GcodeError as e:
+        sys.exit(f"error: {e}")
+    if "laser" not in m:
+        sys.exit(f"error: material '{material_id}' has no laser params in material_profiles/laser_materials.yaml")
+    return m
 
 
 def emit_circle_path(

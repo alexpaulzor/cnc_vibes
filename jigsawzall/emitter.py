@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import math
 import sys
-from itertools import groupby
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "quickcut"))
-import gcode as _qc  # noqa: E402  (THE G-code core: every file is finished by _qc.render)
+import gcode as _qc  # noqa: E402  (THE G-code core: emission, ordering, finishing all live there)
 
-import yaml
 from PIL import Image
 from shapely.geometry import (
     GeometryCollection,
@@ -38,11 +36,9 @@ from shapely.geometry import (
     MultiPolygon,
     Polygon,
 )
-from shapely.ops import linemerge, substring, unary_union
+from shapely.ops import linemerge, unary_union
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "quickcut"))
-from motion import decimate, warmup_wiggle  # noqa: E402
-import arcfit  # noqa: E402
+from motion import collapse_shuttles, decimate  # noqa: E402
 import grbl_model  # noqa: E402
 
 from geometry import PuzzleConfig
@@ -52,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 # Diode cold-start ramp: time to reach full optical power after the beam fires.
 # Fixed for this machine regardless of material — every cut warms up for
 # this long (front-loaded as a fwd-half / back-half wiggle = 500ms each way).
-WARMUP_MS = 1000.0
+WARMUP_MS = _qc.DEFAULT_WARMUP_MS
 
 # emit_etch_gcode(smooth_mm=...): share of the shape-change budget spent on
 # the biarc fit (the rest goes to the smoothing spline).
@@ -65,15 +61,26 @@ SMOOTH_ARC_TOL_MM = 0.02
 
 
 def load_material(material_id: str) -> dict:
-    """Look up a material by id in the shared material_profiles/laser_materials.yaml."""
-    path = REPO_ROOT.parent / "material_profiles" / "laser_materials.yaml"
-    with path.open() as f:
-        materials = yaml.safe_load(f)
-    for m in materials:
-        if m.get("id") == material_id:
-            return m
-    available = ", ".join(sorted(m.get("id", "?") for m in materials))
-    raise SystemExit(f"unknown material: {material_id}. Available: {available}")
+    """the full material record from material_profiles/laser_materials.yaml (quickcut.gcode.material)"""
+    return _qc.material(material_id)
+
+
+def cut_job(material: dict, recipe: str = "laser", feed_override: int | None = None,
+            power_percent: float | None = None, mode: str | None = None, ramp_ms: float = WARMUP_MS,
+            min_segment_mm: float = 0.0) -> "_qc.CutJob":
+    """a quickcut CutJob from a material record (laser = cut, etch = score) plus this tool's
+    overrides. An etch recipe without lead_in_mm uses quickcut's linear warmup model."""
+    if recipe not in material:
+        raise SystemExit(
+            f"material {material.get('id')!r} has no {recipe}: profile -- add one to "
+            "laser_materials.yaml (see the etch: schema note) before emitting a pass for it")
+    r = material[recipe]
+    return _qc.CutJob(
+        feed_mm_per_min=feed_override if feed_override is not None else r["feed_mm_per_min"],
+        power_percent=power_percent if power_percent is not None else r["power_percent"],
+        passes=r.get("passes", 1), warmup_ms=ramp_ms, min_segment_mm=min_segment_mm,
+        material_id=material["id"], mode=mode or r.get("mode", "static"),
+        lead_in_mm=float(r["lead_in_mm"]) if recipe == "etch" and "lead_in_mm" in r else None)
 
 
 # ---------------------------------------------------------------------------
@@ -106,67 +113,8 @@ def img_to_machine_mm(
 # ---------------------------------------------------------------------------
 
 
-_PREAMBLE = (
-    "$32=1   ; GRBL laser mode",
-    "G21     ; mm",
-    "G90     ; absolute",
-    "M5      ; laser off",
-    "G0 X0 Y0",
-    "",
-)
-
-
-def combine_passes(*gcodes: str) -> str:
-    """Concatenate multiple full G-code programs (each built by _header(),
-    so each carries its own copy of _PREAMBLE) into ONE program: keeps the
-    first program's preamble, strips every subsequent one's $32=1/G21/G90/
-    M5/G0-X0Y0 block (its descriptive comments above that block are kept).
-
-    $32=1 is a GRBL SETTINGS write, not a motion command -- unlike G21/G90/
-    M5/G0 (harmless if repeated), a $-command appearing mid-stream is not
-    normal G-code-file content, and at least one real sender stopped a job
-    right after the etch pass because of exactly this: the cut pass's own
-    header re-issued $32=1 partway through the combined file. Always use
-    this instead of naive string concatenation when combining an etch pass
-    with a cut pass (or any two _header()-built programs)."""
-    preamble_block = "\n".join(_PREAMBLE[:-1])  # drop the trailing blank line
-    parts = [gcodes[0].rstrip()]
-    for g in gcodes[1:]:
-        g = g.rstrip()
-        idx = g.find(preamble_block)
-        if idx != -1:
-            end = idx + len(preamble_block)
-            g = g[:idx].rstrip() + "\n\n" + g[end:].lstrip("\n")
-        parts.append(g)
-    return "\n\n".join(parts) + "\n"
-
-
-def _header(
-    title: str,
-    material_id: str,
-    extra: list[str] | None = None,
-    mode: str = "static",
-) -> list[str]:
-    out = [
-        f"; {title}",
-        f"; generated by emitter.py",
-    ]
-    if extra:
-        out += [f"; {e}" for e in extra]
-    out += [
-        ";",
-        ";HEAD: laser",
-        f";MATERIAL: {material_id}",
-    ]
-    if mode == "static":
-        out.append(
-            ";LASER_MODE: static  (M3 — dwell-burn-through risk if motion stalls)"
-        )
-    out += [
-        "",
-        *_PREAMBLE,
-    ]
-    return out
+def _header(title: str, job: "_qc.CutJob", extra: list[str] | None = None) -> list[str]:
+    return _qc.preamble(job, title=title, notes=["generated by jigsawzall/emitter.py", *(extra or [])])
 
 
 # ---------------------------------------------------------------------------
@@ -190,15 +138,6 @@ def _polygon_to_paths_mm(poly, cfg: PuzzleConfig) -> list[list[tuple[float, floa
     return paths
 
 
-def order_inside_out(pieces: list[dict]) -> list[dict]:
-    """Letter pieces first (inside the cell pockets), then cells.
-    Simple ordering for small puzzles; for full puzzles use the
-    edge-based toposort below."""
-    letters = [p for p in pieces if p.get("kind") == "letter"]
-    cells = [p for p in pieces if p.get("kind") != "letter"]
-    return letters + cells
-
-
 def emit_cut_gcode_simple(
     pieces: list[dict],
     material: dict,
@@ -209,100 +148,34 @@ def emit_cut_gcode_simple(
     min_segment_mm: float = 0.0,
     power_percent: float | None = None,
 ) -> str:
-    """Per-polygon cut, simple letter-then-cells ordering. Suitable for
-    small-piece-count puzzles where edge dedup isn't worth the complexity.
-    Shared cell-to-cell edges get cut twice; acceptable for ~5-piece
-    tests.
-
-    mode="static" (default) emits M3 (constant power); "dynamic" emits M4
-    (power scales with feedrate). Static is the default because a weak ~10W
-    diode wants constant power — under M4 the power drops with feed and the
-    diode never reaches the cutting threshold. feed_override
-    replaces the material feedrate. min_segment_mm decimates points so no
-    emitted segment is shorter than that distance. power_percent overrides
-    the material power (S = percent*10). Diode cold-start fade is handled by
-    lead-in overlap in emit_cut_gcode_full, not by dwells (GRBL laser mode
-    fires only while moving)."""
-    laser = material["laser"]
-    pct = power_percent if power_percent is not None else laser["power_percent"]
-    power_s = int(round(pct * 10))
-    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
-    passes = laser["passes"]
-    on = "M3" if mode == "static" else "M4"
-
+    """Per-polygon cut for small-piece-count puzzles (shared cell edges get cut twice; fine for
+    ~5 pieces). Each ring is one quickcut cut (warmup wiggle, passes, overlap), in quickcut's
+    middle-out order (letters sit inside their cell pockets, so they go first).
+    mode "static" = M3 (default: a weak diode never reaches the cutting threshold under M4),
+    "dynamic" = M4. feed_override / power_percent replace the material recipe; min_segment_mm
+    decimates."""
+    job = cut_job(material, feed_override=feed_override, power_percent=power_percent, mode=mode,
+                  min_segment_mm=min_segment_mm)
+    cuts = [_qc.Polyline(pts, True) for piece in pieces
+            for pts in _polygon_to_paths_mm(piece["polygon"], cfg) if len(pts) >= 4]
+    cuts = _qc.order(cuts)
     extra = [
         "loose-fit puzzle: centerline cuts, kerf becomes the clearance",
         "ASSUMES Z already at focal height in your WCS",
-        "cut order: letters first, then cells (simple; shared edges cut twice)",
+        "cut order: middle-out (letters inside their pockets first); shared edges cut twice",
     ]
     if min_segment_mm > 0:
         extra.append(f"min segment: {min_segment_mm}mm (shorter chords decimated)")
-
-    ordered = order_inside_out(pieces)
-    lines = _header(
-        title=f"small puzzle: word={word}, {len(pieces)} pieces, "
-        f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm",
-        material_id=material["id"],
-        extra=extra,
-        mode=mode,
-    )
-
-    for i, piece in enumerate(ordered, start=1):
-        paths = _polygon_to_paths_mm(piece["polygon"], cfg)
-        kind = piece.get("kind", "cell")
-        for path_idx, pts in enumerate(paths):
-            pts = decimate(pts, min_segment_mm)
-            if len(pts) < 3:
-                continue
-            label = f"{kind} {i}"
-            if path_idx > 0:
-                label += f" (hole {path_idx})"
-            lines.append(f"; --- {label} ---")
-            x0, y0 = pts[0]
-            lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-            lines.append(f"{on} S{power_s}")
-            lines.append(f"F{feed}")
-            # Multi-pass ping-pong: forward, then reverse over the same points,
-            # alternating — never a laser-on move back to the start.
-            for pass_n in range(passes):
-                if passes > 1:
-                    dirn = "forward" if pass_n % 2 == 0 else "reverse"
-                    lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
-                seq = pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
-                for x, y in seq:
-                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-            lines.append("M5")
-            lines.append("")
-    lines += ["G0 X0 Y0", ""]
+    lines = _header(f"small puzzle: word={word}, {len(pieces)} pieces, "
+                    f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm", job, extra)
+    for i, pl in enumerate(cuts, 1):
+        lines += _qc.cut(pl, job, i, len(cuts))
     return _qc.render(lines, validate=False)
 
 
 # ---------------------------------------------------------------------------
 # Etch GCode: shallow non-cutting score pass (orientation / decorative marks)
 # ---------------------------------------------------------------------------
-
-
-def _loop_follow_through(pts, lead_mm):
-    """Closed loop pts[0]==pts[-1]: the points to keep tracing after the loop
-    closes, for lead_mm of extra travel -- wrapping round as many laps as it
-    takes (no one-lap cap: a short loop keeps circling until warm)."""
-    if lead_mm <= 0 or len(pts) < 3:
-        return []
-    out, left = [], lead_mm
-    ring = list(pts)
-    while left > 1e-9:
-        for a, b in zip(ring, ring[1:]):
-            d = math.dist(a, b)
-            if d <= 1e-9:
-                continue
-            if d >= left:
-                t = left / d
-                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
-                left = 0.0
-                break
-            out.append(b)
-            left -= d
-    return out
 
 
 def emit_etch_gcode(
@@ -321,185 +194,60 @@ def emit_etch_gcode(
     machine: "grbl_model.MachineProfile | None" = None,
     sender: "grbl_model.SenderProfile | None" = None,
 ) -> str:
-    """A shallow, non-cutting score pass tracing `strokes_px` (open
-    polylines, image px, e.g. from scripts/globe_etch.py) -- NOT piece
-    boundaries, no tabs/kerf considerations, just line-follow. Reads
-    material["etch"] for power/feed (falls back to a hard failure if the
-    material has no etch profile -- these numbers are meant to be looked at,
-    not silently defaulted from the cut settings, which would gouge instead
-    of score). See laser_materials.yaml's `etch:` schema note.
+    """A shallow, non-cutting score pass tracing `strokes_px` (open polylines, image px, e.g. from
+    scripts/globe_etch.py): line-follow only, no tabs / kerf. Recipe = material["etch"] (a hard
+    failure without one: etch numbers are meant to be looked at, not defaulted from the cut,
+    which would gouge). Emission is quickcut's etch(): the recipe's fixed lead_in_mm or the linear
+    warmup model, loops followed round past the start, open strokes ping-ponged first, a short
+    tick one out-and-back; never re-traced to save a warmup.
 
-    Every stroke gets its own warmup wiggle (fwd half / back to start, same
-    pattern as the cut emitters) -- the diode's cold-start ramp is assumed
-    LINEAR in power (ramp_ms_at_pct = WARMUP_MS * pct/100), so a shallow 25%
-    etch gets a much shorter lead-in than a 100% cut, not zero. Unlike the
-    cut pass, strokes are NEVER re-traced/backtracked to avoid a wiggle --
-    that would double-etch an already-scored line and darken it unevenly.
-    Chains are ordered by nearest-neighbor and fused where they already
-    touch (a fused chain has one true start, so it gets one wiggle, not one
-    per original stroke), same as the cut emitters, to cut down on
-    lift/re-fire count.
-
-    Optional etch-profile keys: `mode` ("static" M3 / "dynamic" M4 -- M4
-    scales power with actual speed, so a stall or slowdown can't burn
-    through), `lead_in_mm` (a fixed warmup distance replacing the linear
-    model, which at full power/fast feed grows to tens of mm and re-traces
-    whole short strokes). Strokes are simplified (`simplify_mm`) before
-    decimation: raw outline strokes are ~0.1mm staircase segments that GRBL
-    can't stream at etch feeds, so the head stalls between them.
-
-    `arc_tolerance_mm` (default None = off, plain G1 polylines): fit each
-    stroke's moves to G2/G3 arcs + G1 lines within that chord tolerance
-    (quickcut/arcfit.py). GRBL re-chops an arc into fine $12 chords whose
-    small junction angles keep the head near F on curves; long G1 chords on
-    tight curves force a slowdown at every junction ($11), which under M3
-    raises energy/mm. `smooth_mm` (default None = off) is the stronger
-    version: each traced stroke is replaced by a smoothing spline that stays
-    within (smooth_mm - 0.02)mm of it, then fitted with tangent-continuous
-    biarcs within 0.02mm (arcfit.smooth_polyline + fit_smooth_arcs), so the
-    etched line moves at most smooth_mm from the trace and consecutive moves
-    join without corners; it replaces simplify/decimate and arc_tolerance_mm.
-    `motion_report` appends the quickcut/grbl_model.py
-    prediction (per-stroke energy factor, hotspots) to the header comments
-    -- using `machine`/`sender` profiles, UNVERIFIED defaults if None."""
-    if "etch" not in material:
-        raise SystemExit(
-            f"material {material.get('id')!r} has no etch: profile -- "
-            "add one to laser_materials.yaml (see the etch: schema note) "
-            "before emitting an etch pass for it"
-        )
-    etch = material["etch"]
-    pct = power_percent if power_percent is not None else etch["power_percent"]
-    power_s = int(round(pct * 10))
-    feed = feed_override if feed_override is not None else etch["feed_mm_per_min"]
-    passes = etch.get("passes", 1)
-    mode = mode or etch.get("mode", "static")
-    on = "M3" if mode == "static" else "M4"
-    if "lead_in_mm" in etch:
-        lead_in_mm = float(etch["lead_in_mm"])
-        ramp_ms = lead_in_mm / (feed / 60.0) * 1000.0
-    else:
-        # Linear warmup model: ramp time scales with power, so a shallow
-        # etch's cold-start lead-in is proportionally shorter than a cut's.
-        ramp_ms = WARMUP_MS * (pct / 100.0)
-        lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
-
-    chains = [
-        [img_to_machine_mm(x, y, cfg) for x, y in s] for s in strokes_px if len(s) >= 2
-    ]
-    if smooth_mm:
-        chains = [arcfit.smooth_polyline(c, smooth_mm - SMOOTH_ARC_TOL_MM) for c in chains]
-    else:
-        if simplify_mm > 0:
-            chains = [list(LineString(c).simplify(simplify_mm).coords) for c in chains]
-        chains = [decimate(c, min_segment_mm) for c in chains]
+    Strokes are prepared with quickcut.prepare(): simplified (`simplify_mm`) then decimated
+    (`min_segment_mm`), or with `smooth_mm` replaced by a smoothing spline within
+    (smooth_mm - 0.02) of the trace and emitted as tangent biarcs within 0.02.
+    `arc_tolerance_mm` fits plain G2/G3 arcs instead. Chains are ordered nearest-next, fused where
+    they touch (one start = one warmup), then re-ordered nearest-safe (min separation = half each
+    chain's warmup, so consecutive laser-on events don't stack heat). `motion_report` adds
+    grbl_model's prediction to the header (UNVERIFIED machine / sender defaults when None)."""
+    job = cut_job(material, "etch", feed_override=feed_override, power_percent=power_percent, mode=mode)
+    lead = job.etch_lead_mm
+    chains = [_qc.prepare([img_to_machine_mm(x, y, cfg) for x, y in s], simplify_mm, min_segment_mm, smooth_mm,
+                          SMOOTH_ARC_TOL_MM) for s in strokes_px if len(s) >= 2]
     chains = [c for c in chains if len(c) >= 2]
     start = (0.0, 0.0)
-    # _order_chains_min_travel groups genuinely touching strokes adjacently
-    # so _fuse_touching_chains can join them into one real chain; ONLY THEN
-    # does nearest-safe reorder the final fused chains (each is one true
-    # laser-off/on event) for thermal separation instead of pure travel.
-    chains = _order_chains_min_travel(chains, start)
-    chains = _fuse_touching_chains(chains)
-    # Floor is half each chain's own wiggle lead-in distance.
-    min_sep_mm = lead_in_mm / 2.0
-    chains = _order_chains_nearest_safe(chains, start, lambda ch: min_sep_mm)
+    chains = _qc.fuse_touching(_qc.nearest_chains(chains, start))
+    min_sep_mm = lead / 2.0
+    chains = _qc.nearest_safe(chains, start, lambda ch: min_sep_mm)
 
+    pct, feed = job.power_percent, job.feed_mm_per_min
     extra = [
-        "SHALLOW ETCH PASS -- does not cut through, orientation/decorative "
-        "mark only",
-        f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test "
-        "first (see laser_materials.yaml)",
+        "SHALLOW ETCH PASS -- does not cut through, orientation/decorative mark only",
+        f"etch power/feed: {pct}% / {feed}mm/min -- UNVERIFIED, scrap-test first (see laser_materials.yaml)",
         f"{len(chains)} strokes",
-        f"chain order: nearest-safe (min separation = half each chain's own "
-        f"wiggle lead-in, {min_sep_mm:.2f}mm) -- keeps consecutive "
-        "laser-off/on events apart enough to avoid residual-heat bias, "
-        "without a farthest-first travel penalty",
+        f"chain order: nearest-safe (min separation = half each chain's own wiggle lead-in, "
+        f"{min_sep_mm:.2f}mm) -- keeps consecutive laser-off/on events apart",
+        f"power mode: {job.on} ({job.mode}); strokes simplified {simplify_mm}mm, min segment {min_segment_mm}mm",
     ]
-    extra.append(
-        f"power mode: {on} ({mode}); strokes simplified {simplify_mm}mm, "
-        f"min segment {min_segment_mm}mm"
-    )
-    if "lead_in_mm" in etch:
-        extra.append(
-            f"warmup: fixed {lead_in_mm:.2f}mm lead-in (~{ramp_ms:.0f}ms at F{feed}) "
-            "-- loops follow through past the start, open strokes ping-pong"
-        )
-    elif lead_in_mm > 0:
-        extra.append(
-            f"warmup: linear model, {ramp_ms:.0f}ms = {lead_in_mm:.2f}mm at "
-            f"F{feed} ({pct}% of the {WARMUP_MS:.0f}ms full-power ramp) -- "
-            "closed loops follow through past the start (laps until warm), "
-            "open strokes ping-pong over themselves first"
-        )
-    lines = _header(
-        title=f"ETCH: {title}", material_id=material["id"], extra=extra, mode=mode
-    )
-    for i, pts in enumerate(chains, start=1):
-        path_len = sum(
-            math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])
-        )
-        closed = len(pts) > 3 and math.dist(pts[0], pts[-1]) <= 0.05
-        # Warmup that SPREADS the cold-start energy instead of piling it up:
-        #  * closed loop: etch it, then keep going round past the start until
-        #    lead_in_mm extra has been covered (several laps if the loop is
-        #    shorter) -- the cold-traced start gets ONE hot re-pass, no
-        #    out-and-back pile-up at the start point;
-        #  * open stroke: ping-pong over the stroke itself first (warmup_wiggle,
-        #    full trips when the stroke is shorter than the lead-in).
-        warm, tail = [], []
-        if closed:
-            tail = _loop_follow_through(pts, lead_in_mm)
-        else:
-            warm = warmup_wiggle(pts, lead_in_mm)  # ends back at pts[0]
-            if path_len < max(1.0, lead_in_mm / 4):
-                # short stroke (a coverage tick): ONE out-and-back, not the
-                # ~lead_in/length laps the full warmup would ping-pong over it
-                # -- that piled x2.7 energy/mm onto a 3mm tick at 100%/F5000
-                warm = list(pts[1:]) + list(reversed(pts))[1:]
-        x0, y0 = pts[0]
-        lines.append(f"; --- etch stroke {i} ({'loop' if closed else 'open'}) ---")
-        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-        lines.append(f"{on} S{power_s}")
-        lines.append(f"F{feed}")
-        moves = []
-        for pass_n in range(passes):
-            if pass_n == 0 and warm:
-                moves += warm
-            moves += pts[1:] if pass_n % 2 == 0 else pts[-2::-1]
-        moves += tail
-        if smooth_mm:
-            prims = arcfit.fit_smooth_arcs([pts[0], *moves], SMOOTH_ARC_TOL_MM)
-            lines += arcfit.prims_to_gcode(prims)
-        elif arc_tolerance_mm:
-            prims = arcfit.fit_arcs([pts[0], *moves], arc_tolerance_mm)
-            lines += arcfit.prims_to_gcode(prims)
-        else:
-            lines += [f"G1 X{x:.3f} Y{y:.3f}" for x, y in moves]
-        lines.append("M5")
-        lines.append("")
-    lines += ["G0 X0 Y0", ""]
+    if job.lead_in_mm is not None:
+        extra.append(f"warmup: fixed {lead:.2f}mm lead-in (~{lead / (feed / 60.0) * 1000.0:.0f}ms at F{feed}) "
+                     "-- loops follow through past the start, open strokes ping-pong")
+    elif lead > 0:
+        extra.append(f"warmup: linear model, {job.warmup_ms * pct / 100.0:.0f}ms = {lead:.2f}mm at F{feed} "
+                     f"({pct}% of the {job.warmup_ms:.0f}ms full-power ramp) -- closed loops follow through "
+                     "past the start (laps until warm), open strokes ping-pong over themselves first")
     if smooth_mm:
-        at = lines.index(";HEAD: laser") - 1
-        lines.insert(at, f"; strokes SMOOTHED: spline within {smooth_mm - SMOOTH_ARC_TOL_MM:.2f}mm "
-                     f"of the trace + tangent biarcs within {SMOOTH_ARC_TOL_MM}mm "
-                     f"(max shape change {smooth_mm}mm, quickcut/arcfit.py)")
+        extra.append(f"strokes SMOOTHED: spline within {smooth_mm - SMOOTH_ARC_TOL_MM:.2f}mm of the trace + "
+                     f"tangent biarcs within {SMOOTH_ARC_TOL_MM}mm (max shape change {smooth_mm}mm, quickcut/arcfit.py)")
     elif arc_tolerance_mm:
-        at = lines.index(";HEAD: laser") - 1
-        lines.insert(at, f"; strokes fitted to G2/G3 arcs within {arc_tolerance_mm}mm "
-                     "(quickcut/arcfit.py)")
+        extra.append(f"strokes fitted to G2/G3 arcs within {arc_tolerance_mm}mm (quickcut/arcfit.py)")
+    lines = _header(f"ETCH: {title}", job, extra)
+    for i, pts in enumerate(chains, start=1):
+        closed = len(pts) > 3 and math.dist(pts[0], pts[-1]) <= 0.05
+        lines += _qc.etch(_qc.Polyline(pts, closed), job, i, len(chains),
+                          arc_tol_mm=None if smooth_mm else arc_tolerance_mm,
+                          smooth_tol_mm=SMOOTH_ARC_TOL_MM if smooth_mm else None)
     if motion_report:
-        _insert_motion_report(lines, machine, sender)
+        lines = _qc.motion_report(lines, machine, sender)
     return _qc.render(lines, validate=False)
-
-
-def _insert_motion_report(lines, machine=None, sender=None):
-    """Simulate `lines` through quickcut/grbl_model.py and put the predicted
-    per-stroke speed / energy-factor summary into the header comments."""
-    res = grbl_model.simulate("\n".join(lines), machine, sender)
-    rep = grbl_model.report_lines(res, hotspots=5)
-    at = lines.index(";HEAD: laser") - 1
-    lines[at:at] = [f"; {r}" for r in rep]
 
 
 # ---------------------------------------------------------------------------
@@ -813,148 +561,10 @@ def eulerian_order(
 def chain_contiguous_paths(
     ordered: list[tuple[LineString, bool]], tol_px: float = 0.5
 ) -> list[list[tuple[float, float]]]:
-    """Fuse an ordered list of (edge, reversed) into continuous polylines.
-
-    Consecutive edges whose join is within tol_px are concatenated into a
-    single path so the laser cuts them in one uninterrupted stroke (one
-    laser-on, no mid-line lift/re-fire). A new path
-    starts only where the gap to the previous edge's end exceeds tol_px.
-
-    Returns a list of point-lists (each a continuous path). Each edge's
-    direction was already resolved by greedy_order; we honor it.
-    """
-    paths: list[list[tuple[float, float]]] = []
-    cur: list[tuple[float, float]] = []
-    for edge, _reversed in ordered:
-        pts = list(edge.coords)
-        if len(pts) < 2:
-            continue
-        if not cur:
-            cur = list(pts)
-            continue
-        lx, ly = cur[-1]
-        if math.hypot(pts[0][0] - lx, pts[0][1] - ly) <= tol_px:
-            # contiguous — append, skipping the duplicated join point
-            cur.extend(pts[1:])
-        else:
-            paths.append(cur)
-            cur = list(pts)
-    if cur:
-        paths.append(cur)
-    return paths
-
-
-def _order_chains_min_travel(chains, start):
-    """Greedy nearest-neighbor order of cut chains to minimize pen-up (laser-off)
-    travel, entering each chain from whichever end is closest (reversing if
-    needed). Ordering only — the caller decides which GROUP (interior vs the
-    panel border) to run, and runs the border group LAST so the stock stays
-    attached to the surrounding stock until the very end."""
-    remaining = list(chains)
-    out = []
-    cur = start
-    while remaining:
-        best_i, best_rev, best_d = 0, False, None
-        for i, ch in enumerate(remaining):
-            for rev in (False, True):
-                p = ch[-1] if rev else ch[0]
-                d = (p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2
-                if best_d is None or d < best_d:
-                    best_d, best_i, best_rev = d, i, rev
-        ch = remaining.pop(best_i)
-        if best_rev:
-            ch = ch[::-1]
-        out.append(ch)
-        cur = ch[-1] if out else start
-    return out
-
-
-def _fuse_touching_chains(chains, tol=0.1):
-    """After ordering, fuse consecutive chains whose join coincides (end of one
-    == start of the next, within tol). This is FREE continuity: the laser just
-    keeps cutting through the shared point instead of lifting, re-positioning to
-    the exact same spot, and re-firing (a 'needless re-fire'). Distinct from the
-    bounded backtrack in eulerian_order — no line is re-cut here, the two chains
-    already meet. Coords are in mm at this stage, so tol is mm."""
-    out: list[list[tuple[float, float]]] = []
-    for ch in chains:
-        if (
-            out
-            and math.hypot(ch[0][0] - out[-1][-1][0], ch[0][1] - out[-1][-1][1]) <= tol
-        ):
-            out[-1] = out[-1] + list(ch[1:])
-        else:
-            out.append(list(ch))
-    return out
-
-
-def _order_chains_nearest_safe(chains, start, min_sep_of):
-    """Nearest-neighbor chain order with a per-move thermal-safety floor:
-    from the chain just cut, jump to the CLOSEST remaining chain whose
-    entry point is still farther than min_sep_of(candidate) from the last
-    chain's entry point -- so residual heat from the laser-off/on event
-    just finished (min_sep_of is derived from THAT chain's own wiggle
-    lead-in distance, the physical length scale of the heat it just
-    deposited -- the caller decides the fraction/multiple) has room to
-    dissipate before the next one fires nearby. Falls back to the plain
-    closest remaining chain once none of the candidates clear the floor
-    (typically near the end, when only nearby chains are left) -- NOT a
-    pure farthest-first tour, which would waste travel time for no extra
-    cooling benefit once already past the safety floor.
-
-    Runs on the chains AFTER _order_chains_min_travel + _fuse_touching_chains,
-    so each chain here is one real fused laser-off/on event, not a raw
-    stroke fragment. A chain's own first point stands in for its position
-    (matches the G0 entry point the emission loop actually targets) --
-    good enough at chain-to-chain scale, not meant to be exact.
-    """
-
-    def pos(ch):
-        return ch[0]
-
-    remaining = list(chains)
-    out = []
-    cur = start
-    while remaining:
-
-        def dist2(ch):
-            p = pos(ch)
-            return (p[0] - cur[0]) ** 2 + (p[1] - cur[1]) ** 2
-
-        safe = [ch for ch in remaining if dist2(ch) > min_sep_of(ch) ** 2]
-        pool = safe if safe else remaining
-        best = min(pool, key=dist2)
-        out.append(best)
-        cur = pos(best)
-        remaining.remove(best)
-    return out
-
-
-def _collapse_shuttles(pts, max_leg_mm: float = 1.0, eps: float = 1e-3):
-    """Drop repeated back-and-forth trips over the same short edge.
-
-    Continuous routing can re-trace one sub-mm edge several times in a row
-    (A,B,A,B,A,...) when many trails meet at a tiny junction; the head then
-    shuttles in place and the static beam flickers/over-burns. Collapse every
-    extra A->B->A round trip, keeping one so the edge is still cut."""
-    out = list(pts)
-
-    def same(p, q):
-        return abs(p[0] - q[0]) <= eps and abs(p[1] - q[1]) <= eps
-
-    i = 0
-    while i + 4 < len(out):
-        a, b = out[i], out[i + 1]
-        if (
-            math.hypot(b[0] - a[0], b[1] - a[1]) < max_leg_mm
-            and same(out[i + 2], a)
-            and same(out[i + 3], b)
-            and same(out[i + 4], a)
-        ):
-            del out[i + 1 : i + 3]  # A,B,A,B,A -> A,B,A
-            continue
-        i += 1
-    return out
+    """Fuse an ordered list of (edge, reversed) into continuous polylines (quickcut fuse_touching):
+    consecutive edges whose join is within tol_px become one path, one laser-on. Each edge's
+    direction was already resolved by the ordering; it is honoured."""
+    return _qc.fuse_touching([list(edge.coords) for edge, _ in ordered], tol_px)
 
 
 def reconcile_letter_pockets(pieces, px_per_mm, tol_mm=0.6):
@@ -1039,110 +649,6 @@ def _drop_short_dangles(edges, max_len_px, tol_px=0.05):
         edges = keep
 
 
-def cut_bridges(chains, bridges_mm, gap_mm, tol_mm=0.3):
-    """Leave an uncut `gap_mm` of cut line centred on each bridge point.
-    Every pass of a chain within tol_mm of a point is split there (a re-trace
-    over the same spot is gapped too). Closed chains split into one open path
-    that starts and ends at the gaps."""
-    out = []
-    for ch in chains:
-        ch = [tuple(p) for p in ch]
-        cum = [0.0]
-        for a, b in zip(ch, ch[1:]):
-            cum.append(cum[-1] + math.dist(a, b))
-        total = cum[-1]
-        cuts = []
-        for bx, by in bridges_mm:
-            best = None  # (distance, arc position) of each separate pass
-            for k, (a, b) in enumerate(zip(ch, ch[1:])):
-                seg = math.dist(a, b)
-                if seg == 0:
-                    continue
-                t = max(0.0, min(1.0, ((bx - a[0]) * (b[0] - a[0]) + (by - a[1]) * (b[1] - a[1])) / seg ** 2))
-                d = math.dist((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])), (bx, by))
-                s_pos = cum[k] + t * seg
-                if d < tol_mm:
-                    if best is not None and s_pos - best[1] <= gap_mm:
-                        if d < best[0]:
-                            best = (d, s_pos)
-                        continue
-                    if best is not None:
-                        cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
-                    best = (d, s_pos)
-            if best is not None:
-                cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
-        if not cuts:
-            out.append(ch)
-            continue
-        cuts.sort()
-        line = LineString(ch)
-        keep, pos = [], 0.0
-        for lo, hi in cuts:
-            if lo > pos:
-                keep.append((pos, lo))
-            pos = max(pos, hi)
-        if pos < total:
-            keep.append((pos, total))
-        parts = [list(substring(line, lo, hi).coords) for lo, hi in keep if hi - lo > 1e-6]
-        closed = math.dist(ch[0], ch[-1]) < 1e-6
-        if closed and len(parts) > 1 and keep[0][0] == 0.0 and keep[-1][1] == total:
-            parts = [parts[-1] + parts[0][1:]] + parts[1:-1]
-        out.extend(p for p in parts if len(p) >= 2)
-    return out
-
-
-def cut_bridges(chains, bridges_mm, gap_mm, tol_mm=0.3):
-    """Leave an uncut `gap_mm` of cut line centred on each bridge point.
-    Every pass of a chain within tol_mm of a point is split there (a re-trace
-    over the same spot is gapped too). Closed chains split into one open path
-    that starts and ends at the gaps."""
-    out = []
-    for ch in chains:
-        ch = [tuple(p) for p in ch]
-        cum = [0.0]
-        for a, b in zip(ch, ch[1:]):
-            cum.append(cum[-1] + math.dist(a, b))
-        total = cum[-1]
-        cuts = []
-        for bx, by in bridges_mm:
-            best = None  # (distance, arc position) of each separate pass
-            for k, (a, b) in enumerate(zip(ch, ch[1:])):
-                seg = math.dist(a, b)
-                if seg == 0:
-                    continue
-                t = max(0.0, min(1.0, ((bx - a[0]) * (b[0] - a[0]) + (by - a[1]) * (b[1] - a[1])) / seg ** 2))
-                d = math.dist((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])), (bx, by))
-                s_pos = cum[k] + t * seg
-                if d < tol_mm:
-                    if best is not None and s_pos - best[1] <= gap_mm:
-                        if d < best[0]:
-                            best = (d, s_pos)
-                        continue
-                    if best is not None:
-                        cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
-                    best = (d, s_pos)
-            if best is not None:
-                cuts.append((best[1] - gap_mm / 2, best[1] + gap_mm / 2))
-        if not cuts:
-            out.append(ch)
-            continue
-        cuts.sort()
-        line = LineString(ch)
-        keep, pos = [], 0.0
-        for lo, hi in cuts:
-            if lo > pos:
-                keep.append((pos, lo))
-            pos = max(pos, hi)
-        if pos < total:
-            keep.append((pos, total))
-        parts = [list(substring(line, lo, hi).coords) for lo, hi in keep if hi - lo > 1e-6]
-        closed = math.dist(ch[0], ch[-1]) < 1e-6
-        if closed and len(parts) > 1 and keep[0][0] == 0.0 and keep[-1][1] == total:
-            parts = [parts[-1] + parts[0][1:]] + parts[1:-1]
-        out.extend(p for p in parts if len(p) >= 2)
-    return out
-
-
 def emit_cut_gcode_full(
     pieces: list[dict],
     material: dict,
@@ -1168,14 +674,10 @@ def emit_cut_gcode_full(
     after the loop closes (laser now hot) we re-trace that same distance.
     ramp length = ramp_ms/1000 * feed_mm_per_s, derived from the
     feedrate. Default 1000ms — conservative (better to overcut than under)."""
-    laser = material["laser"]
-    pct = power_percent if power_percent is not None else laser["power_percent"]
-    power_s = int(round(pct * 10))
-    feed = feed_override if feed_override is not None else laser["feed_mm_per_min"]
-    passes = laser["passes"]
-    on = "M3" if mode == "static" else "M4"
-    # Ramp distance from the ramp duration at this feed (mm/min -> mm/s).
-    lead_in_mm = max(0.0, ramp_ms) / 1000.0 * (feed / 60.0)
+    job = cut_job(material, feed_override=feed_override, power_percent=power_percent, mode=mode,
+                  ramp_ms=max(0.0, ramp_ms), min_segment_mm=min_segment_mm)
+    feed = job.feed_mm_per_min
+    lead_in_mm = job.warmup_mm
     # Backtrack budget: keep the laser continuous by re-tracing a connector only
     # when re-cutting it is cheaper than a restart's warmup. Same units as the
     # warmup (ms of travel at this feed); default = ramp_ms, i.e. re-trace up to
@@ -1249,16 +751,12 @@ def emit_cut_gcode_full(
     # a junction next to each other — fuse them so the laser doesn't re-fire at
     # the exact spot it just finished). Fuse WITHIN each group so the border
     # still runs last (never fused into an interior chain).
-    inner_chains = _fuse_touching_chains(
-        _order_chains_min_travel(inner_chains, start=(0.0, 0.0))
-    )
+    inner_chains = _qc.fuse_touching(_qc.nearest_chains(inner_chains, start=(0.0, 0.0)))
     last = inner_chains[-1][-1] if inner_chains else (0.0, 0.0)
-    border_chains = _fuse_touching_chains(
-        _order_chains_min_travel(border_chains, start=last)
-    )
+    border_chains = _qc.fuse_touching(_qc.nearest_chains(border_chains, start=last))
     chains = inner_chains + border_chains
     if bridges_mm and bridge_mm > 0:
-        chains = cut_bridges(chains, bridges_mm, bridge_mm)
+        chains = _qc.bridge_chains(chains, bridges_mm, bridge_mm)
     n_edges = len(all_edges)
 
     extra = [
@@ -1287,123 +785,23 @@ def emit_cut_gcode_full(
             "letter counters in place (snap out by hand)")
 
     lines = _header(
-        title=f"full puzzle: word={word}, "
+        f"full puzzle: word={word}, "
         f"{cfg.puzzle_w_px / cfg.px_per_mm:.0f}x{cfg.puzzle_h_px / cfg.px_per_mm:.0f}mm, "
-        f"{len(chains)} continuous cut paths ({n_edges} edges after dedup)",
-        material_id=material["id"],
-        extra=extra,
-        mode=mode,
-    )
+        f"{len(chains)} continuous cut paths ({n_edges} edges after dedup)", job, extra)
 
-    cut_segs = _CutIndex()
+    cut_segs = _qc.CutIndex()
     for idx, path_mm in enumerate(chains, start=1):
-        coords_mm = _collapse_shuttles(decimate(path_mm, min_segment_mm))
-        # A backtrack only earns its keep BETWEEN two new cuts. Re-cut line at
-        # the start or end of a path connects to nothing -- the laser restarts
-        # (full warmup) anyway -- so strip it.
-        coords_mm = _trim_recut_ends(coords_mm, cut_segs)
+        coords_mm = collapse_shuttles(decimate(path_mm, min_segment_mm))
+        # A backtrack only earns its keep BETWEEN two new cuts: re-cut line at a path's start or
+        # end connects to nothing (the laser restarts anyway), so strip it.
+        coords_mm = _qc.trim_recut_ends(coords_mm, cut_segs)
         if len(coords_mm) < 2 or LineString(coords_mm).length < 0.1:
-            # a hairline stub between two near-coincident outlines: the
-            # kerf (~0.15mm) covers it, and its warmup would shuttle in place
+            # a hairline stub between two near-coincident outlines: the kerf covers it
             continue
         cut_segs.add(coords_mm)
-        warm = warmup_wiggle(coords_mm, lead_in_mm)  # ends back at coords_mm[0]
-        path_len = sum(
-            math.hypot(b[0] - a[0], b[1] - a[1])
-            for a, b in zip(coords_mm, coords_mm[1:])
-        )
-        if path_len < lead_in_mm / 2:
-            # A path shorter than half the warmup would get warmup_wiggle's
-            # repeated full out-and-back trips: a stub under 1mm shuttles back
-            # and forth ~10x in place, which stalls/flickers the beam. One
-            # out-and-back is plenty for a stub.
-            warm = list(coords_mm[1:]) + list(reversed(coords_mm))[1:]
-        x0, y0 = coords_mm[0]
-        lines.append(f"; --- path {idx}/{len(chains)} ({len(coords_mm)} pts) ---")
-        lines.append(f"G0 X{x0:.3f} Y{y0:.3f}")
-        lines.append(f"{on} S{power_s}")
-        lines.append(f"F{feed}")
-        # Multi-pass ping-pong: forward, then reverse back over the same points,
-        # alternating. The head is already at the far end after each pass, so there
-        # is no move (blanked G0 or otherwise) back to the start — the reverse pass
-        # just cuts back over the path.
-        for pass_n in range(passes):
-            if passes > 1:
-                dirn = "forward" if pass_n % 2 == 0 else "reverse"
-                lines.append(f"; pass {pass_n + 1} of {passes} ({dirn})")
-            if pass_n == 0 and warm:  # cold-start warmup only on the first pass
-                lines.append(
-                    "; warmup: fwd half / back to start, then cut at full power"
-                )
-                for x, y in warm:
-                    lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-            seq = coords_mm[1:] if pass_n % 2 == 0 else coords_mm[-2::-1]
-            for x, y in seq:
-                lines.append(f"G1 X{x:.3f} Y{y:.3f}")
-        lines.append("M5")
-        lines.append("")
-    lines += ["G0 X0 Y0", ""]
+        closed = len(coords_mm) > 3 and math.dist(coords_mm[0], coords_mm[-1]) < 1e-6
+        lines += _qc.cut(_qc.Polyline(coords_mm, closed), job, idx, len(chains), label="path")
     return _qc.render(lines, validate=False)
-
-
-class _CutIndex:
-    """Already-cut line, for spotting re-cut segments geometrically (vertex
-    keys miss them: the same edge decimates to different points in different
-    chains)."""
-
-    def __init__(self, tol_mm=0.05):
-        self.tol = tol_mm
-        self.segs = []
-        self.tree = None
-        self.dirty = False
-
-    def add(self, coords):
-        from shapely.geometry import LineString as _LS
-
-        self.segs += [_LS([a, b]) for a, b in zip(coords, coords[1:]) if a != b]
-        self.dirty = True
-
-    def covered(self, a, b):
-        from shapely.geometry import LineString as _LS
-        from shapely.strtree import STRtree
-
-        if not self.segs:
-            return False
-        if self.dirty:
-            self.tree, self.dirty = STRtree(self.segs), False
-        seg = _LS([a, b])
-        near = [self.segs[i] for i in self.tree.query(seg.buffer(self.tol))]
-        if not near:
-            return False
-        from shapely.ops import unary_union
-
-        return seg.difference(unary_union(near).buffer(self.tol)).length < self.tol
-
-
-def _trim_recut_ends(coords, cut):
-    """Drop leading/trailing segments an earlier path already cut."""
-    i, j = 0, len(coords) - 1
-    while i < j and cut.covered(coords[i], coords[i + 1]):
-        i += 1
-    while j > i and cut.covered(coords[j - 1], coords[j]):
-        j -= 1
-    return list(coords[i : j + 1])
-
-
-# ---------------------------------------------------------------------------
-# Raster GCode (halftone or grayscale)
-# ---------------------------------------------------------------------------
-
-
-def runs_in_row(row: list[int]) -> list[tuple[int, int, int]]:
-    """Group consecutive same-value pixels into (start, end_inclusive, value)."""
-    out = []
-    idx = 0
-    for value, group in groupby(row):
-        length = sum(1 for _ in group)
-        out.append((idx, idx + length - 1, value))
-        idx += length
-    return out
 
 
 def emit_raster_gcode(
@@ -1414,42 +812,12 @@ def emit_raster_gcode(
     engrave_power_pct: int,
     engrave_feed: int,
 ) -> list[str]:
-    """Raster GCode: M4 dynamic; G0 over white; G1 with per-run S."""
-    if img.mode != "L":
-        img = img.convert("L")
-    w, h = img.size
-    pixels = img.load()
-    max_s = int(round(engrave_power_pct * 10))
+    """Raster body for the panel (quickcut raster: M4 dynamic, G0 + S0 over white, G1 per run)."""
+    return _qc.raster(img, line_spacing_mm, engrave_power_pct, engrave_feed, mode, height_mm=cfg.panel_mm)
 
-    lines = [
-        f"; --- raster engrave: {mode}, {w}x{h} px @ {line_spacing_mm}mm/line ---",
-        f"; max power S={max_s} ({engrave_power_pct}%), feed F={engrave_feed}",
-        "M4 S0   ; arm dynamic-power mode; S in motion commands controls power",
-        f"F{engrave_feed}",
-    ]
 
-    for row_idx in range(h):
-        machine_y = cfg.panel_mm - (row_idx + 0.5) * line_spacing_mm
-        if machine_y < 0 or machine_y > cfg.panel_mm:
-            continue
-        row = [pixels[x, row_idx] for x in range(w)]
-        for start, end, val in runs_in_row(row):
-            if val == 255:
-                continue
-            x_start = (start + 0.5) * line_spacing_mm
-            x_end = (end + 0.5) * line_spacing_mm
-            if mode == "halftone":
-                s_val = max_s
-            else:
-                s_val = int(round((255 - val) / 255 * max_s))
-                if s_val <= 0:
-                    continue
-            # S0 on the travel: with laser mode off ($32=0 / $GCode/LaserMode=Off, as on the
-            # AnoleX) Grbl keeps the last S during G0, so the laser would fire on every travel.
-            lines.append(f"G0 X{x_start:.3f} Y{machine_y:.3f} S0")
-            lines.append(f"G1 X{x_end:.3f} Y{machine_y:.3f} S{s_val}")
-    lines.append("M5  ; raster done")
-    return lines
+def _raster_job(material_id: str) -> "_qc.CutJob":
+    return _qc.CutJob(feed_mm_per_min=1000, power_percent=100, passes=1, material_id=material_id, mode="dynamic")
 
 
 def combined_raster_and_cut(
@@ -1459,41 +827,21 @@ def combined_raster_and_cut(
     image_label: str,
     mode: str,
 ) -> str:
-    """One GCode file: header + raster + cut. Strips the cut block's own
-    preamble so we don't duplicate headers."""
-    head = _header(
-        title=f"combined puzzle — image={image_label}, mode={mode}, then cut",
-        material_id=material_id,
-        extra=[
-            "ASSUMES Z already at focal height. Same Z used for engrave + cut.",
-            "If your focal height differs (e.g. red vs green spacer on LaserTree),",
-            "run the _raster and _cut files separately and refocus between them.",
-        ],
-    )
-    cut_lines = cut_block.splitlines()
-    body_start = 0
-    for i, ln in enumerate(cut_lines):
-        if ln.startswith("G0 X0 Y0") and i < 20:
-            body_start = i + 1
-            break
-    cut_body = cut_lines[body_start:]
-    return (
-        _qc.render(head + raster_lines + [""] + ["; --- cut phase ---"] + cut_body, validate=False)
-        + "\n"
-    )
+    """One G-code file: raster engrave, then the cut (quickcut.combine: one preamble, one frame,
+    one park)."""
+    head = _qc.preamble(_raster_job(material_id),
+                        title=f"combined puzzle — image={image_label}, mode={mode}, then cut",
+                        notes=["ASSUMES Z already at focal height. Same Z used for engrave + cut.",
+                               "If your focal height differs (e.g. red vs green spacer on LaserTree),",
+                               "run the _raster and _cut files separately and refocus between them."])
+    return _qc.combine(head + raster_lines + ["", "; --- cut phase ---"], cut_block) + "\n"
 
 
 def raster_only_gcode(
     raster_lines: list[str], material_id: str, image_label: str, mode: str
 ) -> str:
-    """Engrave-only GCode (raster pass + return to origin). Pair with
-    cut_only_gcode if you want separated files."""
-    head = _header(
-        title=f"raster engrave only — image={image_label}, mode={mode}",
-        material_id=material_id,
-        extra=[
-            "ASSUMES Z already at engraving focal height in your WCS.",
-            "Run this file FIRST, verify, then run the _cut file.",
-        ],
-    )
-    return _qc.render(head + raster_lines + ["", "G0 X0 Y0", ""], validate=False) + "\n"
+    """Engrave-only G-code. Pair with the _cut file if you want separate runs."""
+    head = _qc.preamble(_raster_job(material_id), title=f"raster engrave only — image={image_label}, mode={mode}",
+                        notes=["ASSUMES Z already at engraving focal height in your WCS.",
+                               "Run this file FIRST, verify, then run the _cut file."])
+    return _qc.render(head + raster_lines + [""], validate=False) + "\n"

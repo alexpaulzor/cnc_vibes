@@ -27,7 +27,8 @@ J_DIR = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, J_DIR + "/scripts"); sys.path.insert(0, J_DIR)
 os.chdir(J_DIR)
 import ring_prototype as R, globe_etch as GE, jigsaw as J  # noqa: E401,E402
-from emitter import load_material, emit_etch_gcode, combine_passes  # noqa: E402
+from emitter import load_material, emit_etch_gcode  # noqa: E402
+import gcode as _qc  # noqa: E402  (quickcut, on the path via emitter)
 from letter_outline_etch import draw_strokes, letter_outline_strokes  # noqa: E402
 
 OUTLINE_MM = 1.0  # letter outline etch inset/outset (MICHELS: 1.0mm)
@@ -139,7 +140,7 @@ import display_stand as DS  # noqa: E402
 
 npaths, _band = SF.frame_notch_paths()
 notches = DS.emit_gcode(npaths, material, "frame notches for the keyed stand feet")
-g = combine_passes(etch, notches, cut)
+g = _qc.combine(etch, notches, cut)
 R._check_xy_envelope(cut, 290.0)
 open(f"{D}/s{seed}_cut_only.gcode", "w").write(cut)
 R._check_xy_envelope(g, SF.REACH_MAX_MM, SF.REACH_MIN_MM, SF.REACH_MAX_Y_MM)  # notches reach the stock edges

@@ -8,7 +8,7 @@ marked. It also shows you where the job will land.
     from gcode_frame import add_frame
     lines = add_frame(lines)          # list of G-code lines in, list out (unchanged if already framed)
 
-The extent is every X/Y the file reaches (cuts, travel, park, arcs as full circles, conservatively),
+The extent is every X/Y the file reaches (cuts, travel, park, arcs over their actual sweep),
 in absolute coordinates. Files that switch to G91 (relative) are left alone, with a comment saying why.
 The frame goes right before the first move, after the preamble's mode lines (G21/G90/M5...).
 Part of quickcut (the single laser G-code core). gcode.write() applies it to every file.
@@ -45,16 +45,36 @@ def job_extent(lines):
             continue
         nx, ny = vals.get("X", x), vals.get("Y", y)
         if motion in (2, 3) and ("I" in vals or "J" in vals):
-            cx, cy = x + vals.get("I", 0.0), y + vals.get("J", 0.0)
-            r = math.hypot(x - cx, y - cy)
-            xs += [cx - r, cx + r]
-            ys += [cy - r, cy + r]
+            ax, ay = _arc_extent(x, y, nx, ny, x + vals.get("I", 0.0), y + vals.get("J", 0.0), motion == 2)
+            xs += ax
+            ys += ay
         xs += [x, nx]
         ys += [y, ny]
         x, y = nx, ny
     if not xs:
         return None
     return min(xs), min(ys), max(xs), max(ys)
+
+
+def _arc_extent(x0, y0, x1, y1, cx, cy, cw):
+    """x and y values the arc actually reaches: its ends plus every axis crossing (0/90/180/270
+    degrees) inside its sweep. (The whole circle would be wrong: a near-straight arc fitted to a
+    gentle curve has a huge radius, and its circle runs far off the bed.)"""
+    r = math.hypot(x0 - cx, y0 - cy)
+    a0 = math.atan2(y0 - cy, x0 - cx)
+    a1 = math.atan2(y1 - cy, x1 - cx)
+    sweep = (a0 - a1) if cw else (a1 - a0)
+    sweep %= 2 * math.pi
+    if sweep < 1e-9:
+        sweep = 2 * math.pi                     # same start and end: a full circle
+    xs, ys = [x0, x1], [y0, y1]
+    for k in range(4):
+        q = k * math.pi / 2
+        d = ((a0 - q) if cw else (q - a0)) % (2 * math.pi)
+        if d <= sweep:
+            xs.append(cx + r * math.cos(q))
+            ys.append(cy + r * math.sin(q))
+    return xs, ys
 
 
 def frame_lines(ext, feed=None):
@@ -83,3 +103,19 @@ def add_frame(lines):
         if c and re.search(r"[XY]\s*-?\d", c) and re.match(r"G0?[0-3]\b|[XY]", c):
             return lines[:i] + frame_lines(ext) + [""] + lines[i:]
     return lines
+
+
+def strip_frame(lines):
+    """the same lines with any frame block removed (to re-frame a combined program)"""
+    lines, out, skip = list(lines), [], 0
+    for line in lines:
+        if skip:
+            skip -= 1
+            continue
+        if line.startswith(MARK):
+            if "none (" in line:
+                continue
+            skip = 8                       # endstop note, M5, 5 x G0, blank
+            continue
+        out.append(line)
+    return out

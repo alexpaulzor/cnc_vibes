@@ -1,8 +1,7 @@
 """Motion primitives for weak-diode laser cutting — shared by every vibes tool.
 
 Pure geometry on lists of ``(x, y)`` points: no SVG, no file I/O, no G-code
-text. The emitters (quickcut/svg2gcode.py and the orpot / jigsawzall emitters)
-build their G-code on top of these so the diode techniques live in one place.
+text. quickcut/gcode.py (the one G-code core) builds on these so the diode techniques live in one place.
 
 The two that carry the diode know-how:
 
@@ -69,9 +68,11 @@ def points_along(points: list[Point], distance_mm: float) -> list[Point]:
     return walked
 
 
-def warmup_wiggle(points: list[Point], warmup_mm: float) -> list[Point]:
+def warmup_wiggle(points: list[Point], warmup_mm: float, one_trip: bool = False) -> list[Point]:
     """For OPEN paths: an out-and-back run over the start (ending back at the
-    start point) so the beam reaches full power before the real cut begins."""
+    start point) so the beam reaches full power before the real cut begins.
+    A path shorter than half the warmup gets full out-and-back trips until warm,
+    or just one with `one_trip` (no energy pile-up on a short stroke)."""
     if warmup_mm <= 0 or len(points) < 2:
         return []
     total = path_length(points)
@@ -82,22 +83,54 @@ def warmup_wiggle(points: list[Point], warmup_mm: float) -> list[Point]:
         out = points_along(points, half)
         return out[1:] + list(reversed(out))[1:]
     # Path shorter than the wiggle: run full out-and-back trips until warmed up.
-    trips = max(1, math.ceil(warmup_mm / (2 * total)))
+    trips = 1 if one_trip else max(1, math.ceil(warmup_mm / (2 * total)))
     wiggle: list[Point] = []
     for _ in range(trips):
         wiggle += list(points[1:]) + list(reversed(points))[1:]
     return wiggle
 
 
-def follow_through(points: list[Point], lead_mm: float) -> list[Point]:
+def follow_through(points: list[Point], lead_mm: float, laps: bool = False) -> list[Point]:
     """For CLOSED loops: keep going PAST the start, tracing back into the loop for
     lead_mm of extra travel. The beam fired cold at the start, so the loop's first
     lead_mm was cut weak; carrying the now-hot beam that far past the start re-cuts
     it at full power, and the beam turns off mid-arc in already-severed material
-    instead of dwelling on the burn seam. Capped at one full lap."""
+    instead of dwelling on the burn seam. Capped at one full lap unless `laps`
+    (etch: a short loop keeps circling until the lead is covered)."""
     if lead_mm <= 0 or len(points) < 3:
         return []
     total = path_length(points)
     if total <= 1e-9:
         return []
-    return points_along(points, min(lead_mm, total))[1:]
+    if not laps:
+        return points_along(points, min(lead_mm, total))[1:]
+    ring = [p for i, p in enumerate(points) if i == 0 or math.dist(p, points[i - 1]) > 1e-9]
+    if math.dist(ring[0], ring[-1]) > 1e-9:
+        ring.append(ring[0])
+    track = list(ring)
+    while path_length(track) < lead_mm:
+        track += ring[1:]
+    return points_along(track, lead_mm)[1:]
+
+
+def collapse_shuttles(points: list[Point], max_leg_mm: float = 1.0, eps: float = 1e-3) -> list[Point]:
+    """Drop repeated back-and-forth trips over the same short edge.
+
+    Continuous routing can re-trace one sub-mm edge several times in a row
+    (A,B,A,B,A,...) when many trails meet at a tiny junction; the head then
+    shuttles in place and the static beam flickers/over-burns. Collapse every
+    extra A->B->A round trip, keeping one so the edge is still cut."""
+    out = list(points)
+
+    def same(p, q):
+        return abs(p[0] - q[0]) <= eps and abs(p[1] - q[1]) <= eps
+
+    i = 0
+    while i + 4 < len(out):
+        a, b = out[i], out[i + 1]
+        if (math.hypot(b[0] - a[0], b[1] - a[1]) < max_leg_mm and same(out[i + 2], a)
+                and same(out[i + 3], b) and same(out[i + 4], a)):
+            del out[i + 1:i + 3]  # A,B,A,B,A -> A,B,A
+            continue
+        i += 1
+    return out
