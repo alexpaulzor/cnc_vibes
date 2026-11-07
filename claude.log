@@ -20,3 +20,9 @@
 2026-11-06 | DONE | Phase C: cnc_calibrate (spiral, etch matrix), lessons (spacer, calibration, spoilboard), cam.py/laser_cam.py laser output, jigsawzall (emitter + etch_calibration, motion_test_plate, stand_tests, display_stand) all finish every file through quickcut.gcode.render (frame + park + line length). Their bespoke motion stays (calibration grids, rasters, M4 demos). No new test failures in any suite.
 2026-11-06 | DONE | Drift guard quickcut/tests/test_single_entry.py: fails any .py in cnc_vibes or scads/marbles that emits M3/M4 without finishing through quickcut. CLAUDE.md rule rewritten: quickcut is the single entry point.
 2026-11-06 | NEED | Next workitems: (1) jigsawzall cut/etch motion -> gcode.cut/etch after triaging its pre-existing 51 failed + 8 errors; (2) calibration grids at F5000 exceed the validator's XY cap 3000 (Grbl clamps anyway): exempt or cap; (3) Alex deletes merged remote branches in the GitHub UI; (4) optional OR-tools backend for order.py.
+
+## 2026-11-07 lift guard rails (scads)
+- GOAL: steel balls bend keepers K_F/K_M -> replace with 2020/2040 guard rails, V-wheels redesigned onto the fixed side.
+- DONE: lift_full.scad show_rails mockup + animation; collision check (CGAL intersection) clean at both stroke ends; NOTES section 4 updated.
+- DECISION: back guard is a fixed 2040 tied to F (keeps M bare) rather than a 2020 on M.
+- NEED: Alex confirm wheel layout and visibility trade-off before any cut parts.
