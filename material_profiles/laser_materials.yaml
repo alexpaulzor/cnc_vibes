@@ -228,17 +228,25 @@
 
 - id: acrylic3
   family: acrylic
-  thickness_mm: 3.0
+  thickness_mm: 3.0   # black cast acrylic, sold as 3 mm; NOT measured yet
+  fit:
+    kerf_mm: 0.15
+    slot_extra_mm: 0.0
+    verified: |
+      NOT YET. 0.15 is a guess (acrylic melts back a little wider than wood's 0.10). Measure a cut square.
   laser:
     power_percent: 100
-    feed_mm_per_min: 300
+    feed_mm_per_min: 150
     passes: 2
     notes: |
-      Best diode-laser acrylic — maximum absorption. Edges come out
-      glossy with no flame polishing needed.
-      UNTESTED on the AnoleX (Alex has black sheet, not yet cut, 2026-11-04).
-      Cut a small test square first.
-
+      BLACK cast acrylic only (the diode's light passes through clear and most colours: Alex's
+      translucent coloured sheet failed, 2026-11-04). Best diode-laser acrylic; edges should come out
+      glossy.
+      2026-11-09: UNTESTED BEST GUESS for the 10 W diode, raised from F300 x2 (never tried) to
+      F150 x2: twice the time on each mm, since 3 mm acrylic is usually quoted near the limit of
+      a 10 W diode. Air assist ON (it also keeps the melt from re-welding the kerf). Ventilate:
+      acrylic fumes are irritating. If it severs with margin, try F200 x2; if it re-welds or
+      leaves a skin at the bottom, F120 x2 or a third pass. Extruded acrylic gums up: cast only.
 - id: card2
   family: paper
   thickness_mm: 2.0
