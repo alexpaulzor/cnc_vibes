@@ -236,17 +236,25 @@
       NOT YET. 0.15 is a guess (acrylic melts back a little wider than wood's 0.10). Measure a cut square.
   laser:
     power_percent: 100
-    feed_mm_per_min: 150
-    passes: 3
+    feed_mm_per_min: 200
+    passes: 2
     notes: |
       BLACK cast acrylic only (the diode's light passes through clear and most colours: Alex's
-      translucent coloured sheet failed, 2026-11-04).
-      2026-11-10: STARTING POINT from published 10 W diode figures for 3 mm black acrylic (not yet
-      cut on the AnoleX): xTool's own preset is 100 % / 3 mm/s (180 mm/min) x 2; a 10 W reference
-      table gives 100 % / 150-250 mm/min x 2-4; a hobbyist guide gives 100 % / 150 mm/min x 4-6 for
-      3 mm cast (clear) acrylic; a vendor rates 3 mm black on 10 W as "uncertain, depends on quality".
-      F150 x3 sits in the middle. Forum advice: a slower single pass often edges better than many
-      fast ones; never let it melt and re-weld. Air assist ON, ventilate, stay with the machine.
+      translucent coloured sheet failed, 2026-11-04). Not yet cut on the AnoleX.
+      2026-11-10, from published sources read in full (10 W-class diodes, 3 mm black acrylic):
+        - xTool support art. 555 (M1, 10 W diode): "3mm black acrylic : M1- Power 100/ Speed 3mm/ Pass 2"
+          (3 mm/s = 180 mm/min, 2 passes)
+        - hobbyistlasercalc xTool D1 Pro guide (10 W): cast acrylic (colored) 3 mm, 85 %, 200 mm/min,
+          2-3 passes; cast clear 3 mm, 90 %, 150 mm/min, 3 passes
+        - LightBurn forum (t/104257), a "supposed 10w output" module: black acrylic 200 mm/min, 90 %,
+          2 passes, with air assist
+        - LightBurn forum (t/48287), 7.5 W Neje: 3 mm black, 1 pass, 100 %, 50 mm/min
+        - LightBurn forum (t/187054), 22 W Algolaser: 3 mm extruded (XT) black, 100 %, 600 mm/min
+        - Blaze: 3 mm black acrylic on 10 W "depends on quality"
+      So F200 x2 at 100 % (the 10 W consensus). Advice in those threads: cast (GS) cuts far better
+      than extruded (XT); if the cut fuses back together you are too slow or on extruded sheet; air
+      assist ON (one user found it re-welded orange acrylic - try both); fewer, slower passes vs many
+      light ones both have fans: test. Ventilate, stay with the machine.
       CALIBRATE: marbles/acrylic_cal.py (5 rings 69-274 mm/min x 1-4 passes), then set this recipe.
 - id: card2
   family: paper
