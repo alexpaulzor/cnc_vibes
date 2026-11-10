@@ -237,16 +237,17 @@
   laser:
     power_percent: 100
     feed_mm_per_min: 150
-    passes: 2
+    passes: 3
     notes: |
       BLACK cast acrylic only (the diode's light passes through clear and most colours: Alex's
-      translucent coloured sheet failed, 2026-11-04). Best diode-laser acrylic; edges should come out
-      glossy.
-      2026-11-09: UNTESTED BEST GUESS for the 10 W diode, raised from F300 x2 (never tried) to
-      F150 x2: twice the time on each mm, since 3 mm acrylic is usually quoted near the limit of
-      a 10 W diode. Air assist ON (it also keeps the melt from re-welding the kerf). Ventilate:
-      acrylic fumes are irritating. If it severs with margin, try F200 x2; if it re-welds or
-      leaves a skin at the bottom, F120 x2 or a third pass. Extruded acrylic gums up: cast only.
+      translucent coloured sheet failed, 2026-11-04).
+      2026-11-10: STARTING POINT from published 10 W diode figures for 3 mm black acrylic (not yet
+      cut on the AnoleX): xTool's own preset is 100 % / 3 mm/s (180 mm/min) x 2; a 10 W reference
+      table gives 100 % / 150-250 mm/min x 2-4; a hobbyist guide gives 100 % / 150 mm/min x 4-6 for
+      3 mm cast (clear) acrylic; a vendor rates 3 mm black on 10 W as "uncertain, depends on quality".
+      F150 x3 sits in the middle. Forum advice: a slower single pass often edges better than many
+      fast ones; never let it melt and re-weld. Air assist ON, ventilate, stay with the machine.
+      CALIBRATE: marbles/acrylic_cal.py (5 rings 69-274 mm/min x 1-4 passes), then set this recipe.
 - id: card2
   family: paper
   thickness_mm: 2.0
