@@ -236,12 +236,18 @@
       NOT YET. 0.15 is a guess (acrylic melts back a little wider than wood's 0.10). Measure a cut square.
   laser:
     power_percent: 100
-    feed_mm_per_min: 200
-    passes: 2
+    feed_mm_per_min: 150
+    passes: 1
     notes: |
       BLACK cast acrylic only (the diode's light passes through clear and most colours: Alex's
-      translucent coloured sheet failed, 2026-11-04). Not yet cut on the AnoleX.
-      2026-11-10, from published sources read in full (10 W-class diodes, 3 mm black acrylic):
+      translucent coloured sheet failed, 2026-11-04).
+      2026-11-10 CALIBRATED on Alex's black sheet (marbles/acrylic_cal.py, 5 rings x 1-4 passes):
+      1 pass severs at 171 mm/min but not at 223; 2+ passes sever everything up to 274. The cleanest
+      edge came from a single slow pass. Chosen: F150 x1 (12 % under the slowest single pass that
+      cut). Fallback if a part hangs: F250 x2. Engraving at 15 % / F3000 foams into raised bumps:
+      do not etch labels on this stock (use cut notches).
+      Published starting points that framed the test:
+      (10 W-class diodes, 3 mm black acrylic, sources read in full):
         - xTool support art. 555 (M1, 10 W diode): "3mm black acrylic : M1- Power 100/ Speed 3mm/ Pass 2"
           (3 mm/s = 180 mm/min, 2 passes)
         - hobbyistlasercalc xTool D1 Pro guide (10 W): cast acrylic (colored) 3 mm, 85 %, 200 mm/min,
@@ -251,11 +257,11 @@
         - LightBurn forum (t/48287), 7.5 W Neje: 3 mm black, 1 pass, 100 %, 50 mm/min
         - LightBurn forum (t/187054), 22 W Algolaser: 3 mm extruded (XT) black, 100 %, 600 mm/min
         - Blaze: 3 mm black acrylic on 10 W "depends on quality"
-      So F200 x2 at 100 % (the 10 W consensus). Advice in those threads: cast (GS) cuts far better
+      Advice in those threads: cast (GS) cuts far better
       than extruded (XT); if the cut fuses back together you are too slow or on extruded sheet; air
       assist ON (one user found it re-welded orange acrylic - try both); fewer, slower passes vs many
       light ones both have fans: test. Ventilate, stay with the machine.
-      CALIBRATE: marbles/acrylic_cal.py (5 rings 69-274 mm/min x 1-4 passes), then set this recipe.
+
 - id: card2
   family: paper
   thickness_mm: 2.0
