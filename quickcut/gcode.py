@@ -427,9 +427,16 @@ def render(lines, validate: bool = True) -> str:
 
 
 def write(path, lines, validate: bool = True) -> Path:
-    """the one way to write laser G-code: finish, check, write"""
+    """the one way to write laser G-code: finish, check, write. A <W>x<H> in the file name is set to the job's real
+    bounding box (its cut moves, rounded up to whole mm), so the name always says how much stock it uses."""
     text = render(lines, validate)
     path = Path(path)
+    m = list(re.finditer(r"_(\d+)x(\d+)(?=_|$)", path.stem))
+    if m:
+        w, h = cut_extent(text.splitlines())
+        dims = f"_{math.ceil(w - 1e-9)}x{math.ceil(h - 1e-9)}"
+        a, b = m[-1].span()
+        path = path.with_name(path.stem[:a] + dims + path.stem[b:] + path.suffix)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
