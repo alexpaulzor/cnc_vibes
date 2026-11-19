@@ -67,3 +67,14 @@
   shank_mm: 6.5
   max_rpm: 8000
   max_plunge_mm_per_min: 100
+
+# Aluminium: 1/8" single-flute carbide upcut ("O-flute" / alu single flute), uncoated or ZrN/DLC (not AlTiN).
+# Cutting length must reach through the stock + 0.2: 12 mm covers 1/4" plate. CONFIRM against the bit you use.
+- id: flat_3.175mm_1flute_alu
+  type: flat_endmill
+  diameter_mm: 3.175
+  flutes: 1
+  flute_length_mm: 12
+  shank_mm: 3.175
+  max_rpm: 24000
+  max_plunge_mm_per_min: 200

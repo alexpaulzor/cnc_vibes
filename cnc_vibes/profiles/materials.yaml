@@ -48,6 +48,18 @@
     but unforgiving — use sharp tools, climb mill, and consider trochoidal
     clearing once you've graduated past the basics.
 
+- id: alu6061_6.35
+  family: aluminum
+  thickness_mm: 6.35   # 1/4" 6061 plate
+  chipload:
+    flat_3.175mm_1flute_alu: 0.020
+    flat_3.175mm_2flute: 0.015
+  doc_fraction: 0.15
+  doc_fraction_finish: 0.05
+  notes: |
+    UNCALIBRATED starting numbers (alu3's, plus a 1-flute entry) for the 800 W trim router at 24000 rpm. Replace
+    the chipload with the best slot from lessons/mill/03_aluminum/alu_cal.py --feeds on this plate.
+
 - id: acrylic3
   family: acrylic
   thickness_mm: 3.0

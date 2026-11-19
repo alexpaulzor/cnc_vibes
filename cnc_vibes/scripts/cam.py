@@ -318,6 +318,7 @@ def _spindle_header(
         "G94     ; feed/min (mm/min)",
         f"G0 Z{cfg.safe_z_mm:.3f}",
         f"M3 S{cfg.spindle_rpm}",
+        "G4 P3   ; spin-up (the Anolex trim router is relay-switched: no ramp feedback)",
         "",
     ]
 
