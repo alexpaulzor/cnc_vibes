@@ -45,6 +45,32 @@ offcuts. Tune `disc_dia` (main size knob) and the rib placement, then Render (F6
 and File → Export → DXF/SVG for the laser. `figs/orpot_scad_preview.png` shows
 the default. (This is separate from the Python `scad` command's generated file.)
 
+## Pot holders (`holders.py`)
+
+There are two slot-together holder styles. Each comes in two pot sizes, and every slot is sized from
+the material profile:
+
+| style | parts | pot sits on |
+|---|---|---|
+| `stand` (was `or_brace.scad`) | 2 crossed triangle arms (half-lapped under the pot) + a lock disc with a + slot that drops over the crossing tongues | the disc |
+| `flower` (was `or_brace2.scad` flowercube) | 4 flowercube fins in a # (half-lapped at the feet) + a flower top plate held by 8 fin tabs in closed slots | the fin floors |
+
+Pots: `square` (47 → 65 mm, 85 tall, from or_brace2.scad) and `net3`, a 3" net cup. The `net3` size
+is a **typical catalogue size, not measured**: lip 80, body 72 under the lip, bottom 55, height 75.
+Caliper your cup and pass `--net-lip/--net-top/--net-bottom/--net-height`.
+
+```bash
+python holders.py                                   # all four, ply3 -> out/*.gcode, *.png, *_3d.png
+python holders.py --style stand --pot net3 --net-height 73
+```
+
+Why the first cuts wobbled or cracked: the .scad files drew slots at 3.0 mm (stand) and 3.3 mm
+(flowercube), but the ply3 sheet is 2.63 mm. Now the slot width comes from `gcode.fit()`: it is drawn
+at the measured thickness and the kerf adds about 0.1 mm of clearance. The half-laps engage
+10 mm (the stand's were 5 mm). The plate is held by closed slots, not notches cut into its inner
+edge. Inside corners are filleted or relieved. `tests/test_holders.py` checks that the joints mate
+at any thickness and that the pot clears the wood.
+
 **Deferred / TODO:**
 - a 4-spiral variant (`--n-spirals`, someday)
 - a [kerf-bending](https://www.troteclaser.com/en-us/helpcenter/materials/application-techniques/bending-technique)
@@ -142,8 +168,11 @@ orpot.py                       CLI (preview / cut / view)
 spiral.py                      spiral geometry + 3D helix (SpiralConfig)
 ribs.py                        radial ribs, capture slots, base-disc slots
 emit.py                        G-code emission + PNG/SVG + 3D assembly sketch
+holders.py                     pot holders: stand + flowercube, square + net3 pots
 profiles/laser_materials.yaml  per-material laser params
 tests/test_spiral.py           geometry + G-code invariants
+tests/test_holders.py          holder joints mate, pot clears, parts sound
 figs/                          committed preview + assembly snapshots
 build/                         G-code + preview outputs (gitignored)
+out/                           committed holder G-code + layout / assembly PNGs
 ```
