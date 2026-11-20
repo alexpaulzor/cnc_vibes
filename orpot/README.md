@@ -65,8 +65,9 @@ python holders.py --style stand --pot net3 --net-height 73
 ```
 
 Why the first cuts wobbled or cracked: the .scad files drew slots at 3.0 mm (stand) and 3.3 mm
-(flowercube), but the ply3 sheet is 2.63 mm. Now the slot width comes from `gcode.fit()`: it is drawn
-at the measured thickness and the kerf adds about 0.1 mm of clearance. The half-laps engage
+(flowercube), but the ply3 sheet is 2.63 mm. Now the slot width comes from `gcode.fit()`: the slot is the
+measured thickness, and the toolpath is kerf-compensated (kerf 0.15 mm from the profile), so the
+finished slot is that width too. This is how the tight, snug mdf3old fit was cut. The half-laps engage
 10 mm (the stand's were 5 mm). The plate is held by closed slots, not notches cut into its inner
 edge. Inside corners are filleted or relieved. `tests/test_holders.py` checks that the joints mate
 at any thickness and that the pot clears the wood.

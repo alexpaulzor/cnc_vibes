@@ -13,8 +13,9 @@ Pots: `square` (the 47 -> 65 mm, 85 mm tall square pot, or_brace2.scad) and `net
 
 Why the first cuts wobbled or cracked: the .scad files drew every slot at a guessed thickness (3.0 mm for
 the stand, 3.3 mm for the flowercube), but the ply3 sheet is 2.63 mm. Here every slot, tongue and tab
-width comes from `gcode.fit(material)`: slot drawn = thickness + slot_extra, and the beam's kerf adds
-its own small clearance. Joints are deeper too: the half-laps engage 10 mm (the stand's were 5 mm), the
+width comes from `gcode.fit(material)`: slot = thickness + slot_extra, and the toolpath is kerf-compensated
+(every part grown by kerf/2, so slots come out at that width, not kerf wider -- the mdf3old fit that
+verified tight and snug was made this way). Joints are deeper too: the half-laps engage 10 mm (the stand's were 5 mm), the
 plate is held by closed slots instead of shallow notches cut into its inner edge, and inside corners
 are filleted.
 
@@ -419,15 +420,21 @@ def assembly(style: str, pot: Pot, f: Fit, parts, info, path: Path):
     plt.close(fig)
 
 
+def toolpath(shape: Polygon, kerf: float) -> Polygon:
+    """kerf compensation: the beam's centreline runs kerf/2 outside the part (inside holes and slots),
+    so the finished part is the drawn one. Mitre joins keep slot corners square."""
+    return shape.buffer(kerf / 2, join_style="mitre", mitre_limit=4.0)
+
+
 def build(style: str, pot: Pot, f: Fit, out_dir: Path, png: bool = True):
     parts, info = STYLES[style](pot, f)
-    sheets = layout(parts)
+    sheets = layout([Part(p.name, toolpath(p.shape, f.kerf), p.note) for p in parts])
     written = []
     for k, placed in enumerate(sheets, 1):
         tag = f"_s{k}" if len(sheets) > 1 else ""
         title = f"orpot {style} holder for the {pot.name} pot{tag.replace('_', ' ')} ({', '.join(n for n, _ in placed)})"
         notes = [f"pot: {pot.source}",
-                 f"material {f.material}: t {f.t} mm, slots drawn {f.slot:.2f} mm, kerf {f.kerf} mm",
+                 f"material {f.material}: t {f.t} mm, slots {f.slot:.2f} mm finished, kerf {f.kerf} mm compensated (path kerf/2 outside each part)",
                  "geometry (mm): " + ", ".join(f"{k2} {round(v, 2) if isinstance(v, float) else v}"
                                                for k2, v in info.items()),
                  "X0 Y0 = bottom-left corner of the stock"]
@@ -466,7 +473,7 @@ def main(argv=None) -> int:
             print(f"{p.name}: {p.source}")
         return 0
     f = fit_for(a.material)
-    print(f"{a.material}: thickness {f.t} mm, slot drawn {f.slot:.2f} mm, kerf {f.kerf} mm")
+    print(f"{a.material}: thickness {f.t} mm, slot {f.slot:.2f} mm finished, kerf {f.kerf} mm compensated")
     for style in (STYLES if a.style == "all" else [a.style]):
         for pname in (POTS if a.pot == "all" else [a.pot]):
             written, info = build(style, POTS[pname], f, a.out)

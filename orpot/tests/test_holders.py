@@ -102,3 +102,12 @@ def test_gcode_written_and_named(tmp_path):
 def test_net_cup_override():
     h.main(["--list-pots", "--net-height", "70"])
     assert h.POTS["net3"].height == 70 and "measured" in h.POTS["net3"].source
+
+
+def test_toolpath_is_kerf_compensated():
+    """the cut path sits kerf/2 outside the part: a slot's path gap is slot - kerf, so it finishes at slot"""
+    f = FITS[0]
+    parts, info = h.stand_parts(h.POTS["square"], f)
+    path = h.toolpath(parts[1].shape, 0.15)
+    assert gaps_along(path, LineString([(-20, 1), (20, 1)])) == pytest.approx([f.slot - 0.15])
+    assert path.bounds[1] == pytest.approx(-0.075)
