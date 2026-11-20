@@ -62,6 +62,7 @@ is 62.5: the stand cut for 75 came out 1–1.5 cm too tall, so 12.5 came off. Ca
 ```bash
 python holders.py                                   # all four, ply3 -> out/*.gcode, *.png, *_3d.png
 python holders.py --style stand --pot net3 --net-height 73
+python holders.py --stock 300 300                   # sheet size (default 300 x 300); parts nest into it
 ```
 
 Why the first cuts wobbled or cracked: the .scad files drew slots at 3.0 mm (stand) and 3.3 mm

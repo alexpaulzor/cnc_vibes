@@ -88,7 +88,10 @@ def test_parts_sound_and_on_one_sheet(style, pot):
         # no neck thinner than the material floor: eroding by just under half of it keeps one piece
         core = p.shape.buffer(-(h.MIN_FEATURE / 2 - 0.05))
         assert core.geom_type == "Polygon", f"{p.name} has a neck under {h.MIN_FEATURE} mm"
-    assert len(h.layout(parts)) == 1
+    sheets = h.layout(parts)
+    assert len(sheets) == 1
+    x0, y0, x1, y1 = h.unary_union([g for _, g in sheets[0]]).bounds
+    assert x0 >= 0 and y0 >= 0 and x1 <= h.STOCK[0] - h.MARGIN and y1 <= min(h.STOCK[1] - h.MARGIN, h.MACHINE[1])
 
 
 def test_gcode_written_and_named(tmp_path):

@@ -40,11 +40,25 @@ DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIR.parent / "quickcut"))
 import gcode  # noqa: E402
 
-BED = (390.0, 290.0)      # usable cut area inside the 400 x 300 envelope (jigsawzall keeps Y under ~293)
 GAP = 4.0                 # between parts on the sheet
 MARGIN = 3.0              # from X0 Y0
 MIN_FEATURE = 3.0         # thinnest wood left anywhere (ply3 min_feature_mm)
 SEAT = 0.3                # extra depth on each half-lap slot so both parts reach the table
+MACHINE = (390.0, 290.0)  # max cut X / Y inside the 400 x 300 envelope (jigsawzall keeps Y under ~293)
+STOCK = (300.0, 300.0)    # Alex's sheet size; --stock W H overrides
+
+
+def bed_for(stock) -> tuple:
+    """max X / Y a cut may reach: the stock less MARGIN, within the machine's reach"""
+    return (min(stock[0] - MARGIN, MACHINE[0]), min(stock[1] - MARGIN, MACHINE[1]))
+
+
+BED = bed_for(STOCK)
+
+
+def set_stock(stock):
+    global STOCK, BED
+    STOCK, BED = tuple(stock), bed_for(stock)
 
 
 # ---------------------------------------------------------------- pots
@@ -270,7 +284,9 @@ def flower_parts(pot: Pot, f: Fit, lift: float = 20.0, gap: float = 4.0, tab: fl
             slots.append(rect(y0, s * c - sw / 2, y1, s * c + sw / 2))      # fins B (y = +-c)
     slots = unary_union(slots)
     pw = pot.width(plate_top - z_pot)
-    pflower, _ = flowercube(0, 0, 1.7 * pw, 1.7 * pw, start_r0=0, start_offs=0)
+    fin_w = body.bounds[2] - body.bounds[0]
+    side = 0.822 * fin_w                       # plate ~1.14 x the fin width (the square pot's proportion)
+    pflower, _ = flowercube(0, 0, side, side, start_r0=0, start_offs=0)
     ring = hole.buffer(gap + tab + 7, quad_segs=16)
     plate = unary_union([pflower, ring, slots.buffer(4)]).difference(hole)
     plate = drop_small_holes(largest(drop_slivers(round_concave(plate, 1.0))))
@@ -306,9 +322,57 @@ def _shelves(items, bed):
     return sheets + ([cur] if cur else [])
 
 
-def layout(parts, bed=BED):
+def _nest(items, bed, step: float = 2.0):
+    """bottom-left fill on the real outlines: each part (biggest first, turned 0/90/180/270) goes at the
+    spot with the lowest top edge (then lowest, leftmost) where it keeps GAP from everything placed -- so parts tuck into each
+    other's open cut-outs and around round parts. Sheets of (name, placed polygon)."""
+    todo = sorted(items, key=lambda it: -it[1].area)
+    sheets = []
+    while todo:
+        placed, occ, left = [], None, []
+        for name, g in todo:
+            best = None
+            for rot in (0, 90, 180, 270):
+                r = affinity.rotate(g, rot, origin=(0, 0))
+                x0, y0, x1, y1 = r.bounds
+                r = affinity.translate(r, -x0, -y0)
+                w, hh = x1 - x0, y1 - y0
+                if w > bed[0] - MARGIN or hh > bed[1] - MARGIN:
+                    continue
+                coll = r.simplify(0.3).buffer(GAP / 2, quad_segs=4)
+                y = MARGIN
+                while y + hh <= bed[1] and (best is None or y + hh <= best[0][0]):
+                    x, hit = MARGIN, None
+                    while x + w <= bed[0]:
+                        if occ is None or not occ.intersects(affinity.translate(coll, x, y)):
+                            hit = x
+                            break
+                        x += step
+                    if hit is not None:
+                        key = (y + hh, y, hit)
+                        if best is None or key < best[0]:
+                            best = (key, affinity.translate(r, hit, y))
+                        break
+                    y += step
+            if best is None:
+                left.append((name, g))
+                continue
+            placed.append((name, best[1]))
+            from shapely.prepared import prep
+            grown = unary_union([pg.buffer(GAP / 2, quad_segs=4) for _, pg in placed])
+            occ = prep(grown)
+        if not placed:
+            return None
+        sheets.append(placed)
+        todo = left
+    return sheets
+
+
+def layout(parts, bed=None):
     """parts onto as few sheets as possible: every as-is / turned-90 combination is shelf-packed and the
-    one with the fewest sheets, then the smallest used area, wins"""
+    one with the fewest sheets, then the smallest used area, wins; if that needs more than one sheet,
+    outline nesting (_nest) gets a try too"""
+    bed = bed or BED
     best = None
     for mask in range(1 << len(parts)):
         items = [(p.name, affinity.rotate(p.shape, 90, origin=(0, 0)) if mask >> k & 1 else p.shape)
@@ -320,6 +384,10 @@ def layout(parts, bed=BED):
         score = (len(sheets), ext[2] * ext[3])
         if best is None or score < best[0]:
             best = (score, sheets)
+    if best is None or len(best[1]) > 1:
+        nested = _nest([(p.name, p.shape) for p in parts], bed)
+        if nested is not None and (best is None or len(nested) < len(best[1])):
+            return nested
     if best is None:
         raise SystemExit(f"a part is bigger than the {bed[0]:.0f} x {bed[1]:.0f} bed")
     return best[1]
@@ -359,7 +427,7 @@ def preview(placed_sheets, path: Path, title: str):
     n = len(placed_sheets)
     fig, axes = plt.subplots(1, n, figsize=(7.5 * n, 6), squeeze=False)
     for ax, placed in zip(axes[0], placed_sheets):
-        ax.add_patch(plt.Rectangle((0, 0), *BED, fill=False, ls="--", lw=0.6, color="0.6"))
+        ax.add_patch(plt.Rectangle((0, 0), *STOCK, fill=False, ls="--", lw=0.6, color="0.6"))
         for name, g in placed:
             for r in [g.exterior, *g.interiors]:
                 xs, ys = r.xy
@@ -367,8 +435,8 @@ def preview(placed_sheets, path: Path, title: str):
             cx, cy = g.representative_point().coords[0]
             ax.text(cx, cy, name, fontsize=6, ha="center", color="tab:blue")
         ax.set_aspect("equal")
-        ax.set_xlim(-5, BED[0] + 5)
-        ax.set_ylim(-5, BED[1] + 5)
+        ax.set_xlim(-5, STOCK[0] + 5)
+        ax.set_ylim(-5, STOCK[1] + 5)
         ax.grid(True, lw=0.3)
     fig.suptitle(title, fontsize=9)
     fig.tight_layout()
@@ -460,8 +528,11 @@ def main(argv=None) -> int:
     ap.add_argument("--net-top", type=float, help="net cup: body diameter just under the lip, mm")
     ap.add_argument("--net-bottom", type=float, help="net cup: bottom diameter, mm")
     ap.add_argument("--net-height", type=float, help="net cup: height, bottom to the top of the lip, mm")
+    ap.add_argument("--stock", type=float, nargs=2, metavar=("W", "H"), default=[300.0, 300.0],
+                    help="sheet size in mm, X by Y (default 300 300)")
     ap.add_argument("--list-pots", action="store_true")
     a = ap.parse_args(argv)
+    set_stock(a.stock)
     net = POTS["net3"]
     over = {k: v for k, v in dict(lip_d=a.net_lip, top=a.net_top, bottom=a.net_bottom, height=a.net_height).items()
             if v is not None}
