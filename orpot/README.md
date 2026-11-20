@@ -56,8 +56,8 @@ the material profile:
 | `flower` (was `or_brace2.scad` flowercube) | 4 flowercube fins in a # (half-lapped at the feet) + a flower top plate held by 8 fin tabs in closed slots | the fin floors |
 
 Pots: `square` (47 → 65 mm, 85 tall, from or_brace2.scad) and `net3`, a 3" net cup. The `net3` size
-is a **typical catalogue size, not measured**: lip 80, body 72 under the lip, bottom 55, height 75.
-Caliper your cup and pass `--net-lip/--net-top/--net-bottom/--net-height`.
+uses **typical catalogue diameters, not measured**: lip 80, body 72 under the lip, bottom 55. The height
+is 62.5: the stand cut for 75 came out 1–1.5 cm too tall, so 12.5 came off. Caliper your cup and pass `--net-lip/--net-top/--net-bottom/--net-height`.
 
 ```bash
 python holders.py                                   # all four, ply3 -> out/*.gcode, *.png, *_3d.png

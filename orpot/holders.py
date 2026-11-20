@@ -99,9 +99,9 @@ class Pot:
 POTS = {
     "square": Pot("square", "square", bottom=47, top=65, height=85, r_bottom=7, r_top=10,
                   source="or_brace2.scad (bottom_w 47, top_w 65, top_h 85, top_or 10); bottom corner r 7 assumed"),
-    "net3": Pot("net3", "round", bottom=55, top=72, height=75, lip_d=80, lip_h=3,
-                source='3" net cup, TYPICAL catalogue size (NOT measured): lip 80, body 72 under the lip, '
-                       "bottom 55, height 75. Caliper yours and pass --net-* before cutting"),
+    "net3": Pot("net3", "round", bottom=55, top=72, height=62.5, lip_d=80, lip_h=3,
+                source='3" net cup: lip 80, body 72, bottom 55 TYPICAL (not measured); height 62.5 = the '
+                       "75 first assumed less 12.5 (the stand cut at 75 came out 1-1.5 cm too tall)"),
 }
 
 
