@@ -39,6 +39,7 @@ from shapely.ops import polylabel, unary_union
 DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(DIR.parent / "quickcut"))
 import gcode  # noqa: E402
+import nest as qnest  # noqa: E402
 
 GAP = 4.0                 # between parts on the sheet
 MARGIN = 3.0              # from X0 Y0
@@ -322,50 +323,13 @@ def _shelves(items, bed):
     return sheets + ([cur] if cur else [])
 
 
-def _nest(items, bed, step: float = 2.0):
-    """bottom-left fill on the real outlines: each part (biggest first, turned 0/90/180/270) goes at the
-    spot with the lowest top edge (then lowest, leftmost) where it keeps GAP from everything placed -- so parts tuck into each
-    other's open cut-outs and around round parts. Sheets of (name, placed polygon)."""
-    todo = sorted(items, key=lambda it: -it[1].area)
-    sheets = []
-    while todo:
-        placed, occ, left = [], None, []
-        for name, g in todo:
-            best = None
-            for rot in (0, 90, 180, 270):
-                r = affinity.rotate(g, rot, origin=(0, 0))
-                x0, y0, x1, y1 = r.bounds
-                r = affinity.translate(r, -x0, -y0)
-                w, hh = x1 - x0, y1 - y0
-                if w > bed[0] - MARGIN or hh > bed[1] - MARGIN:
-                    continue
-                coll = r.simplify(0.3).buffer(GAP / 2, quad_segs=4)
-                y = MARGIN
-                while y + hh <= bed[1] and (best is None or y + hh <= best[0][0]):
-                    x, hit = MARGIN, None
-                    while x + w <= bed[0]:
-                        if occ is None or not occ.intersects(affinity.translate(coll, x, y)):
-                            hit = x
-                            break
-                        x += step
-                    if hit is not None:
-                        key = (y + hh, y, hit)
-                        if best is None or key < best[0]:
-                            best = (key, affinity.translate(r, hit, y))
-                        break
-                    y += step
-            if best is None:
-                left.append((name, g))
-                continue
-            placed.append((name, best[1]))
-            from shapely.prepared import prep
-            grown = unary_union([pg.buffer(GAP / 2, quad_segs=4) for _, pg in placed])
-            occ = prep(grown)
-        if not placed:
-            return None
-        sheets.append(placed)
-        todo = left
-    return sheets
+def _nest(items, bed):
+    """outline nesting (quickcut/nest.py): sheets of (name, placed polygon), or None if a part fits nowhere"""
+    try:
+        sheets = qnest.nest(items, qnest.Bed(bed[0], bed[1], MARGIN), gap=GAP)
+    except ValueError:
+        return None
+    return [[(p.name, p.geom) for p in sheet] for sheet in sheets]
 
 
 def layout(parts, bed=None):
