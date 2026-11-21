@@ -124,10 +124,10 @@ def material(material_id: str) -> dict:
 
 
 def fit(material_id: str):
-    """(thickness_mm, kerf_mm, slot_extra_mm); kerf 0.10 / extra 0 when the profile has no fit block"""
+    """(thickness_mm, kerf_mm, slot_extra_mm); kerf 0.15 (typical on this machine) / extra 0 when the profile has no fit block"""
     m = material(material_id)
     f = m.get("fit") or {}
-    return float(m["thickness_mm"]), float(f.get("kerf_mm", 0.10)), float(f.get("slot_extra_mm", 0.0))
+    return float(m["thickness_mm"]), float(f.get("kerf_mm", 0.15)), float(f.get("slot_extra_mm", 0.0))
 
 
 def job(material_id: str, recipe: str = "laser", s_full_power: int = 1000, **override) -> CutJob:

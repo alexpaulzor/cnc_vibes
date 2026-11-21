@@ -81,6 +81,12 @@
   family: wood
   thickness_mm: 2.63   # measured by Alex; sold as 3mm (id kept for existing references)
   min_feature_mm: 3.0   # thinnest wood that survives (stiff cross-grain 3-ply); jigsawzall derives its floors from it
+  fit:
+    kerf_mm: 0.15   # Alex, 2026-11-20: ~0.15 for most materials on this machine
+    slot_extra_mm: 0.0
+    verified: |
+      NOT YET as a tab fit in this stock. Kerf 0.15 is Alex's machine-wide figure;
+      slot = thickness follows the mdf3old fit (tight and snug, kerf-compensated).
   laser:
     power_percent: 100
     feed_mm_per_min: 350
@@ -134,12 +140,12 @@
   family: wood
   thickness_mm: 2.82  # NEW SUPPLIER batch (2026-11-04), measured 2.82 by Alex; much better quality than mdf3old
   fit:
-    kerf_mm: 0.10
+    kerf_mm: 0.15   # Alex, 2026-11-20: ~0.15 for most materials on this machine
     slot_extra_mm: 0.0
     verified: |
-      NOT YET for this batch. Kerf 0.10 and slot = thickness are carried over
-      from mdf3old (verified there). Cut a tab-fit coupon in the new stock
-      and update this block.
+      NOT YET for this batch. Slot = thickness is carried over from mdf3old
+      (verified there at kerf 0.10); kerf raised to 0.15 per Alex's machine-wide
+      observation. Cut a tab-fit coupon in the new stock and update this block.
   laser:
     power_percent: 100
     feed_mm_per_min: 700
