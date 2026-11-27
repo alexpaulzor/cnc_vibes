@@ -82,6 +82,30 @@ the orpot/jigsawzall tools use). `--feed/--power/--passes` override the profile.
 uv run --with pytest python -m pytest quickcut/tests -q
 ```
 
+## svg_parts.py — colour-coded cut files (bought designs) → etch + cut plates
+
+For designs whose stroke colours say what each line is (red cut, green/blue score, black filled
+shapes). Cut outlines become numbered parts carrying their holes and etch lines. Everything else is
+dropped and listed, e.g. the "1 inch / delete before cutting" square. Parts are scaled, nested onto
+your stock by `nest.py` (a long part can go corner to corner), and written through `gcode.write`:
+etch first, then holes, then outlines, with warmup on every path.
+
+```bash
+python quickcut/svg_parts.py design.svg --list                  # numbered parts preview + sizes
+python quickcut/svg_parts.py design.svg -o build --name unicorn # plates on 300 x 300 stock
+python quickcut/svg_parts.py design.svg --parts 3,5 --each      # a la carte, one file per part
+python quickcut/svg_parts.py design.svg --scale 0.8 --no-etch --stock 300 300
+```
+
+The ply3 etch recipe commands F5000. The default machine profile caps XY at 3000, so
+`svg_parts` lets only that one validator rule pass, and only for the etch feed. GRBL clamps the
+feed to `$110` (3000 on the AnoleX), which is how the etch was calibrated.
+
+## nest.py — parts onto sheets
+
+Bottom-left fill on the real outlines (0/90/180/270°, then every 5° for a part that fits no right
+angle), keeping `gap` between parts. Used by `svg_parts.py` and `orpot/holders.py`.
+
 ## grbl_model.py — what speed does the head actually reach?
 
 Under static M3 the diode's power is constant, so energy per mm is
