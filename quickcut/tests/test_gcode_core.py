@@ -77,6 +77,18 @@ def test_render_adds_frame_and_park_and_validates(tmp_path):
     assert p.read_text() == text
 
 
+def test_write_refuses_long_file_names(tmp_path):
+    j = gcode.job("mdf3")
+    lines = gcode.preamble(j, title="t") + gcode.cut(square(10, 10, 20), j)
+    ok = "n" * (gcode.MAX_NAME - len(".gcode"))
+    assert gcode.write(tmp_path / f"{ok}.gcode", lines).name == f"{ok}.gcode"
+    with pytest.raises(gcode.GcodeError):
+        gcode.write(tmp_path / f"{ok}x.gcode", lines)
+    # the name is checked after <W>x<H> is set to the real extent (which can lengthen it)
+    with pytest.raises(gcode.GcodeError):
+        gcode.write(tmp_path / f"{'n' * (gcode.MAX_NAME - len('_1x1_mdf3.gcode'))}_1x1_mdf3.gcode", lines)
+
+
 def test_render_refuses_long_lines_and_violations():
     j = gcode.job("mdf3")
     with pytest.raises(gcode.GcodeError):

@@ -26,7 +26,8 @@ scads/marbles. Every file is finished by `gcode.render()` / written by `gcode.wr
 which add the frame pass (rapid laser-off trace of the job's full X/Y extent before the
 first move, so a job that won't fit hits an endstop before the laser marks anything) and
 the park (laser off, X0 at the highest cut Y), refuse lines of 255+ characters (they end a
-Grbl_ESP32 SD job silently), and run `gcode_validate`. Standard cuts use `gcode.cut()`
+Grbl_ESP32 SD job silently) and file names over 57 characters (a 77-character name crashed the
+controller mid-job), and run `gcode_validate`. Standard cuts use `gcode.cut()`
 (static M3, warmup wiggle on every path, recipe passes, loop overlap) and `gcode.order()`
 (middle-out: contents before their container, with short travel). Materials: `gcode.job()`
 / `gcode.fit()` with the short ids (mdf3, ply3, birch3 ...). New rules go in quickcut,

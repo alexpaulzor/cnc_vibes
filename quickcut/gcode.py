@@ -52,6 +52,9 @@ from paths import CutIndex, bridge_chains, fuse_touching, trim_recut_ends  # noq
 
 DEFAULT_WARMUP_MS = 1000.0     # the diode's cold-start ramp to full optical power
 MAX_LINE = 255                 # Grbl_ESP32 SDCard.cpp readFileLine(fileLine, 255)
+MAX_NAME = 57                  # file name incl. .gcode: a 77-char name jolted the AnoleX to a hard stop mid-frame, 3 times
+                               # at the same spot (2026-11-27); the same job renamed to 42 chars ran fine. 57 = the longest
+                               # name known to have run; the real limit is somewhere in 58..77 (unconfirmed, maybe 64)
 PARK_MARK = "; park:"
 
 
@@ -428,7 +431,8 @@ def render(lines, validate: bool = True) -> str:
 
 def write(path, lines, validate: bool = True) -> Path:
     """the one way to write laser G-code: finish, check, write. A <W>x<H> in the file name is set to the job's real
-    bounding box (its cut moves, rounded up to whole mm), so the name always says how much stock it uses."""
+    bounding box (its cut moves, rounded up to whole mm), so the name always says how much stock it uses. Refuses a file
+    name longer than MAX_NAME characters (the controller crashed on a long one)."""
     text = render(lines, validate)
     path = Path(path)
     m = list(re.finditer(r"_(\d+)x(\d+)(?=_|$)", path.stem))
@@ -437,6 +441,9 @@ def write(path, lines, validate: bool = True) -> Path:
         dims = f"_{math.ceil(w - 1e-9)}x{math.ceil(h - 1e-9)}"
         a, b = m[-1].span()
         path = path.with_name(path.stem[:a] + dims + path.stem[b:] + path.suffix)
+    if len(path.name) > MAX_NAME:
+        raise GcodeError(f"file name {path.name!r} is {len(path.name)} characters; the AnoleX controller crashed mid-job on a "
+                         f"77-character name (motors stopped dead, screen still said run): keep it to {MAX_NAME}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return path
