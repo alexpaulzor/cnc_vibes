@@ -26,9 +26,11 @@ max_feed_mm_per_min:
   z: 1000   # TODO: confirm — placeholder
 
 spindle:
-  rpm_min: 8000   # TODO: confirm
-  rpm_max: 24000  # TODO: confirm
-  control: pwm    # M3/M5 + S0-1000 via GRBL spindle PWM pin
+  # stock 800 W trim router, 65 mm mount, ER11: M3/M5 switch it through a relay; SPEED IS THE DIAL (6 steps,
+  # manufacturer: 8000..24000 rpm). An S word does nothing; feeds are worked out from the dial's rpm.
+  rpm_min: 8000
+  rpm_max: 24000
+  control: relay
 
 probe:
   has_touch_plate: true

@@ -62,6 +62,23 @@ The slot runs along +X from `(x0, y0)` for `length` mm, with width `width` mm. T
 | `--trochoidal-step-frac FLOAT` | 0.15 | Per-loop X advance as fraction of tool diameter. |
 | `--out PATH` | derived | Output gcode path. |
 
+## Part 3: 1/4" 6061 on the Anolex trim router (`alu_ops.py`, `alu_cal.py`)
+
+The stock 800 W trim router is relay-switched (M3/M5) with its speed on a 6-step dial (manufacturer: 8000..24000
+rpm), so an S word does nothing: every file's header says which rpm to set on the dial, and the feed is worked out
+from it. `alu_ops.py` holds the ops: profile laps that spiral down (no plunges), a widened roughing slot plus a light
+finish ring, helical holes with the feed corrected to the cutter's edge, a frame trace with the router OFF at clear
+height before M3, and a spin-up dwell. Parts are held by their own holes: file 1 mills the holes, you screw the parts
+down through them, file 2 cuts them free.
+
+```
+python lessons/mill/03_aluminum/alu_cal.py --feeds                  # 5 slots, chipload 0.010..0.030 (k dimples = slot k)
+python lessons/mill/03_aluminum/alu_cal.py --size --chipload 0.02   # 20 x 20 square + 5.3 hole: measure them
+```
+
+Pick the fastest clean slot, write it into `alu6061_6.35` in `profiles/materials.yaml`, then run the size test with
+it. Tool: `flat_3.175mm_1flute_alu` (1/8" single-flute carbide; confirm its cutting length >= 12).
+
 ## Safety notes
 
 - **Cutting fluid is mandatory.** WD-40 in a squeeze bottle, applied every 30-60 seconds during the cut. The script can't enforce this; you have to remember.
